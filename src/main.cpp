@@ -28,23 +28,124 @@ FirebaseAuth auth;
 FirebaseConfig config;
 
 unsigned long previousMillis = 0;
-const long intervalOn = 5000;  // 5 seconds on
-const long intervalOff = 1000; // 1 second off
+unsigned long firebaseReadMillis = 0;
+const unsigned long firebaseReadInterval = 10000; // Read from Firebase every 10 seconds
+
+long intervalOn = 0;
+long intervalOff = 0;
 bool ledState = false;
 
 const int greenLEDPin = 5;
 const int redLEDPin = 2;
 const int blueLEDPin = 4;
 
+const int pwmFrequency = 5000;
+const int pwmResolution = 8;
+const int greenLEDPwmChannel = 0;
+const int redLEDPwmChannel = 1;
+const int blueLEDPwmChannel = 2;
+
 bool powerButtonState = false;
+
+void updateFirebase(const char* path, bool state) {
+  if (Firebase.ready()) {
+    if (Firebase.RTDB.setBool(&fbdo, path, state)) {
+      Serial.println("PASSED");
+      Serial.println("PATH: " + fbdo.dataPath());
+      Serial.println("TYPE: " + fbdo.dataType());
+    } else {
+      Serial.println("FAILED");
+      Serial.println("REASON: " + fbdo.errorReason());
+    }
+  }
+}
+
+void updatePowerButtonState(bool state) {
+  updateFirebase("Power_Button", state);
+}
+
+bool readPowerButtonState() {
+  if (Firebase.ready()) {
+    if (Firebase.RTDB.getBool(&fbdo, "Power_Button")) {
+      return fbdo.boolData();
+    } else {
+      Serial.println("FAILED to read power button state");
+      Serial.println("REASON: " + fbdo.errorReason());
+      return false; // Default to false if reading fails
+    }
+  }
+  return false;
+}
+
+long readTimerValue(const char* path) {
+  if (Firebase.ready()) {
+    if (Firebase.RTDB.getInt(&fbdo, path)) {
+      return fbdo.intData();
+    } else {
+      Serial.println("FAILED to read timer value");
+      Serial.println("REASON: " + fbdo.errorReason());
+    }
+  }
+  return -1; // Indicate failure
+}
+
+void enableLEDs(bool state) {
+  int dutyCycle = state ? 255 : 0; // Max duty cycle for 8-bit resolution is 255
+
+  ledcWrite(greenLEDPwmChannel, dutyCycle);
+  ledcWrite(redLEDPwmChannel, dutyCycle);
+  ledcWrite(blueLEDPwmChannel, dutyCycle);
+  
+  updateFirebase("LED_Green", state);
+  updateFirebase("LED_Red", state);
+  updateFirebase("LED_Blue", state);
+}
+
+void disableLEDs() {
+  // Detach PWM channels to "break the circuit"
+  ledcDetachPin(greenLEDPin);
+  ledcDetachPin(redLEDPin);
+  ledcDetachPin(blueLEDPin);
+
+  updateFirebase("LED_Green", false);
+  updateFirebase("LED_Red", false);
+  updateFirebase("LED_Blue", false);
+}
+
+
+void readFirebaseConfig() {
+  // Check the power button state from Firebase
+  powerButtonState = readPowerButtonState();
+
+  // Read on and off timer values from Firebase
+  long newIntervalOn = readTimerValue("On_Duration");
+  long newIntervalOff = readTimerValue("Off_Duration");
+
+  // Only update the intervals if valid values are retrieved
+  if (newIntervalOn >= 0 && newIntervalOff >= 0) {
+    intervalOn = newIntervalOn * 1000; // Convert to milliseconds
+    intervalOff = newIntervalOff * 1000; // Convert to milliseconds
+
+    // Print the current timer values
+    Serial.print("Current On Timer: ");
+    Serial.println(intervalOn);
+    Serial.print("Current Off Timer: ");
+    Serial.println(intervalOff);
+  }
+}
 
 void setup() {
   Serial.begin(9600); // Set baud rate to 9600 to match the Serial Monitor
   
-  // Set LED pins as output
-  pinMode(greenLEDPin, OUTPUT);
-  pinMode(redLEDPin, OUTPUT);
-  pinMode(blueLEDPin, OUTPUT);
+  // Setup PWM channels
+  ledcSetup(greenLEDPwmChannel, pwmFrequency, pwmResolution);
+  ledcSetup(redLEDPwmChannel, pwmFrequency, pwmResolution);
+  ledcSetup(blueLEDPwmChannel, pwmFrequency, pwmResolution);
+
+  // Attach PWM channels to LED pins
+  ledcAttachPin(greenLEDPin, greenLEDPwmChannel);
+  ledcAttachPin(redLEDPin, redLEDPwmChannel);
+  ledcAttachPin(blueLEDPin, blueLEDPwmChannel);
   
   // Connect to Wi-Fi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
@@ -77,87 +178,46 @@ void setup() {
   // Initialize Firebase
   Firebase.begin(&config, &auth);
   Firebase.reconnectWiFi(true);
+
+  // Initial read from Firebase
+  readFirebaseConfig();
 }
 
-void updateFirebase(const char* path, bool state) {
-  if (Firebase.ready()) {
-    if (Firebase.RTDB.setBool(&fbdo, path, state)) {
-      Serial.println("PASSED");
-      Serial.println("PATH: " + fbdo.dataPath());
-      Serial.println("TYPE: " + fbdo.dataType());
-    } else {
-      Serial.println("FAILED");
-      Serial.println("REASON: " + fbdo.errorReason());
-    }
-  }
-}
-
-void updatePowerButtonState(bool state) {
-  updateFirebase("Power_Button", state);
-}
-
-bool readPowerButtonState() {
-  if (Firebase.ready()) {
-    if (Firebase.RTDB.getBool(&fbdo, "Power_Button")) {
-      return fbdo.boolData();
-    } else {
-      Serial.println("FAILED to read power button state");
-      Serial.println("REASON: " + fbdo.errorReason());
-      return false; // Default to false if reading fails
-    }
-  }
-  return false;
-}
 
 void loop() {
   unsigned long currentMillis = millis();
 
-  // Check the power button state from Firebase
-  powerButtonState = readPowerButtonState();
+  // Only read from Firebase at specified intervals
+  if (currentMillis - firebaseReadMillis >= firebaseReadInterval) {
+    firebaseReadMillis = currentMillis;
+    readFirebaseConfig();
+  }
 
   if (powerButtonState) {
+    // Reattach the PWM channels if the power button is on
+    ledcAttachPin(greenLEDPin, greenLEDPwmChannel);
+    ledcAttachPin(redLEDPin, redLEDPwmChannel);
+    ledcAttachPin(blueLEDPin, blueLEDPwmChannel);
+
     if (ledState) {
       if (currentMillis - previousMillis >= intervalOn) {
         // Turn off the LEDs
-        digitalWrite(greenLEDPin, LOW);
-        digitalWrite(redLEDPin, LOW);
-        digitalWrite(blueLEDPin, LOW);
-        
-        // Update Firebase with the LED statuses
-        updateFirebase("LED_Green", false);
-        updateFirebase("LED_Red", false);
-        updateFirebase("LED_Blue", false);
-
+        enableLEDs(false);
         previousMillis = currentMillis;
         ledState = false;
       }
     } else {
       if (currentMillis - previousMillis >= intervalOff) {
         // Turn on the LEDs
-        digitalWrite(greenLEDPin, HIGH);
-        digitalWrite(redLEDPin, HIGH);
-        digitalWrite(blueLEDPin, HIGH);
-
-        // Update Firebase with the LED statuses
-        updateFirebase("LED_Green", true);
-        updateFirebase("LED_Red", true);
-        updateFirebase("LED_Blue", true);
-
+        enableLEDs(true);
         previousMillis = currentMillis;
         ledState = true;
       }
     }
   } else {
-    // Ensure LEDs are turned off when power button is off
-    digitalWrite(greenLEDPin, LOW);
-    digitalWrite(redLEDPin, LOW);
-    digitalWrite(blueLEDPin, LOW);
-
-    // Update Firebase with the LED statuses if not already off
-    if (ledState) {
-      updateFirebase("LED_Green", false);
-      updateFirebase("LED_Red", false);
-      updateFirebase("LED_Blue", false);
+    // Disable the LEDs if the power button is off
+    if (ledState || powerButtonState) {
+      disableLEDs();
       ledState = false;
     }
   }
