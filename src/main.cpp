@@ -34,12 +34,11 @@ const unsigned long firebaseReadInterval = 10000; // Read from Firebase every 10
 long intervalOn = 0;
 long intervalOff = 0;
 bool ledState = false;
-
+int pwmFrequency = 5000; // Change to global variable
 const int greenLEDPin = 5;
 const int redLEDPin = 2;
 const int blueLEDPin = 4;
 
-const int pwmFrequency = 5000;
 const int pwmResolution = 8;
 const int greenLEDPwmChannel = 0;
 const int redLEDPwmChannel = 1;
@@ -121,16 +120,27 @@ void readFirebaseConfig() {
   long newIntervalOn = readTimerValue("On_Duration");
   long newIntervalOff = readTimerValue("Off_Duration");
 
+// Read LED frequency from Firebase
+  long newLedFrequency = readTimerValue("LED_Frequency");
+
   // Only update the intervals if valid values are retrieved
   if (newIntervalOn >= 0 && newIntervalOff >= 0) {
     intervalOn = newIntervalOn * 1000; // Convert to milliseconds
     intervalOff = newIntervalOff * 1000; // Convert to milliseconds
+
+    // Update LED frequency
+    pwmFrequency = newLedFrequency;
+    ledcSetup(greenLEDPwmChannel, pwmFrequency, pwmResolution);
+    ledcSetup(redLEDPwmChannel, pwmFrequency, pwmResolution);
+    ledcSetup(blueLEDPwmChannel, pwmFrequency, pwmResolution);
 
     // Print the current timer values
     Serial.print("Current On Timer: ");
     Serial.println(intervalOn);
     Serial.print("Current Off Timer: ");
     Serial.println(intervalOff);
+    Serial.print("Current LED Frequency: ");
+    Serial.println(pwmFrequency);
   }
 }
 
