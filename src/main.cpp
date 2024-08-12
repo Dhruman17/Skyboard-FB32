@@ -16,10 +16,10 @@
 #define WIFI_PASSWORD "Rogers@2433"
 
 // Insert Firebase project API Key
-#define API_KEY "AIzaSyCMIvMWv4p6rVaOvvu8RKfP-4Plg1RhBlE"
+#define API_KEY "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI"
 
 // Insert RTDB URL
-#define DATABASE_URL "https://skydashboard-506ed-default-rtdb.firebaseio.com/"
+#define DATABASE_URL "https://skyacres-marketplace-default-rtdb.firebaseio.com/"
 
 // Define Firebase Data object
 FirebaseData fbdo;
@@ -34,20 +34,18 @@ const unsigned long firebaseReadInterval = 10000; // Read from Firebase every 10
 long intervalOn = 0;
 long intervalOff = 0;
 bool ledState = false;
-int pwmFrequency = 5000; // Change to global variable
 
 const int greenLEDPin = 5;
 const int redLEDPin = 2;
 const int blueLEDPin = 4;
-const int switchPin = 21; // Define the GPIO pin for the switch
 
+const int pwmFrequency = 5000;
 const int pwmResolution = 8;
 const int greenLEDPwmChannel = 0;
 const int redLEDPwmChannel = 1;
 const int blueLEDPwmChannel = 2;
 
 bool powerButtonState = false;
-bool switchState = false; // Variable to store the switch state
 
 void updateFirebase(const char* path, bool state) {
   if (Firebase.ready()) {
@@ -114,6 +112,7 @@ void disableLEDs() {
   updateFirebase("LED_Blue", false);
 }
 
+
 void readFirebaseConfig() {
   // Check the power button state from Firebase
   powerButtonState = readPowerButtonState();
@@ -122,27 +121,16 @@ void readFirebaseConfig() {
   long newIntervalOn = readTimerValue("On_Duration");
   long newIntervalOff = readTimerValue("Off_Duration");
 
-  // Read LED frequency from Firebase
-  long newLedFrequency = readTimerValue("LED_Frequency");
-
   // Only update the intervals if valid values are retrieved
-  if (newIntervalOn >= 0 && newIntervalOff >= 0 && newLedFrequency >= 0) {
+  if (newIntervalOn >= 0 && newIntervalOff >= 0) {
     intervalOn = newIntervalOn * 1000; // Convert to milliseconds
     intervalOff = newIntervalOff * 1000; // Convert to milliseconds
-
-    // Update LED frequency
-    pwmFrequency = newLedFrequency;
-    ledcSetup(greenLEDPwmChannel, pwmFrequency, pwmResolution);
-    ledcSetup(redLEDPwmChannel, pwmFrequency, pwmResolution);
-    ledcSetup(blueLEDPwmChannel, pwmFrequency, pwmResolution);
 
     // Print the current timer values
     Serial.print("Current On Timer: ");
     Serial.println(intervalOn);
     Serial.print("Current Off Timer: ");
     Serial.println(intervalOff);
-    Serial.print("Current LED Frequency: ");
-    Serial.println(pwmFrequency);
   }
 }
 
@@ -158,10 +146,7 @@ void setup() {
   ledcAttachPin(greenLEDPin, greenLEDPwmChannel);
   ledcAttachPin(redLEDPin, redLEDPwmChannel);
   ledcAttachPin(blueLEDPin, blueLEDPwmChannel);
-
-  // Set the switch pin as input
-  pinMode(switchPin, INPUT);
-
+  
   // Connect to Wi-Fi
   WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
   Serial.print("Connecting to Wi-Fi");
@@ -198,6 +183,7 @@ void setup() {
   readFirebaseConfig();
 }
 
+
 void loop() {
   unsigned long currentMillis = millis();
 
@@ -205,15 +191,6 @@ void loop() {
   if (currentMillis - firebaseReadMillis >= firebaseReadInterval) {
     firebaseReadMillis = currentMillis;
     readFirebaseConfig();
-  }
-
-  // Read the switch state and update Firebase if it has changed
-  bool currentSwitchState = digitalRead(switchPin);
-  if (currentSwitchState != switchState) {
-    switchState = currentSwitchState;
-    updateFirebase("Switch_State", switchState);
-    Serial.print("Switch state updated to: ");
-    Serial.println(switchState);
   }
 
   if (powerButtonState) {
