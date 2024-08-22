@@ -1,224 +1,150 @@
-#include <Arduino.h>
-#if defined(ESP32)
-  #include <WiFi.h>
-#elif defined(ESP8266)
-  #include <ESP8266WiFi.h>
-#endif
+#include <WiFi.h>
 #include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h> // Provide the token generation process info and error info
+#include <addons/RTDBHelper.h>  // Provide the RTDB payload printing info and other helper functions
 
-// Provide the token generation process info.
-#include "addons/TokenHelper.h"
-// Provide the RTDB payload printing info and other helper functions.
-#include "addons/RTDBHelper.h"
-
-// Insert your network credentials
+// Define your Wi-Fi credentials
 #define WIFI_SSID "POTANU VAPAR MAFTYA"
 #define WIFI_PASSWORD "Rogers@2433"
 
-// Insert Firebase project API Key
+// Define your Firebase project details
 #define API_KEY "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI"
+#define FIREBASE_PROJECT_ID "skyacres-marketplace"
+#define USER_EMAIL "test@gmail.com"   // Replace with your Firebase user email
+#define USER_PASSWORD "test123"         // Replace with your Firebase user password
 
-// Insert RTDB URL
-#define DATABASE_URL "https://skyacres-marketplace-default-rtdb.firebaseio.com/"
-
-// Define Firebase Data object
+// Firebase objects
 FirebaseData fbdo;
-
 FirebaseAuth auth;
 FirebaseConfig config;
 
-unsigned long previousMillis = 0;
-unsigned long firebaseReadMillis = 0;
-const unsigned long firebaseReadInterval = 10000; // Read from Firebase every 10 seconds
+// LED pins and PWM channels
+const int greenLEDPin = 4;
+const int redLEDPin = 5;
+const int blueLEDPin = 2;
 
-long intervalOn = 0;
-long intervalOff = 0;
-bool ledState = false;
-
-const int greenLEDPin = 5;
-const int redLEDPin = 2;
-const int blueLEDPin = 4;
-
-const int pwmFrequency = 5000;
-const int pwmResolution = 8;
 const int greenLEDPwmChannel = 0;
 const int redLEDPwmChannel = 1;
 const int blueLEDPwmChannel = 2;
 
+const int pwmFrequency = 5000;
+const int pwmResolution = 8; // 8-bit resolution
+
+// Define Firestore document path
+const char* documentPath = "Systems/H1-1";
+
+// Variables to store configuration
 bool powerButtonState = false;
+long intervalOn = 5000; // Default to 5 seconds
+long intervalOff = 5000; // Default to 5 seconds
+bool ledState = false;
+unsigned long previousMillis = 0;
 
-void updateFirebase(const char* path, bool state) {
-  if (Firebase.ready()) {
-    if (Firebase.RTDB.setBool(&fbdo, path, state)) {
-      Serial.println("PASSED");
-      Serial.println("PATH: " + fbdo.dataPath());
-      Serial.println("TYPE: " + fbdo.dataType());
+void readFirestoreConfig() {
+    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath)) {
+        Serial.println(fbdo.payload());
+
+        FirebaseJsonData jsonData;
+
+        FirebaseJson json;
+        json.setJsonData(fbdo.payload());
+
+        if (json.get(jsonData, "fields/Power_Button/booleanValue") && jsonData.typeNum == FirebaseJson::JSON_BOOL) {
+            powerButtonState = jsonData.boolValue;
+            Serial.println("Power_Button state: " + String(powerButtonState));
+        } else {
+            Serial.println("Power_Button not found or not a boolean");
+        }
+
+        if (json.get(jsonData, "fields/Interval_On/integerValue") ){
+            intervalOn = jsonData.intValue * 1000; // Convert seconds to milliseconds
+            Serial.println("On_Duration: " + String(intervalOn));
+        } else {
+            Serial.println("Interval_On not found or not an integer");
+        }
+
+        if (json.get(jsonData, "fields/Interval_Off/integerValue") ){
+            intervalOff = jsonData.intValue * 1000; // Convert seconds to milliseconds
+            Serial.println("Off_Duration: " + String(intervalOff));
+        } else {
+            Serial.println("Interval_Off not found or not an integer");
+        }
     } else {
-      Serial.println("FAILED");
-      Serial.println("REASON: " + fbdo.errorReason());
+        Serial.println("Failed to get document");
+        Serial.println(fbdo.errorReason());
     }
-  }
-}
-
-void updatePowerButtonState(bool state) {
-  updateFirebase("Power_Button", state);
-}
-
-bool readPowerButtonState() {
-  if (Firebase.ready()) {
-    if (Firebase.RTDB.getBool(&fbdo, "Power_Button")) {
-      return fbdo.boolData();
-    } else {
-      Serial.println("FAILED to read power button state");
-      Serial.println("REASON: " + fbdo.errorReason());
-      return false; // Default to false if reading fails
-    }
-  }
-  return false;
-}
-
-long readTimerValue(const char* path) {
-  if (Firebase.ready()) {
-    if (Firebase.RTDB.getInt(&fbdo, path)) {
-      return fbdo.intData();
-    } else {
-      Serial.println("FAILED to read timer value");
-      Serial.println("REASON: " + fbdo.errorReason());
-    }
-  }
-  return -1; // Indicate failure
-}
-
-void enableLEDs(bool state) {
-  int dutyCycle = state ? 255 : 0; // Max duty cycle for 8-bit resolution is 255
-
-  ledcWrite(greenLEDPwmChannel, dutyCycle);
-  ledcWrite(redLEDPwmChannel, dutyCycle);
-  ledcWrite(blueLEDPwmChannel, dutyCycle);
-  
-  updateFirebase("LED_Green", state);
-  updateFirebase("LED_Red", state);
-  updateFirebase("LED_Blue", state);
-}
-
-void disableLEDs() {
-  // Detach PWM channels to "break the circuit"
-  ledcDetachPin(greenLEDPin);
-  ledcDetachPin(redLEDPin);
-  ledcDetachPin(blueLEDPin);
-
-  updateFirebase("LED_Green", false);
-  updateFirebase("LED_Red", false);
-  updateFirebase("LED_Blue", false);
-}
-
-
-void readFirebaseConfig() {
-  // Check the power button state from Firebase
-  powerButtonState = readPowerButtonState();
-
-  // Read on and off timer values from Firebase
-  long newIntervalOn = readTimerValue("On_Duration");
-  long newIntervalOff = readTimerValue("Off_Duration");
-
-  // Only update the intervals if valid values are retrieved
-  if (newIntervalOn >= 0 && newIntervalOff >= 0) {
-    intervalOn = newIntervalOn * 1000; // Convert to milliseconds
-    intervalOff = newIntervalOff * 1000; // Convert to milliseconds
-
-    // Print the current timer values
-    Serial.print("Current On Timer: ");
-    Serial.println(intervalOn);
-    Serial.print("Current Off Timer: ");
-    Serial.println(intervalOff);
-  }
 }
 
 void setup() {
-  Serial.begin(9600); // Set baud rate to 9600 to match the Serial Monitor
-  
-  // Setup PWM channels
-  ledcSetup(greenLEDPwmChannel, pwmFrequency, pwmResolution);
-  ledcSetup(redLEDPwmChannel, pwmFrequency, pwmResolution);
-  ledcSetup(blueLEDPwmChannel, pwmFrequency, pwmResolution);
+    Serial.begin(9600);
 
-  // Attach PWM channels to LED pins
-  ledcAttachPin(greenLEDPin, greenLEDPwmChannel);
-  ledcAttachPin(redLEDPin, redLEDPwmChannel);
-  ledcAttachPin(blueLEDPin, blueLEDPwmChannel);
-  
-  // Connect to Wi-Fi
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(300);
-  }
-  Serial.println();
-  Serial.print("Connected with IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.println();
+    // Connect to Wi-Fi
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.print("Connecting to Wi-Fi");
+    while (WiFi.status() != WL_CONNECTED) {
+        delay(300);
+        Serial.print(".");
+    }
+    Serial.println("Connected");
+    Serial.print("IP Address: ");
+    Serial.println(WiFi.localIP());
 
-  // Assign the API key (required)
-  config.api_key = API_KEY;
+    // Initialize Firebase
+    config.api_key = API_KEY;
+    config.database_url = "https://your-project-id.firebaseio.com"; // Set it to any valid URL or an empty string
+    config.token_status_callback = tokenStatusCallback; // see addons/TokenHelper.h
 
-  // Assign the RTDB URL (required)
-  config.database_url = DATABASE_URL;
+    auth.user.email = USER_EMAIL;
+    auth.user.password = USER_PASSWORD;
 
-  // Sign up
-  if (Firebase.signUp(&config, &auth, "", "")) {
-    Serial.println("ok");
-  } else {
-    Serial.printf("%s\n", config.signer.signupError.message.c_str());
-  }
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
 
-  // Assign the callback function for the long running token generation task
-  config.token_status_callback = tokenStatusCallback; // see addons/TokenHelper.h
-  
-  // Initialize Firebase
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
+    if (Firebase.ready()) {
+        Serial.println("Firebase initialized successfully.");
+    } else {
+        Serial.print("Firebase initialization failed: ");
+        Serial.println(fbdo.errorReason());
+    }
 
-  // Initial read from Firebase
-  readFirebaseConfig();
-}
+    // Initialize PWM channels
+    ledcSetup(greenLEDPwmChannel, pwmFrequency, pwmResolution);
+    ledcSetup(redLEDPwmChannel, pwmFrequency, pwmResolution);
+    ledcSetup(blueLEDPwmChannel, pwmFrequency, pwmResolution);
 
-
-void loop() {
-  unsigned long currentMillis = millis();
-
-  // Only read from Firebase at specified intervals
-  if (currentMillis - firebaseReadMillis >= firebaseReadInterval) {
-    firebaseReadMillis = currentMillis;
-    readFirebaseConfig();
-  }
-
-  if (powerButtonState) {
-    // Reattach the PWM channels if the power button is on
     ledcAttachPin(greenLEDPin, greenLEDPwmChannel);
     ledcAttachPin(redLEDPin, redLEDPwmChannel);
     ledcAttachPin(blueLEDPin, blueLEDPwmChannel);
 
-    if (ledState) {
-      if (currentMillis - previousMillis >= intervalOn) {
-        // Turn off the LEDs
-        enableLEDs(false);
-        previousMillis = currentMillis;
-        ledState = false;
-      }
+    // Fetch initial configuration from Firestore
+    readFirestoreConfig();
+}
+
+void loop() {
+    unsigned long currentMillis = millis();
+
+    // Fetch configuration from Firestore periodically
+    static unsigned long lastReadMillis = 0;
+    if (currentMillis - lastReadMillis >= 5000) { // Fetch every 60 seconds
+        lastReadMillis = currentMillis;
+        readFirestoreConfig();
+    }
+
+    // Control LEDs based on fetched configuration
+    if (powerButtonState) {
+        if (currentMillis - previousMillis >= (ledState ? intervalOn : intervalOff)) {
+            ledState = !ledState;
+            previousMillis = currentMillis;
+
+            int dutyCycle = ledState ? 255 : 0;
+            ledcWrite(greenLEDPwmChannel, dutyCycle);
+            ledcWrite(redLEDPwmChannel, dutyCycle);
+            ledcWrite(blueLEDPwmChannel, dutyCycle);
+        }
     } else {
-      if (currentMillis - previousMillis >= intervalOff) {
-        // Turn on the LEDs
-        enableLEDs(true);
-        previousMillis = currentMillis;
-        ledState = true;
-      }
+        // Turn off all LEDs if power button is off
+        ledcWrite(greenLEDPwmChannel, 0);
+        ledcWrite(redLEDPwmChannel, 0);
+        ledcWrite(blueLEDPwmChannel, 0);
     }
-  } else {
-    // Disable the LEDs if the power button is off
-    if (ledState || powerButtonState) {
-      disableLEDs();
-      ledState = false;
-    }
-  }
 }
