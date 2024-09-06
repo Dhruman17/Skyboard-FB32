@@ -1,7 +1,8 @@
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
-#include <addons/TokenHelper.h> // Provide the token generation process info and error info
-#include <addons/RTDBHelper.h>  // Provide the RTDB payload printing info and other helper functions
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
+#include <time.h>
 
 // Define your Wi-Fi credentials
 #define WIFI_SSID "POTANU VAPAR MAFTYA"
@@ -36,39 +37,51 @@ String units[] = {"H1-1-1", "H1-1-2", "H1-1-3"}; // Array of units
 
 // Variables to store configuration for each unit
 bool unitStates[3] = {false, false, false}; // Initial states of units
+bool previousUnitStates[3] = {false, false, false}; // Track previous states of units
+
+bool waterLevelStates[3] = {false, false, false}; // Initial water level states
+bool previousWaterLevelStates[3] = {false, false, false}; // Track previous water level states
+
 long intervalOn[3] = {5000, 5000, 5000}; // Default on intervals
 long intervalOff[3] = {5000, 5000, 5000}; // Default off intervals
 bool ledStates[3] = {false, false, false}; // Initial LED states
 unsigned long previousMillis[3] = {0, 0, 0}; // Track previous time for each unit
 
-// Function to send system offline notification
-void sendSystemOfflineNotification() {
-    String documentPath = "SystemNotification/" + systemPath; // Path to store notification
-    FirebaseJson content;
-    content.set("fields/systemnotificationId/stringValue", auth.token.uid); // UID of the system
-    content.set("fields/timestamp/timestampValue", Firebase.getCurrentTime());
-    content.set("fields/message/stringValue", "System went offline");
-
-    if (Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw())) {
-        Serial.println("System offline notification sent.");
-    } else {
-        Serial.println("Failed to send system offline notification.");
-        Serial.println(fbdo.errorReason());
-    }
+// Function to initialize NTP
+void initializeTime() {
+    configTime(-8 * 3600, 0, "pool.ntp.org", "time.nist.gov");
 }
 
-// Function to send water level low notification
-void sendWaterLevelLowNotification() {
-    String documentPath = "WaterlevelNotification/" + systemPath; // Path to store notification
-    FirebaseJson content;
-    content.set("fields/systemnotificationId/stringValue", auth.token.uid); // UID of the system
-    content.set("fields/timestamp/timestampValue", Firebase.getCurrentTime());
-    content.set("fields/message/stringValue", "Water level low");
+// Function to format timestamp correctly
+String formatTimestamp() {
+    time_t now;
+    struct tm* tm_info;
+    char buffer[30];
 
+    time(&now);
+    tm_info = localtime(&now);
+
+    strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", tm_info); // ISO 8601 format
+    return String(buffer) + "Z"; // Append 'Z' for UTC
+}
+
+// Function to send system notification
+void sendSystemNotification(String unitName, String systemName, String message, bool unitState, bool waterLevelState) {
+    String documentPath = "Notifications"; // Flat structure, no hierarchy
+    FirebaseJson content;
+
+    // Build the JSON object directly
+    content.set("fields/unitName/stringValue", unitName);
+    content.set("fields/systemName/stringValue", systemName);
+    content.set("fields/message/stringValue", message);
+    content.set("fields/uid/stringValue", auth.token.uid);
+    content.set("fields/timestamp/timestampValue", formatTimestamp()); // Use current time formatted correctly
+
+    // Create the document with a random ID
     if (Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw())) {
-        Serial.println("Water level low notification sent.");
+        Serial.println("Notification sent: " + message);
     } else {
-        Serial.println("Failed to send water level low notification.");
+        Serial.println("Failed to send notification.");
         Serial.println(fbdo.errorReason());
     }
 }
@@ -91,6 +104,13 @@ void readFirestoreConfig() {
                 Serial.println("Unit " + String(units[i]) + " state: " + String(unitStates[i]));
             } else {
                 Serial.println("UnitState for " + String(units[i]) + " not found or not a boolean");
+            }
+
+            if (json.get(jsonData, "fields/waterLevelState/booleanValue")) {
+                waterLevelStates[i] = jsonData.boolValue;
+                Serial.println("WaterLevelState for " + String(units[i]) + ": " + String(waterLevelStates[i]));
+            } else {
+                Serial.println("WaterLevelState for " + String(units[i]) + " not found or not a boolean");
             }
 
             if (json.get(jsonData, "fields/Interval_On/integerValue")) {
@@ -126,6 +146,9 @@ void setup() {
     Serial.println("Connected");
     Serial.print("IP Address: ");
     Serial.println(WiFi.localIP());
+
+    // Initialize NTP
+    initializeTime();
 
     // Initialize Firebase
     config.api_key = API_KEY;
@@ -184,7 +207,6 @@ void loop() {
                 }
             }
         } else {
-            // Turn off the corresponding LED if unit is off
             if (i == 0) {
                 ledcWrite(redLEDPwmChannel, 0);
             } else if (i == 1) {
@@ -195,15 +217,16 @@ void loop() {
         }
     }
 
-    // Simulate notifications based on conditions (for example purposes)
-    bool systemOffline = false; // Simulate system offline condition
-    bool waterLevelLow = false; // Simulate water level low condition
+    // Check if unit states or water level states have changed and send notifications
+    for (int i = 0; i < 3; i++) {
+        if (unitStates[i] != previousUnitStates[i]) {
+            sendSystemNotification(units[i], systemPath, unitStates[i] ? "Unit turned on" : "Unit turned off", unitStates[i], waterLevelStates[i]);
+            previousUnitStates[i] = unitStates[i];
+        }
 
-    if (systemOffline) {
-        sendSystemOfflineNotification();
-    }
-
-    if (waterLevelLow) {
-        sendWaterLevelLowNotification();
+        if (waterLevelStates[i] != previousWaterLevelStates[i]) {
+            sendSystemNotification(units[i], systemPath, waterLevelStates[i] ? "Water level is normal" : "Water level is low", unitStates[i], waterLevelStates[i]);
+            previousWaterLevelStates[i] = waterLevelStates[i];
+        }
     }
 }
