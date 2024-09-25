@@ -20,7 +20,7 @@ const int power12V = 12;
 const int redLEDPwmChannel = 1;
 const int greenLEDPwmChannel = 0;
 const int blueLEDPwmChannel = 2;
-const int gpio26LEDPwmChannel = 3; // PWM channel for GPIO 26 LED
+const int gpio26LEDPwmChannel = 3; // PWM channel for Light System
 const int pwmFrequency = 108000;
 const int pwmResolution = 4; // 8-bit resolution
 String systemPath = "Systems/THQ";
@@ -39,7 +39,10 @@ unsigned long lastNotificationMillis = 0;
 const unsigned long connectionCheckInterval = 10000; // 5 minutes in milliseconds
 time_t lightOnTime;
 time_t lightOffTime;
+
 bool lightMasterSwitch = true; // Default to true for safety
+bool lightTimeCycleSwitch = false; // Default to false
+
 // Function to initialize NTP
 void initializeTime() {
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
@@ -98,6 +101,7 @@ void fetchSystemName() {
         Serial.println(fbdo.errorReason());
     }
 }
+// Function to fetch light intervals and switches
 void fetchLightIntervals() {
     String documentPath = systemPath;
     if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
@@ -122,9 +126,15 @@ void fetchLightIntervals() {
         // Fetch Light_Master_Switch
         if (json.get(jsonData, "fields/Light_Master_Switch/booleanValue")) {
             lightMasterSwitch = jsonData.boolValue;
-            Serial.println("Light Master Switch: " + String(lightMasterSwitch));
         } else {
             Serial.println("Light_Master_Switch not found or not a boolean");
+        }
+
+        // Fetch Light_Time_Cycle_Switch
+        if (json.get(jsonData, "fields/Light_Time_Cycle_Switch/booleanValue")) {
+            lightTimeCycleSwitch = jsonData.boolValue;
+        } else {
+            Serial.println("Light_Time_Cycle_Switch not found or not a boolean");
         }
 
     } else {
@@ -133,19 +143,18 @@ void fetchLightIntervals() {
     }
 }
 
-// Modify controlGpio26LED to consider Light Master Switch
+// Modify controlGpio26LED to consider Light Master Switch and Time Cycle Switch
 void controlGpio26LED() {
     time_t now;
     struct tm* currentTime;
     time(&now);
     currentTime = localtime(&now);
-    
+
     // If Light Master Switch is off, turn off GPIO 26 and exit
     if (!lightMasterSwitch) {
         if (digitalRead(gpio26LEDPin) == HIGH) {
             digitalWrite(gpio26LEDPin, LOW); // Ensure LED is off
-            sendSystemNotification("GPIO 26 LED", "GPIO 26 LED turned OFF due to Light Master Switch");
-            Serial.println("GPIO 26 LED turned OFF due to Light Master Switch");
+            sendSystemNotification("Light System", "Light System turned OFF due to Light Master Switch");
         }
         return; // Exit the function since the switch is off
     }
@@ -157,38 +166,45 @@ void controlGpio26LED() {
     currentTimeOfDay.tm_mday = 1;   // 1st of the month
     time_t currentTime_t = mktime(&currentTimeOfDay);
 
-    if (lightOffTime < lightOnTime) {
-        // Handle the wrap-around case
-        if (currentTime_t >= lightOnTime || currentTime_t <= lightOffTime) {
-            if (digitalRead(gpio26LEDPin) == LOW) {
-                digitalWrite(gpio26LEDPin, HIGH); 
-                sendSystemNotification("GPIO 26 LED", "GPIO 26 LED turned ON");
-                Serial.println("GPIO 26 LED turned ON");
+    if (lightTimeCycleSwitch) {
+        // If the time cycle switch is on, use time intervals
+        if (lightOffTime < lightOnTime) {
+            // Handle the wrap-around case
+            if (currentTime_t >= lightOnTime || currentTime_t <= lightOffTime) {
+                if (digitalRead(gpio26LEDPin) == LOW) {
+                    digitalWrite(gpio26LEDPin, HIGH); 
+                    sendSystemNotification("Light System", "Light System turned ON");
+                }
+            } else {
+                if (digitalRead(gpio26LEDPin) == HIGH) {
+                    digitalWrite(gpio26LEDPin, LOW); 
+                    sendSystemNotification("Light System", "Light System turned OFF");
+                }
             }
         } else {
-            if (digitalRead(gpio26LEDPin) == HIGH) {
-                digitalWrite(gpio26LEDPin, LOW); 
-                sendSystemNotification("GPIO 26 LED", "GPIO 26 LED turned OFF");
-                Serial.println("GPIO 26 LED turned OFF");
+            // Handle the regular case
+            if (currentTime_t >= lightOnTime && currentTime_t <= lightOffTime) {
+                if (digitalRead(gpio26LEDPin) == LOW) {
+                    digitalWrite(gpio26LEDPin, HIGH);
+                    sendSystemNotification("Light System", "Light System turned ON");
+                }
+            } else {
+                if (digitalRead(gpio26LEDPin) == HIGH) {
+                    digitalWrite(gpio26LEDPin, LOW); 
+                    sendSystemNotification("Light System", "Light System turned OFF");
+                }
             }
         }
     } else {
-        // Handle the regular case
-        if (currentTime_t >= lightOnTime && currentTime_t <= lightOffTime) {
-            if (digitalRead(gpio26LEDPin) == LOW) {
-                digitalWrite(gpio26LEDPin, HIGH);
-                sendSystemNotification("GPIO 26 LED", "GPIO 26 LED turned ON");
-                Serial.println("GPIO 26 LED turned ON");
-            }
-        } else {
-            if (digitalRead(gpio26LEDPin) == HIGH) {
-                digitalWrite(gpio26LEDPin, LOW); 
-                sendSystemNotification("GPIO 26 LED", "GPIO 26 LED turned OFF");
-                Serial.println("GPIO 26 LED turned OFF");
-            }
+        // If the time cycle switch is off, maintain the state based on the master switch
+        if (digitalRead(gpio26LEDPin) == LOW) {
+            digitalWrite(gpio26LEDPin, HIGH);
+            sendSystemNotification("Light System", "Light System turned ON");
         }
     }
 }
+
+
 // Function to check Wi-Fi and Firebase connection
 void checkConnection() {
     if (WiFi.status() != WL_CONNECTED || !Firebase.ready()) {
@@ -278,8 +294,8 @@ void setup() {
     pinMode(power12V, OUTPUT);
     digitalWrite(power12V, HIGH);
     // Set GPIO 26 as output and initialize LED as OFF
-    pinMode(gpio26LEDPin, OUTPUT);
-    digitalWrite(gpio26LEDPin, HIGH);  // Start with LED off
+pinMode(gpio26LEDPin, OUTPUT);
+digitalWrite(gpio26LEDPin, LOW); // Ensure LED is off during startup
     // Initialize other LEDs as PWM outputs
     ledcSetup(redLEDPwmChannel, pwmFrequency, pwmResolution);
     ledcAttachPin(redLEDPin, redLEDPwmChannel);
@@ -293,9 +309,11 @@ void loop() {
     if (currentMillis - lastConnectionCheckMillis >= connectionCheckInterval) {
         lastConnectionCheckMillis = currentMillis;
         checkConnection();
-        fetchLightIntervals();
+       
     }
+    fetchLightIntervals();
+    controlGpio26LED(); // Add this to control Light System based on the intervals
     readFirestoreConfig();
     controlLEDs();
-    controlGpio26LED(); // Add this to control GPIO 26 LED based on the intervals
+    
 }
