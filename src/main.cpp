@@ -10,14 +10,12 @@
 #define FIREBASE_PROJECT_ID "skyacres-marketplace"
 #define USER_EMAIL "test@gmail.com"
 #define USER_PASSWORD "test123"
-
+String serialNumber = "1234567890"; // Unique serial number for each system
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-
-const unsigned long heartbeatInterval = 30000; // 30 seconds for heartbeat
-const unsigned long connectionCheckInterval = 10000; // 10 seconds in milliseconds
+const unsigned long heartbeatInterval = 300000; // 5 minutes for heartbeat
 unsigned long previousHeartbeatMillis = 0;
 unsigned long lastConnectionCheckMillis = 0;
 unsigned long previousMillis[3] = {0, 0, 0};
@@ -38,9 +36,10 @@ const int gpio26LEDPwmChannel = 3; // PWM channel for Light System
 const int pwmFrequency = 108000;
 const int pwmResolution = 4; // 8-bit resolution
 
-String systemPath = "Systems/THQ";
-String units[] = {"THQ-1", "THQ-2", "THQ-3"};
-String systemName = "THQ";
+String systemPath;
+String units[3];
+String systemName = ""; // Will be fetched from Firestore
+
 
 bool unitStates[3] = {false, false, false}; 
 bool previousUnitStates[3] = {false, false, false};
@@ -69,7 +68,6 @@ time_t parseTime(const char* timestamp) {
     tm.tm_mday = 1;  // 1st of the month
     return mktime(&tm);
 }
-
 // Function to format timestamp correctly for Firebase
 String formatTimestamp() {
     time_t now;
@@ -79,6 +77,31 @@ String formatTimestamp() {
     tm_info = localtime(&now);
     strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", tm_info);
     return String(buffer) + "Z";
+}
+
+// Function to fetch serial number and system name
+void fetchSerialNumberAndSystemName() {
+    String documentPath = "Systems/" + serialNumber;
+    Serial.println(documentPath);
+    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
+        FirebaseJson json;
+        json.setJsonData(fbdo.payload());
+        FirebaseJsonData jsonData;
+        
+        if (json.get(jsonData, "fields/systeName/stringValue")) {
+            systemName = jsonData.stringValue;
+            systemPath = "Systems/" + serialNumber;
+            units[0] = systemName + "-1";
+            units[1] = systemName + "-2";
+            units[2] = systemName + "-3";
+            Serial.println("System Name: " + systemName);
+        } else {
+            Serial.println("System name not found.");
+        }
+    } else {
+        Serial.println("Failed to fetch serial number or system name.");
+        Serial.println(fbdo.errorReason());
+    }
 }
 
 // Function to send heartbeat signal
@@ -110,7 +133,6 @@ void sendSystemNotification(String unitName, String message) {
         Serial.println(fbdo.errorReason());
     }
 }
-
 // Function to fetch system name from Firestore
 void fetchSystemName() {
     String documentPath = systemPath;
@@ -118,7 +140,7 @@ void fetchSystemName() {
         FirebaseJson json;                                                                          
         json.setJsonData(fbdo.payload());
         FirebaseJsonData jsonData;
-        if (json.get(jsonData, "fields/systemName/stringValue")) {
+        if (json.get(jsonData, "fields/systeName/stringValue")) {
             systemName = jsonData.stringValue;
             Serial.println("System Name: " + systemName);
         } else {
@@ -275,16 +297,6 @@ void readFirestoreConfig() {
                     }
                 }
             }
-            if (json.get(jsonData, "fields/waterLevelState/booleanValue")) {
-                if (waterLevelStates[i] != jsonData.boolValue) {
-                    waterLevelStates[i] = jsonData.boolValue;
-                    if (waterLevelStates[i]) {
-                        sendSystemNotification(units[i], "Water level is LOW");
-                    } else {
-                        sendSystemNotification(units[i], "Water level is NORMAL");
-                    }
-                }
-            }
             if (json.get(jsonData, "fields/Interval_On/integerValue")) {
                 intervalOn[i] = jsonData.intValue * 1000;
             }
@@ -329,8 +341,9 @@ void setup() {
     Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
     initializeTime();
-    fetchSystemName();
-    fetchLightIntervals();
+    
+    // Fetch serial number and system details
+    fetchSerialNumberAndSystemName();
 
     pinMode(waterLevelPin25, INPUT);
     pinMode(waterLevelPin23, INPUT);
@@ -360,3 +373,4 @@ void loop() {
     readFirestoreConfig();
     controlLEDs(); 
 }
+
