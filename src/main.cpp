@@ -1,57 +1,26 @@
+#include <config.h>
+#include <credentials.h>
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
 #include <addons/TokenHelper.h>
 #include <addons/RTDBHelper.h>
 #include <time.h>
 
-#define WIFI_SSID "POTANU VAPAR MAFTYA"
-#define WIFI_PASSWORD "Rogers@2433"
-#define API_KEY "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI"
-#define FIREBASE_PROJECT_ID "skyacres-marketplace"
-#define USER_EMAIL "test@gmail.com"
-#define USER_PASSWORD "test123"
-String serialNumber = "1234567890"; // Unique serial number for each system
+// Firebase and system global variables
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-const unsigned long heartbeatInterval = 300000; // 5 minutes for heartbeat
-unsigned long previousHeartbeatMillis = 0;
-unsigned long lastConnectionCheckMillis = 0;
-unsigned long previousMillis[3] = {0, 0, 0};
-unsigned long lastNotificationMillis = 0;
-
-const int redLEDPin = 5;
-const int greenLEDPin = 4;
-const int blueLEDPin = 2;
-const int waterLevelPin25 = 25; // Float sensor for Unit1
-const int waterLevelPin23 = 23; // Float sensor for Unit2
-const int waterLevelPin13 = 13; // Float sensor for Unit3
-const int gpio26LEDPin = 26; // GPIO 26 for new LED
-const int power12V = 12;
-const int redLEDPwmChannel = 1;
-const int greenLEDPwmChannel = 0;
-const int blueLEDPwmChannel = 2;
-const int gpio26LEDPwmChannel = 3; // PWM channel for Light System
-const int pwmFrequency = 108000;
-const int pwmResolution = 4; // 8-bit resolution
-
+// System Variables
+String serialNumber = "1234567890";  // Unique serial number
 String systemPath;
 String units[3];
-String systemName = ""; // Will be fetched from Firestore
+String systemName = "";
 
-
-bool unitStates[3] = {false, false, false}; 
-bool previousUnitStates[3] = {false, false, false};
-bool waterLevelStates[3] = {false, false, false};
-bool previousWaterLevelStates[3] = {false, false, false};
-long intervalOn[3] = {5000, 5000, 5000};
-long intervalOff[3] = {5000, 5000, 5000};
-bool ledStates[3] = {false, false, false};
-
-time_t lightOnTime;
-time_t lightOffTime;
-bool lightMasterSwitch = true; // Default to true for safety
+// Light control variables
+time_t atomizerOnTime;  // Initialize to 0 or a default value
+time_t atomizerOffTime; // Initialize to 0 or a default value
+bool lightMasterSwitch = true;
 bool lightTimeCycleSwitch = false;
 
 // Function to initialize NTP
@@ -153,7 +122,7 @@ void fetchSystemName() {
 }
 
 // Function to fetch light intervals and switches
-void fetchLightIntervals() {
+void fetchsystemLightIntervals() {
     String documentPath = systemPath;
     if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
         FirebaseJson json;
@@ -161,13 +130,13 @@ void fetchLightIntervals() {
         FirebaseJsonData jsonData;
         // Fetch Light_Interval_On_Time
         if (json.get(jsonData, "fields/Light_Interval_On_Time/timestampValue")) {
-            lightOnTime = parseTime(jsonData.stringValue.c_str());
+            atomizerOnTime = parseTime(jsonData.stringValue.c_str());
         } else {
             Serial.println("Light_Interval_On_Time not found or not a timestamp");
         }
         // Fetch Light_Interval_Off_Time
         if (json.get(jsonData, "fields/Light_Interval_Off_Time/timestampValue")) {
-            lightOffTime = parseTime(jsonData.stringValue.c_str());
+            atomizerOffTime = parseTime(jsonData.stringValue.c_str());
         } else {
             Serial.println("Light_Interval_Off_Time not found or not a timestamp");
         }
@@ -190,14 +159,14 @@ void fetchLightIntervals() {
 }
 
 // Modify controlGpio26LED to consider Light Master Switch and Time Cycle Switch
-void controlGpio26LED() {
+void systemLights() {
     time_t now;
     struct tm* currentTime;
     time(&now);
     currentTime = localtime(&now);
     if (!lightMasterSwitch) {
-        if (digitalRead(gpio26LEDPin) == HIGH) {
-            digitalWrite(gpio26LEDPin, LOW);
+        if (digitalRead(SYSTEM_LIGHTS_PIN_26) == HIGH) {
+            digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW);
             sendSystemNotification("Light System", "Light System turned OFF due to Light Master Switch");
         }
         return;
@@ -209,34 +178,34 @@ void controlGpio26LED() {
     currentTimeOfDay.tm_mday = 1;   // 1st of the month
     time_t currentTime_t = mktime(&currentTimeOfDay);
     if (lightTimeCycleSwitch) {
-        if (lightOffTime < lightOnTime) {
-            if (currentTime_t >= lightOnTime || currentTime_t <= lightOffTime) {
-                if (digitalRead(gpio26LEDPin) == LOW) {
-                    digitalWrite(gpio26LEDPin, HIGH); 
+        if (atomizerOffTime < atomizerOnTime) {
+            if (currentTime_t >= atomizerOnTime || currentTime_t <= atomizerOffTime) {
+                if (digitalRead(SYSTEM_LIGHTS_PIN_26) == LOW) {
+                    digitalWrite(SYSTEM_LIGHTS_PIN_26, HIGH); 
                     sendSystemNotification("Light System", "Light System turned ON");
                 }
             } else {
-                if (digitalRead(gpio26LEDPin) == HIGH) {
-                    digitalWrite(gpio26LEDPin, LOW); 
+                if (digitalRead(SYSTEM_LIGHTS_PIN_26) == HIGH) {
+                    digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW); 
                     sendSystemNotification("Light System", "Light System turned OFF");
                 }
             }
         } else {
-            if (currentTime_t >= lightOnTime && currentTime_t <= lightOffTime) {
-                if (digitalRead(gpio26LEDPin) == LOW) {
-                    digitalWrite(gpio26LEDPin, HIGH);
+            if (currentTime_t >= atomizerOnTime && currentTime_t <= atomizerOffTime) {
+                if (digitalRead(SYSTEM_LIGHTS_PIN_26) == LOW) {
+                    digitalWrite(SYSTEM_LIGHTS_PIN_26, HIGH);
                     sendSystemNotification("Light System", "Light System turned ON");
                 }
             } else {
-                if (digitalRead(gpio26LEDPin) == HIGH) {
-                    digitalWrite(gpio26LEDPin, LOW); 
+                if (digitalRead(SYSTEM_LIGHTS_PIN_26) == HIGH) {
+                    digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW); 
                     sendSystemNotification("Light System", "Light System turned OFF");
                 }
             }
         }
     } else {
-        if (digitalRead(gpio26LEDPin) == LOW) {
-            digitalWrite(gpio26LEDPin, HIGH);
+        if (digitalRead(SYSTEM_LIGHTS_PIN_26) == LOW) {
+            digitalWrite(SYSTEM_LIGHTS_PIN_26, HIGH);
             sendSystemNotification("Light System", "Light System turned ON");
         }
     }
@@ -244,17 +213,17 @@ void controlGpio26LED() {
 
 // Function to read water level sensors and update states
 void updateWaterLevelStates() {
-    if (digitalRead(waterLevelPin25) == LOW) {
+    if (digitalRead(WATER_LEVEL_PIN_25) == LOW) {
         waterLevelStates[0] = false;
     } else {
         waterLevelStates[0] = true;
     }
-    if (digitalRead(waterLevelPin23) == LOW) {
+    if (digitalRead(WATER_LEVEL_PIN_23) == LOW) {
         waterLevelStates[1] = false;
     } else {
         waterLevelStates[1] = true;
     }
-    if (digitalRead(waterLevelPin13) == LOW) {
+    if (digitalRead(WATER_LEVEL_PIN_13) == LOW) {
         waterLevelStates[2] = false;
     } else {
         waterLevelStates[2] = true;
@@ -311,7 +280,8 @@ void readFirestoreConfig() {
 }
 
 // Function to control the LEDs based on unit states
-void controlLEDs() {
+void controlAtomizers() {
+    unsigned long previousMillis[3] = {0, 0, 0};
     unsigned long currentMillis = millis();
     for (int i = 0; i < 3; i++) {
         if (unitStates[i]) {
@@ -326,6 +296,12 @@ void controlLEDs() {
 
 void setup() {
     Serial.begin(9600);
+    // Random delay between 50 and 10,000 milliseconds
+    randomSeed(analogRead(0)); // Use an analog pin to generate randomness
+    unsigned long randomDelay = random(50, 10001); // Generate a random number between 50 and 10,000
+    Serial.print("Random delay before Wi-Fi initialization: ");
+    Serial.println(randomDelay);
+    delay(randomDelay); // remove the delay function
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("Connecting to Wi-Fi");
     while (WiFi.status() != WL_CONNECTED) {
@@ -345,32 +321,46 @@ void setup() {
     // Fetch serial number and system details
     fetchSerialNumberAndSystemName();
 
-    pinMode(waterLevelPin25, INPUT);
-    pinMode(waterLevelPin23, INPUT);
-    pinMode(waterLevelPin13, INPUT);
-    pinMode(power12V, OUTPUT);
-    digitalWrite(power12V, HIGH);
-    pinMode(gpio26LEDPin, OUTPUT);
-    digitalWrite(gpio26LEDPin, LOW); 
+    pinMode(WATER_LEVEL_PIN_25, INPUT);
+    pinMode(WATER_LEVEL_PIN_23, INPUT);
+    pinMode(WATER_LEVEL_PIN_13, INPUT);
+    pinMode(POWER_12V_PIN_12, OUTPUT);
+    digitalWrite(POWER_12V_PIN_12, HIGH);
+    pinMode(SYSTEM_LIGHTS_PIN_26, OUTPUT);
+    digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW); 
 
-    ledcSetup(redLEDPwmChannel, pwmFrequency, pwmResolution);
-    ledcAttachPin(redLEDPin, redLEDPwmChannel);
-    ledcSetup(greenLEDPwmChannel, pwmFrequency, pwmResolution);
-    ledcAttachPin(greenLEDPin, greenLEDPwmChannel);
-    ledcSetup(blueLEDPwmChannel, pwmFrequency, pwmResolution);
-    ledcAttachPin(blueLEDPin, blueLEDPwmChannel);
+    ledcSetup(ATOMIZER_PWM_CHANNEL_1, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcAttachPin(ATOMIZER_PIN_5, ATOMIZER_PWM_CHANNEL_1);
+    ledcSetup(ATOMIZER_PWM_CHANNEL_0, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcAttachPin(ATOMIZER_PIN_4, ATOMIZER_PWM_CHANNEL_0);
+    ledcSetup(ATOMIZER_PWM_CHANNEL_2, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcAttachPin(ATOMIZER_PIN_2, ATOMIZER_PWM_CHANNEL_2);
 }
 
 void loop() {
+    static unsigned long previousHeartbeatMillis = 0;
+    static unsigned long lastConnectionCheckMillis = 0;
     unsigned long currentMillis = millis();
-     if (currentMillis - previousHeartbeatMillis >= heartbeatInterval) {
+     // Check Wi-Fi and Firebase connection
+    if (WiFi.status() != WL_CONNECTED || !Firebase.ready()) {
+        if (currentMillis - lastConnectionCheckMillis >= 21600000) { // 6 hours in milliseconds
+            Serial.println("System disconnected for 6 hours. Restarting...");
+            ESP.restart(); // Restart the system
+        }
+    } else {
+        // Reset the connection check timer if the system is connected
+        lastConnectionCheckMillis = currentMillis;
+    }
+     if (currentMillis - previousHeartbeatMillis >= HEARTBEAT_INTERVAL) {
         sendHeartbeat();
+        systemLights();
+        updateWaterLevelStates();
         previousHeartbeatMillis = currentMillis;
     }
-    updateWaterLevelStates();
-    fetchLightIntervals();
-    controlGpio26LED();
+   
+    fetchsystemLightIntervals();
     readFirestoreConfig();
-    controlLEDs(); 
-}
+    controlAtomizers(); 
+        // Check if it's time to restart
 
+}
