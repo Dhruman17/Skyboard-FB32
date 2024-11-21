@@ -1,27 +1,25 @@
-#include <config.h>
-#include <credentials.h>
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
 #include <addons/TokenHelper.h>
 #include <addons/RTDBHelper.h>
 #include <time.h>
+#include <credentials.h>
+#include <config.h>
 
-// Firebase and system global variables
+
+String serialNumber = "1234567890"; // Unique serial number for each system
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-// System Variables
-String serialNumber = "1234567890";  // Unique serial number
+
 String systemPath;
 String units[3];
-String systemName = "";
-
-// Light control variables
-time_t atomizerOnTime;  // Initialize to 0 or a default value
-time_t atomizerOffTime; // Initialize to 0 or a default value
-bool lightMasterSwitch = true;
-bool lightTimeCycleSwitch = false;
+String systemName = ""; // Will be fetched from Firestore
+time_t atomizerOnTime;
+time_t atomizerOffTime;
+bool systemLightSwitch = true; // Default to true for safety
+bool systemLightTimeCycleSwitch = false;
 
 // Function to initialize NTP
 void initializeTime() {
@@ -122,7 +120,7 @@ void fetchSystemName() {
 }
 
 // Function to fetch light intervals and switches
-void fetchsystemLightIntervals() {
+void fetchAtomizerIntervals() {
     String documentPath = systemPath;
     if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
         FirebaseJson json;
@@ -142,13 +140,13 @@ void fetchsystemLightIntervals() {
         }
         // Fetch Light_Master_Switch
         if (json.get(jsonData, "fields/Light_Master_Switch/booleanValue")) {
-            lightMasterSwitch = jsonData.boolValue;
+            systemLightSwitch = jsonData.boolValue;
         } else {
             Serial.println("Light_Master_Switch not found or not a boolean");
         }
         // Fetch Light_Time_Cycle_Switch
         if (json.get(jsonData, "fields/Light_Time_Cycle_Switch/booleanValue")) {
-            lightTimeCycleSwitch = jsonData.boolValue;
+            systemLightTimeCycleSwitch = jsonData.boolValue;
         } else {
             Serial.println("Light_Time_Cycle_Switch not found or not a boolean");
         }
@@ -158,13 +156,13 @@ void fetchsystemLightIntervals() {
     }
 }
 
-// Modify controlGpio26LED to consider Light Master Switch and Time Cycle Switch
+// Modify systemLights to consider Light Master Switch and Time Cycle Switch
 void systemLights() {
     time_t now;
     struct tm* currentTime;
     time(&now);
     currentTime = localtime(&now);
-    if (!lightMasterSwitch) {
+    if (!systemLightSwitch) {
         if (digitalRead(SYSTEM_LIGHTS_PIN_26) == HIGH) {
             digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW);
             sendSystemNotification("Light System", "Light System turned OFF due to Light Master Switch");
@@ -177,7 +175,7 @@ void systemLights() {
     currentTimeOfDay.tm_mon = 0;    // January
     currentTimeOfDay.tm_mday = 1;   // 1st of the month
     time_t currentTime_t = mktime(&currentTimeOfDay);
-    if (lightTimeCycleSwitch) {
+    if (systemLightTimeCycleSwitch) {
         if (atomizerOffTime < atomizerOnTime) {
             if (currentTime_t >= atomizerOnTime || currentTime_t <= atomizerOffTime) {
                 if (digitalRead(SYSTEM_LIGHTS_PIN_26) == LOW) {
@@ -280,8 +278,7 @@ void readFirestoreConfig() {
 }
 
 // Function to control the LEDs based on unit states
-void controlAtomizers() {
-    unsigned long previousMillis[3] = {0, 0, 0};
+void controlatomizers() {
     unsigned long currentMillis = millis();
     for (int i = 0; i < 3; i++) {
         if (unitStates[i]) {
@@ -296,36 +293,43 @@ void controlAtomizers() {
 
 void setup() {
     Serial.begin(9600);
-    // Random delay between 50 and 10,000 milliseconds
-    randomSeed(analogRead(0)); // Use an analog pin to generate randomness
-    unsigned long randomDelay = random(50, 10001); // Generate a random number between 50 and 10,000
+    
+    // Generate a random delay based on the serial number to stagger connection attempts
+    randomSeed(serialNumber.toInt()); // Use the serial number to generate a unique random seed
+    randomDelay = random(1000, 120000); // Random delay between 1 second and 2 minutes
     Serial.print("Random delay before Wi-Fi initialization: ");
     Serial.println(randomDelay);
-    delay(randomDelay); // remove the delay function
+    delay(randomDelay);
+    // Record the start time for the delay (using millis())
+    startTime = millis();
+    // Connect to Wi-Fi
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     Serial.print("Connecting to Wi-Fi");
     while (WiFi.status() != WL_CONNECTED) {
-        delay(500);
         Serial.print(".");
     }
     Serial.println("Connected to Wi-Fi");
 
+    // Firebase initialization
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
     auth.user.password = USER_PASSWORD;
 
     Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
+    
+    // Initialize time
     initializeTime();
     
     // Fetch serial number and system details
     fetchSerialNumberAndSystemName();
 
+    // Setup pin modes and initialize system components
     pinMode(WATER_LEVEL_PIN_25, INPUT);
     pinMode(WATER_LEVEL_PIN_23, INPUT);
     pinMode(WATER_LEVEL_PIN_13, INPUT);
-    pinMode(POWER_12V_PIN_12, OUTPUT);
-    digitalWrite(POWER_12V_PIN_12, HIGH);
+    pinMode(SYSTEM_POWER_PIN_12, OUTPUT);
+    digitalWrite(SYSTEM_POWER_PIN_12, HIGH);
     pinMode(SYSTEM_LIGHTS_PIN_26, OUTPUT);
     digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW); 
 
@@ -337,30 +341,26 @@ void setup() {
     ledcAttachPin(ATOMIZER_PIN_2, ATOMIZER_PWM_CHANNEL_2);
 }
 
+
 void loop() {
-    static unsigned long previousHeartbeatMillis = 0;
-    static unsigned long lastConnectionCheckMillis = 0;
-    unsigned long currentMillis = millis();
+    if (WiFi.status() == WL_CONNECTED) {
+        // Perform actions related to Firebase and your system functionality
+ unsigned long currentMillis = millis();
      // Check Wi-Fi and Firebase connection
-    if (WiFi.status() != WL_CONNECTED || !Firebase.ready()) {
-        if (currentMillis - lastConnectionCheckMillis >= 21600000) { // 6 hours in milliseconds
-            Serial.println("System disconnected for 6 hours. Restarting...");
-            ESP.restart(); // Restart the system
-        }
-    } else {
-        // Reset the connection check timer if the system is connected
-        lastConnectionCheckMillis = currentMillis;
-    }
      if (currentMillis - previousHeartbeatMillis >= HEARTBEAT_INTERVAL) {
         sendHeartbeat();
-        systemLights();
-        updateWaterLevelStates();
+      
         previousHeartbeatMillis = currentMillis;
     }
-   
-    fetchsystemLightIntervals();
-    readFirestoreConfig();
-    controlAtomizers(); 
-        // Check if it's time to restart
 
+  systemLights();
+        updateWaterLevelStates();
+        fetchAtomizerIntervals();
+        readFirestoreConfig();
+        controlatomizers(); 
+         } else {
+        // Handle Wi-Fi disconnects if needed (optional)
+        Serial.println("Wi-Fi disconnected, trying to reconnect...");
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Retry connection
+    }
 }
