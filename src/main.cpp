@@ -1,224 +1,366 @@
-#include <Arduino.h>
-#if defined(ESP32)
-  #include <WiFi.h>
-#elif defined(ESP8266)
-  #include <ESP8266WiFi.h>
-#endif
+#include <WiFi.h>
 #include <Firebase_ESP_Client.h>
+#include <addons/TokenHelper.h>
+#include <addons/RTDBHelper.h>
+#include <time.h>
+#include <credentials.h>
+#include <config.h>
 
-// Provide the token generation process info.
-#include "addons/TokenHelper.h"
-// Provide the RTDB payload printing info and other helper functions.
-#include "addons/RTDBHelper.h"
 
-// Insert your network credentials
-#define WIFI_SSID "POTANU VAPAR MAFTYA"
-#define WIFI_PASSWORD "Rogers@2433"
-
-// Insert Firebase project API Key
-#define API_KEY "AIzaSyCMIvMWv4p6rVaOvvu8RKfP-4Plg1RhBlE"
-
-// Insert RTDB URL
-#define DATABASE_URL "https://skydashboard-506ed-default-rtdb.firebaseio.com/"
-
-// Define Firebase Data object
+String serialNumber = "1234567890"; // Unique serial number for each system
 FirebaseData fbdo;
-
 FirebaseAuth auth;
 FirebaseConfig config;
 
-unsigned long previousMillis = 0;
-unsigned long firebaseReadMillis = 0;
-const unsigned long firebaseReadInterval = 10000; // Read from Firebase every 10 seconds
 
-long intervalOn = 0;
-long intervalOff = 0;
-bool ledState = false;
+String systemPath;
+String units[3];
+String systemName = ""; // Will be fetched from Firestore
+time_t atomizerOnTime;
+time_t atomizerOffTime;
+bool systemLightSwitch = true; // Default to true for safety
+bool systemLightTimeCycleSwitch = false;
 
-const int greenLEDPin = 5;
-const int redLEDPin = 2;
-const int blueLEDPin = 4;
+// Function to initialize NTP
+void initializeTime() {
+    configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+}
 
-const int pwmFrequency = 5000;
-const int pwmResolution = 8;
-const int greenLEDPwmChannel = 0;
-const int redLEDPwmChannel = 1;
-const int blueLEDPwmChannel = 2;
+// Function to parse time from Firebase timestamp string
+time_t parseTime(const char* timestamp) {
+    struct tm tm;
+    strptime(timestamp, "%Y-%m-%dT%H:%M:%S", &tm);
+    tm.tm_year = 70; // Epoch year
+    tm.tm_mon = 0;   // January
+    tm.tm_mday = 1;  // 1st of the month
+    return mktime(&tm);
+}
+// Function to format timestamp correctly for Firebase
+String formatTimestamp() {
+    time_t now;
+    struct tm* tm_info;
+    char buffer[30];
+    time(&now);
+    tm_info = localtime(&now);
+    strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", tm_info);
+    return String(buffer) + "Z";
+}
 
-bool powerButtonState = false;
-
-void updateFirebase(const char* path, bool state) {
-  if (Firebase.ready()) {
-    if (Firebase.RTDB.setBool(&fbdo, path, state)) {
-      Serial.println("PASSED");
-      Serial.println("PATH: " + fbdo.dataPath());
-      Serial.println("TYPE: " + fbdo.dataType());
+// Function to fetch serial number and system name
+void fetchSerialNumberAndSystemName() {
+    String documentPath = "Systems/" + serialNumber;
+    Serial.println(documentPath);
+    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
+        FirebaseJson json;
+        json.setJsonData(fbdo.payload());
+        FirebaseJsonData jsonData;
+        
+        if (json.get(jsonData, "fields/systeName/stringValue")) {
+            systemName = jsonData.stringValue;
+            systemPath = "Systems/" + serialNumber;
+            units[0] = systemName + "-1";
+            units[1] = systemName + "-2";
+            units[2] = systemName + "-3";
+            Serial.println("System Name: " + systemName);
+        } else {
+            Serial.println("System name not found.");
+        }
     } else {
-      Serial.println("FAILED");
-      Serial.println("REASON: " + fbdo.errorReason());
+        Serial.println("Failed to fetch serial number or system name.");
+        Serial.println(fbdo.errorReason());
     }
-  }
 }
 
-void updatePowerButtonState(bool state) {
-  updateFirebase("Power_Button", state);
-}
-
-bool readPowerButtonState() {
-  if (Firebase.ready()) {
-    if (Firebase.RTDB.getBool(&fbdo, "Power_Button")) {
-      return fbdo.boolData();
+// Function to send heartbeat signal
+void sendHeartbeat() {
+    String documentPath = systemPath;
+    FirebaseJson content;
+    content.set("fields/lastSeen/timestampValue", formatTimestamp());
+    if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "lastSeen")) {
+        Serial.println("Heartbeat sent.");
     } else {
-      Serial.println("FAILED to read power button state");
-      Serial.println("REASON: " + fbdo.errorReason());
-      return false; // Default to false if reading fails
+        Serial.println("Failed to send heartbeat.");
+        Serial.println(fbdo.errorReason());
     }
-  }
-  return false;
 }
 
-long readTimerValue(const char* path) {
-  if (Firebase.ready()) {
-    if (Firebase.RTDB.getInt(&fbdo, path)) {
-      return fbdo.intData();
+// Function to send system notification
+void sendSystemNotification(String unitName, String message) {
+    String documentPath = "Notifications";
+    FirebaseJson content;
+    content.set("fields/unitName/stringValue", unitName);
+    content.set("fields/systemName/stringValue", systemName);
+    content.set("fields/message/stringValue", message);
+    content.set("fields/uid/stringValue", auth.token.uid);
+    content.set("fields/timestamp/timestampValue", formatTimestamp());
+    if (Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw())) {
+        Serial.println("Notification sent: " + message);
     } else {
-      Serial.println("FAILED to read timer value");
-      Serial.println("REASON: " + fbdo.errorReason());
+        Serial.println("Failed to send notification.");
+        Serial.println(fbdo.errorReason());
     }
-  }
-  return -1; // Indicate failure
+}
+// Function to fetch system name from Firestore
+void fetchSystemName() {
+    String documentPath = systemPath;
+    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
+        FirebaseJson json;                                                                          
+        json.setJsonData(fbdo.payload());
+        FirebaseJsonData jsonData;
+        if (json.get(jsonData, "fields/systeName/stringValue")) {
+            systemName = jsonData.stringValue;
+            Serial.println("System Name: " + systemName);
+        } else {
+            Serial.println("SystemName not found or not a string");
+        }
+    } else {
+        Serial.println("Failed to fetch system name.");
+        Serial.println(fbdo.errorReason());
+    }
 }
 
-void enableLEDs(bool state) {
-  int dutyCycle = state ? 255 : 0; // Max duty cycle for 8-bit resolution is 255
-
-  ledcWrite(greenLEDPwmChannel, dutyCycle);
-  ledcWrite(redLEDPwmChannel, dutyCycle);
-  ledcWrite(blueLEDPwmChannel, dutyCycle);
-  
-  updateFirebase("LED_Green", state);
-  updateFirebase("LED_Red", state);
-  updateFirebase("LED_Blue", state);
+// Function to fetch light intervals and switches
+void fetchAtomizerIntervals() {
+    String documentPath = systemPath;
+    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
+        FirebaseJson json;
+        json.setJsonData(fbdo.payload());
+        FirebaseJsonData jsonData;
+        // Fetch Light_Interval_On_Time
+        if (json.get(jsonData, "fields/Light_Interval_On_Time/timestampValue")) {
+            atomizerOnTime = parseTime(jsonData.stringValue.c_str());
+        } else {
+            Serial.println("Light_Interval_On_Time not found or not a timestamp");
+        }
+        // Fetch Light_Interval_Off_Time
+        if (json.get(jsonData, "fields/Light_Interval_Off_Time/timestampValue")) {
+            atomizerOffTime = parseTime(jsonData.stringValue.c_str());
+        } else {
+            Serial.println("Light_Interval_Off_Time not found or not a timestamp");
+        }
+        // Fetch Light_Master_Switch
+        if (json.get(jsonData, "fields/Light_Master_Switch/booleanValue")) {
+            systemLightSwitch = jsonData.boolValue;
+        } else {
+            Serial.println("Light_Master_Switch not found or not a boolean");
+        }
+        // Fetch Light_Time_Cycle_Switch
+        if (json.get(jsonData, "fields/Light_Time_Cycle_Switch/booleanValue")) {
+            systemLightTimeCycleSwitch = jsonData.boolValue;
+        } else {
+            Serial.println("Light_Time_Cycle_Switch not found or not a boolean");
+        }
+    } else {
+        Serial.println("Failed to fetch light intervals.");
+        Serial.println(fbdo.errorReason());
+    }
 }
 
-void disableLEDs() {
-  // Detach PWM channels to "break the circuit"
-  ledcDetachPin(greenLEDPin);
-  ledcDetachPin(redLEDPin);
-  ledcDetachPin(blueLEDPin);
+// Modify systemLights to consider Light Master Switch and Time Cycle Switch
+void systemLights() {
+    time_t now;
+    struct tm* currentTime;
+    time(&now);
+    currentTime = localtime(&now);
+    if (!systemLightSwitch) {
+        if (digitalRead(SYSTEM_LIGHTS_PIN_26) == HIGH) {
+            digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW);
+            sendSystemNotification("Light System", "Light System turned OFF due to Light Master Switch");
+        }
+        return;
+    }
 
-  updateFirebase("LED_Green", false);
-  updateFirebase("LED_Red", false);
-  updateFirebase("LED_Blue", false);
+    struct tm currentTimeOfDay = *currentTime;
+    currentTimeOfDay.tm_year = 70;  // Epoch year
+    currentTimeOfDay.tm_mon = 0;    // January
+    currentTimeOfDay.tm_mday = 1;   // 1st of the month
+    time_t currentTime_t = mktime(&currentTimeOfDay);
+    if (systemLightTimeCycleSwitch) {
+        if (atomizerOffTime < atomizerOnTime) {
+            if (currentTime_t >= atomizerOnTime || currentTime_t <= atomizerOffTime) {
+                if (digitalRead(SYSTEM_LIGHTS_PIN_26) == LOW) {
+                    digitalWrite(SYSTEM_LIGHTS_PIN_26, HIGH); 
+                    sendSystemNotification("Light System", "Light System turned ON");
+                }
+            } else {
+                if (digitalRead(SYSTEM_LIGHTS_PIN_26) == HIGH) {
+                    digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW); 
+                    sendSystemNotification("Light System", "Light System turned OFF");
+                }
+            }
+        } else {
+            if (currentTime_t >= atomizerOnTime && currentTime_t <= atomizerOffTime) {
+                if (digitalRead(SYSTEM_LIGHTS_PIN_26) == LOW) {
+                    digitalWrite(SYSTEM_LIGHTS_PIN_26, HIGH);
+                    sendSystemNotification("Light System", "Light System turned ON");
+                }
+            } else {
+                if (digitalRead(SYSTEM_LIGHTS_PIN_26) == HIGH) {
+                    digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW); 
+                    sendSystemNotification("Light System", "Light System turned OFF");
+                }
+            }
+        }
+    } else {
+        if (digitalRead(SYSTEM_LIGHTS_PIN_26) == LOW) {
+            digitalWrite(SYSTEM_LIGHTS_PIN_26, HIGH);
+            sendSystemNotification("Light System", "Light System turned ON");
+        }
+    }
 }
 
+// Function to read water level sensors and update states
+void updateWaterLevelStates() {
+    if (digitalRead(WATER_LEVEL_PIN_25) == LOW) {
+        waterLevelStates[0] = false;
+    } else {
+        waterLevelStates[0] = true;
+    }
+    if (digitalRead(WATER_LEVEL_PIN_23) == LOW) {
+        waterLevelStates[1] = false;
+    } else {
+        waterLevelStates[1] = true;
+    }
+    if (digitalRead(WATER_LEVEL_PIN_13) == LOW) {
+        waterLevelStates[2] = false;
+    } else {
+        waterLevelStates[2] = true;
+    }
+    for (int i = 0; i < 3; i++) {
+        if (waterLevelStates[i] != previousUnitStates[i]) {
+            String documentPath = systemPath + "/units/" + units[i];
+            FirebaseJson content;
+            content.set("fields/waterLevelState/booleanValue", waterLevelStates[i]);
+            if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(),"waterLevelState")) {
+                Serial.println("Updated water level state for " + units[i]);
+                previousUnitStates[i] = waterLevelStates[i];
+            } else {
+                Serial.println("Failed to update water level state for " + units[i]);
+            }
+        }
+    }
+}
 
-void readFirebaseConfig() {
-  // Check the power button state from Firebase
-  powerButtonState = readPowerButtonState();
+// Function to read system config from Firestore
+void readFirestoreConfig() {
+    for (int i = 0; i < 3; i++) {
+        String documentPath = systemPath + "/units/" + units[i];
+        if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
+            FirebaseJson json;
+            json.setJsonData(fbdo.payload());
+            FirebaseJsonData jsonData;
+            if (json.get(jsonData, "fields/unitState/booleanValue")) {
+                bool newState = jsonData.boolValue;
+                if (unitStates[i] != newState) {
+                    unitStates[i] = newState;
+                    if (unitStates[i]) {
+                        Serial.println("Turning on LED for " + String(units[i]));
+                        ledcWrite(i, 9);
+                        sendSystemNotification(units[i], "Unit state changed: ON");
+                    } else {
+                        Serial.println("Turning off LED for " + String(units[i]));
+                        ledcWrite(i, 0);
+                        sendSystemNotification(units[i], "Unit state changed: OFF");
+                    }
+                }
+            }
+            if (json.get(jsonData, "fields/Interval_On/integerValue")) {
+                intervalOn[i] = jsonData.intValue * 1000;
+            }
+            if (json.get(jsonData, "fields/Interval_Off/integerValue")) {
+                intervalOff[i] = jsonData.intValue * 1000;
+            }
+        } else {
+            Serial.println("Failed to get document for " + String(units[i]));
+            Serial.println(fbdo.errorReason());
+        }
+    }
+}
 
-  // Read on and off timer values from Firebase
-  long newIntervalOn = readTimerValue("On_Duration");
-  long newIntervalOff = readTimerValue("Off_Duration");
-
-  // Only update the intervals if valid values are retrieved
-  if (newIntervalOn >= 0 && newIntervalOff >= 0) {
-    intervalOn = newIntervalOn * 1000; // Convert to milliseconds
-    intervalOff = newIntervalOff * 1000; // Convert to milliseconds
-
-    // Print the current timer values
-    Serial.print("Current On Timer: ");
-    Serial.println(intervalOn);
-    Serial.print("Current Off Timer: ");
-    Serial.println(intervalOff);
-  }
+// Function to control the LEDs based on unit states
+void controlatomizers() {
+    unsigned long currentMillis = millis();
+    for (int i = 0; i < 3; i++) {
+        if (unitStates[i]) {
+            if (currentMillis - previousMillis[i] >= (ledStates[i] ? intervalOn[i] : intervalOff[i])) {
+                ledStates[i] = !ledStates[i];
+                ledcWrite(i, ledStates[i] ? 9 : 0);
+                previousMillis[i] = currentMillis;
+            }
+        }
+    }
 }
 
 void setup() {
-  Serial.begin(9600); // Set baud rate to 9600 to match the Serial Monitor
-  
-  // Setup PWM channels
-  ledcSetup(greenLEDPwmChannel, pwmFrequency, pwmResolution);
-  ledcSetup(redLEDPwmChannel, pwmFrequency, pwmResolution);
-  ledcSetup(blueLEDPwmChannel, pwmFrequency, pwmResolution);
+    Serial.begin(9600);
+    
+    // Generate a random delay based on the serial number to stagger connection attempts
+    randomSeed(serialNumber.toInt()); // Use the serial number to generate a unique random seed
+    randomDelay = random(1000, 120000); // Random delay between 1 second and 2 minutes
+    Serial.print("Random delay before Wi-Fi initialization: ");
+    Serial.println(randomDelay);
+    delay(randomDelay);
+    // Record the start time for the delay (using millis())
+    startTime = millis();
+    // Connect to Wi-Fi
+    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
+    Serial.print("Connecting to Wi-Fi");
+    while (WiFi.status() != WL_CONNECTED) {
+        Serial.print(".");
+    }
+    Serial.println("Connected to Wi-Fi");
 
-  // Attach PWM channels to LED pins
-  ledcAttachPin(greenLEDPin, greenLEDPwmChannel);
-  ledcAttachPin(redLEDPin, redLEDPwmChannel);
-  ledcAttachPin(blueLEDPin, blueLEDPwmChannel);
-  
-  // Connect to Wi-Fi
-  WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-  Serial.print("Connecting to Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) {
-    Serial.print(".");
-    delay(300);
-  }
-  Serial.println();
-  Serial.print("Connected with IP: ");
-  Serial.println(WiFi.localIP());
-  Serial.println();
+    // Firebase initialization
+    config.api_key = API_KEY;
+    auth.user.email = USER_EMAIL;
+    auth.user.password = USER_PASSWORD;
 
-  // Assign the API key (required)
-  config.api_key = API_KEY;
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+    
+    // Initialize time
+    initializeTime();
+    
+    // Fetch serial number and system details
+    fetchSerialNumberAndSystemName();
 
-  // Assign the RTDB URL (required)
-  config.database_url = DATABASE_URL;
+    // Setup pin modes and initialize system components
+    pinMode(WATER_LEVEL_PIN_25, INPUT);
+    pinMode(WATER_LEVEL_PIN_23, INPUT);
+    pinMode(WATER_LEVEL_PIN_13, INPUT);
+    pinMode(SYSTEM_POWER_PIN_12, OUTPUT);
+    digitalWrite(SYSTEM_POWER_PIN_12, HIGH);
+    pinMode(SYSTEM_LIGHTS_PIN_26, OUTPUT);
+    digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW); 
 
-  // Sign up
-  if (Firebase.signUp(&config, &auth, "", "")) {
-    Serial.println("ok");
-  } else {
-    Serial.printf("%s\n", config.signer.signupError.message.c_str());
-  }
-
-  // Assign the callback function for the long running token generation task
-  config.token_status_callback = tokenStatusCallback; // see addons/TokenHelper.h
-  
-  // Initialize Firebase
-  Firebase.begin(&config, &auth);
-  Firebase.reconnectWiFi(true);
-
-  // Initial read from Firebase
-  readFirebaseConfig();
+    ledcSetup(ATOMIZER_PWM_CHANNEL_1, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcAttachPin(ATOMIZER_PIN_5, ATOMIZER_PWM_CHANNEL_1);
+    ledcSetup(ATOMIZER_PWM_CHANNEL_0, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcAttachPin(ATOMIZER_PIN_4, ATOMIZER_PWM_CHANNEL_0);
+    ledcSetup(ATOMIZER_PWM_CHANNEL_2, PWM_FREQUENCY, PWM_RESOLUTION);
+    ledcAttachPin(ATOMIZER_PIN_2, ATOMIZER_PWM_CHANNEL_2);
 }
 
 
 void loop() {
-  unsigned long currentMillis = millis();
-
-  // Only read from Firebase at specified intervals
-  if (currentMillis - firebaseReadMillis >= firebaseReadInterval) {
-    firebaseReadMillis = currentMillis;
-    readFirebaseConfig();
-  }
-
-  if (powerButtonState) {
-    // Reattach the PWM channels if the power button is on
-    ledcAttachPin(greenLEDPin, greenLEDPwmChannel);
-    ledcAttachPin(redLEDPin, redLEDPwmChannel);
-    ledcAttachPin(blueLEDPin, blueLEDPwmChannel);
-
-    if (ledState) {
-      if (currentMillis - previousMillis >= intervalOn) {
-        // Turn off the LEDs
-        enableLEDs(false);
-        previousMillis = currentMillis;
-        ledState = false;
-      }
-    } else {
-      if (currentMillis - previousMillis >= intervalOff) {
-        // Turn on the LEDs
-        enableLEDs(true);
-        previousMillis = currentMillis;
-        ledState = true;
-      }
+    if (WiFi.status() == WL_CONNECTED) {
+        // Perform actions related to Firebase and your system functionality
+ unsigned long currentMillis = millis();
+     // Check Wi-Fi and Firebase connection
+     if (currentMillis - previousHeartbeatMillis >= HEARTBEAT_INTERVAL) {
+        sendHeartbeat();
+      
+        previousHeartbeatMillis = currentMillis;
     }
-  } else {
-    // Disable the LEDs if the power button is off
-    if (ledState || powerButtonState) {
-      disableLEDs();
-      ledState = false;
+
+  systemLights();
+        updateWaterLevelStates();
+        fetchAtomizerIntervals();
+        readFirestoreConfig();
+        controlatomizers(); 
+         } else {
+        // Handle Wi-Fi disconnects if needed (optional)
+        Serial.println("Wi-Fi disconnected, trying to reconnect...");
+        WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Retry connection
     }
-  }
 }
