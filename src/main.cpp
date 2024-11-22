@@ -21,6 +21,7 @@ time_t atomizerOnTime;
 time_t atomizerOffTime;
 bool systemLightSwitch = true; // Default to true for safety
 bool systemLightTimeCycleSwitch = false;
+unsigned long connectionOffset = 0;  // Random delay for connection
 
 // Function to initialize NTP
 void initializeTime() {
@@ -276,14 +277,10 @@ void controlAtomizers() {
 
 void setup() {
     Serial.begin(9600);
-    // Seed the random generator using analog pin noise or millis()
-    randomSeed(analogRead(0) + millis());
-
-    // Introduce a random delay (up to 10 seconds)
-    randomDelay = random(1000, 10000);
-    Serial.print("Random delay in setup: ");
-    Serial.println(randomDelay);
-    delay(randomDelay);
+    // Generate the random delays
+    unsigned long randomDelay = random(100, 1000);  // Random between 100ms and 1000ms
+    connectionOffset = 500 + randomDelay;  // Base 500ms + random delay
+    delay(connectionOffset);
 
     // Initialize WiFiManager
     WiFiManager wm;
@@ -357,49 +354,27 @@ void setup() {
 }
 
 void loop() {
-    // Get current time
-    unsigned long currentMillis = millis();
-
-    // Handle Wi-Fi connection and OTA updates
     if (WiFi.status() == WL_CONNECTED) {
-        ArduinoOTA.handle();  // Handle OTA updates
+        unsigned long currentMillis = millis();
 
-        // Check if it's time to start a new cycle for regular functions (500ms delay)
-        if (currentMillis - prevMillis >= fixedDelay) {
-            prevMillis = currentMillis;  // Update last time
+        // Handle OTA
+        ArduinoOTA.handle();
 
-            // If no random delay is set, generate one between 100ms and 1000ms
-            if (randomDelayDuration == 0) {
-                randomDelayDuration = random(100, 1001);  // Random delay between 100ms and 1000ms
-                randomDelayStart = currentMillis;  // Start the random delay timer
-            }
-
-            // If random delay has passed, execute the functions that need random delay
-            if (currentMillis - randomDelayStart >= randomDelayDuration) {
-                randomDelayDuration = 0;  // Reset random delay for the next cycle
-
-                // Run the functions that need random delays
-                updateWaterLevelStates();
-                fetchAtomizerIntervals();
-                readFirestoreConfig();
-                controlAtomizers();
-            }
-        }
-
-        // Check if it's time to execute systemLights() (30s delay)
-        if (currentMillis - systemLightsPreviousMillis >= systemLightsDelay) {
-            systemLightsPreviousMillis = currentMillis;  // Update last time
-            systemLights();  // Run systemLights() function (with 30s delay)
-        }
-
-        // Send heartbeat every HEARTBEAT_INTERVAL
-        if (currentMillis - previousHeartbeatMillis >= HEARTBEAT_INTERVAL) {
+        if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS) {
             sendHeartbeat();
+            systemLights();
             previousHeartbeatMillis = currentMillis;
         }
 
+        // Use the connection offset for other functions, including systemLights
+        if (currentMillis - lastConnectionCheckMillis >= connectionOffset) {
+            updateWaterLevelStates();
+            fetchAtomizerIntervals();
+            readFirestoreConfig();
+            controlAtomizers();
+            lastConnectionCheckMillis = currentMillis;
+        }
     } else {
-        // Handle Wi-Fi disconnection
         Serial.println("Wi-Fi disconnected, trying to reconnect...");
         WiFiManager wm;
         wm.autoConnect("ESP32-Config", "password");  // Reconnect using WiFiManager
