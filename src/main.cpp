@@ -5,6 +5,8 @@
 #include <time.h>
 #include <credentials.h>
 #include <config.h>
+#include <WiFiManager.h>  // WiFiManager by Tzapu
+#include <ArduinoOTA.h>   // OTA functionality
 
 
 String serialNumber = "1234567890"; // Unique serial number for each system
@@ -293,29 +295,52 @@ void controlatomizers() {
 
 void setup() {
     Serial.begin(9600);
-    
-    // Generate a random delay based on the serial number to stagger connection attempts
-    randomSeed(serialNumber.toInt()); // Use the serial number to generate a unique random seed
-    randomDelay = random(1000, 120000); // Random delay between 1 second and 2 minutes
-    Serial.print("Random delay before Wi-Fi initialization: ");
-    Serial.println(randomDelay);
-    delay(randomDelay);
-    // Record the start time for the delay (using millis())
-    startTime = millis();
-    // Connect to Wi-Fi
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.print("Connecting to Wi-Fi");
-    while (WiFi.status() != WL_CONNECTED) {
-        Serial.print(".");
-    }
-    Serial.println("Connected to Wi-Fi");
+    // Initialize WiFiManager
+    WiFiManager wm;
 
-    // Firebase initialization
+    // Start the configuration portal
+    bool configPortalStarted = wm.startConfigPortal("ESP32-Config", "password");
+
+    if (configPortalStarted) {
+        Serial.println("WiFi configuration successful!");
+        Serial.print("Connected to: ");
+        Serial.println(WiFi.SSID());
+        Serial.print("IP Address: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("Failed to configure WiFi. Restarting...");
+        delay(3000);
+        ESP.restart();
+    }
+
+    // Initialize OTA
+    ArduinoOTA.onStart([]() {
+        String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
+        Serial.println("Start updating " + type);
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\nUpdate Complete!");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+    ArduinoOTA.begin();
+
+    // Initialize Firebase and other components
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
     auth.user.password = USER_PASSWORD;
-
     Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+       Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
     
     // Initialize time
@@ -324,7 +349,7 @@ void setup() {
     // Fetch serial number and system details
     fetchSerialNumberAndSystemName();
 
-    // Setup pin modes and initialize system components
+    // Setup pin modes and initialize system components as before
     pinMode(WATER_LEVEL_PIN_25, INPUT);
     pinMode(WATER_LEVEL_PIN_23, INPUT);
     pinMode(WATER_LEVEL_PIN_13, INPUT);
@@ -344,23 +369,23 @@ void setup() {
 
 void loop() {
     if (WiFi.status() == WL_CONNECTED) {
-        // Perform actions related to Firebase and your system functionality
- unsigned long currentMillis = millis();
-     // Check Wi-Fi and Firebase connection
-     if (currentMillis - previousHeartbeatMillis >= HEARTBEAT_INTERVAL) {
-        sendHeartbeat();
-      
-        previousHeartbeatMillis = currentMillis;
-    }
+        ArduinoOTA.handle();  // OTA update handling
 
-  systemLights();
+        // Rest of your existing logic
+        unsigned long currentMillis = millis();
+        if (currentMillis - previousHeartbeatMillis >= HEARTBEAT_INTERVAL) {
+            sendHeartbeat();
+            previousHeartbeatMillis = currentMillis;
+        }
+
+        systemLights();
         updateWaterLevelStates();
         fetchAtomizerIntervals();
         readFirestoreConfig();
-        controlatomizers(); 
-         } else {
-        // Handle Wi-Fi disconnects if needed (optional)
+        controlatomizers();
+    } else {
         Serial.println("Wi-Fi disconnected, trying to reconnect...");
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Retry connection
+        WiFiManager wm;
+        wm.autoConnect("ESP32-Config", "password");  // Reconnect using WiFiManager
     }
 }
