@@ -47,7 +47,7 @@ String formatTimestamp() {
     return String(buffer) + "Z";
 }
 
-// Function to fetch serial number and system name
+
 void fetchSystemName() {
     String documentPath = "Systems/" + serialNumber;
     Serial.println(documentPath);
@@ -98,24 +98,6 @@ void sendSystemNotification(String unitName, String message) {
         Serial.println("Notification sent: " + message);
     } else {
         Serial.println("Failed to send notification.");
-        Serial.println(fbdo.errorReason());
-    }
-}
-// Function to fetch system name from Firestore
-void fetchSystemName() {
-    String documentPath = systemPath;
-    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
-        FirebaseJson json;                                                                          
-        json.setJsonData(fbdo.payload());
-        FirebaseJsonData jsonData;
-        if (json.get(jsonData, "fields/systeName/stringValue")) {
-            systemName = jsonData.stringValue;
-            Serial.println("System Name: " + systemName);
-        } else {
-            Serial.println("SystemName not found or not a string");
-        }
-    } else {
-        Serial.println("Failed to fetch system name.");
         Serial.println(fbdo.errorReason());
     }
 }
@@ -376,30 +358,49 @@ void setup() {
 
 
 void loop() {
+    // Get the current time
+    unsigned long currentMillis = millis();
+
     if (WiFi.status() == WL_CONNECTED) {
-        ArduinoOTA.handle();  // OTA update handling
-      // Introduce a random delay between operations to avoid network overload
-        if (millis() - lastConnectionCheckMillis > random(5000, 15000)) {
-            Serial.println("Adding random delay to prevent overload.");
-            delay(random(1000, 5000));
-            lastConnectionCheckMillis = millis();
+        ArduinoOTA.handle();  // Handle OTA updates
+
+        // Check if it's time to start a new cycle
+        if (currentMillis - prevMillis >= fixedDelay) {
+            prevMillis = currentMillis;  // Update the last time
+
+            // If we don't have a random delay active, initialize one
+            if (randomDelayDuration == 0) {
+                randomDelayDuration = random(100, 1001);  // Generate random delay between 100ms and 1000ms
+                randomDelayStart = currentMillis;  // Set the start time for random delay
+            }
+
+            // Check if the random delay has elapsed
+            if (currentMillis - randomDelayStart >= randomDelayDuration) {
+                // Reset random delay for the next round
+                randomDelayDuration = 0;
+
+                // Run the functions
+                systemLights();
+                updateWaterLevelStates();
+                fetchAtomizerIntervals();
+                readFirestoreConfig();
+                controlatomizers();
+
+                // After running functions, the random delay has been applied
+            }
         }
 
-        // Rest of your existing logic
-        unsigned long currentMillis = millis();
+        // Send heartbeat every HEARTBEAT_INTERVAL
         if (currentMillis - previousHeartbeatMillis >= HEARTBEAT_INTERVAL) {
             sendHeartbeat();
             previousHeartbeatMillis = currentMillis;
         }
 
-        systemLights();
-        updateWaterLevelStates();
-        fetchAtomizerIntervals();
-        readFirestoreConfig();
-        controlatomizers();
     } else {
+        // Reconnect to Wi-Fi if disconnected
         Serial.println("Wi-Fi disconnected, trying to reconnect...");
         WiFiManager wm;
         wm.autoConnect("ESP32-Config", "password");  // Reconnect using WiFiManager
     }
 }
+

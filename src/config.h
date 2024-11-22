@@ -2,6 +2,14 @@
 #define CONFIG_H
 #include <addons/TokenHelper.h>
 #include <time.h>
+
+//Serial number and delays for system
+String serialNumber = "1234567890"; // Unique serial number for each system
+// Variables to track timing
+unsigned long prevMillis = 0;
+unsigned long randomDelayStart = 0;
+unsigned long randomDelayDuration = 0;
+unsigned long fixedDelay = 500;  // 500ms fixed delay for each cycle
 // Pin Definitions
 #define ATOMIZER_PIN_5 5
 #define ATOMIZER_PIN_4 4
