@@ -6,10 +6,13 @@
 //Serial number and delays for system
 String serialNumber = "1234567890"; // Unique serial number for each system
 // Variables to track timing
-unsigned long prevMillis = 0;
-unsigned long randomDelayStart = 0;
-unsigned long randomDelayDuration = 0;
-unsigned long fixedDelay = 500;  // 500ms fixed delay for each cycle
+unsigned long prevMillis = 0;            // For fixed delay timing (500ms)
+unsigned long systemLightsPreviousMillis = 0; // For systemLights fixed delay (30s)
+unsigned long randomDelayStart = 0;          // Start time for random delay
+unsigned long randomDelayDuration = 0;       // Random delay duration for other functions
+unsigned long fixedDelay = 500;              // 500ms fixed delay for other functions
+unsigned long systemLightsDelay = 30000;     // 30 seconds fixed delay for systemLights
+
 // Pin Definitions
 #define ATOMIZER_PIN_5 5
 #define ATOMIZER_PIN_4 4

@@ -261,7 +261,7 @@ void readFirestoreConfig() {
 }
 
 // Function to control the LEDs based on unit states
-void controlatomizers() {
+void controlAtomizers() {
     unsigned long currentMillis = millis();
     for (int i = 0; i < 3; i++) {
         if (unitStates[i]) {
@@ -356,38 +356,40 @@ void setup() {
     ledcAttachPin(ATOMIZER_PIN_2, ATOMIZER_PWM_CHANNEL_2);
 }
 
-
 void loop() {
-    // Get the current time
+    // Get current time
     unsigned long currentMillis = millis();
 
+    // Handle Wi-Fi connection and OTA updates
     if (WiFi.status() == WL_CONNECTED) {
         ArduinoOTA.handle();  // Handle OTA updates
 
-        // Check if it's time to start a new cycle
+        // Check if it's time to start a new cycle for regular functions (500ms delay)
         if (currentMillis - prevMillis >= fixedDelay) {
-            prevMillis = currentMillis;  // Update the last time
+            prevMillis = currentMillis;  // Update last time
 
-            // If we don't have a random delay active, initialize one
+            // If no random delay is set, generate one between 100ms and 1000ms
             if (randomDelayDuration == 0) {
-                randomDelayDuration = random(100, 1001);  // Generate random delay between 100ms and 1000ms
-                randomDelayStart = currentMillis;  // Set the start time for random delay
+                randomDelayDuration = random(100, 1001);  // Random delay between 100ms and 1000ms
+                randomDelayStart = currentMillis;  // Start the random delay timer
             }
 
-            // Check if the random delay has elapsed
+            // If random delay has passed, execute the functions that need random delay
             if (currentMillis - randomDelayStart >= randomDelayDuration) {
-                // Reset random delay for the next round
-                randomDelayDuration = 0;
+                randomDelayDuration = 0;  // Reset random delay for the next cycle
 
-                // Run the functions
-                systemLights();
+                // Run the functions that need random delays
                 updateWaterLevelStates();
                 fetchAtomizerIntervals();
                 readFirestoreConfig();
-                controlatomizers();
-
-                // After running functions, the random delay has been applied
+                controlAtomizers();
             }
+        }
+
+        // Check if it's time to execute systemLights() (30s delay)
+        if (currentMillis - systemLightsPreviousMillis >= systemLightsDelay) {
+            systemLightsPreviousMillis = currentMillis;  // Update last time
+            systemLights();  // Run systemLights() function (with 30s delay)
         }
 
         // Send heartbeat every HEARTBEAT_INTERVAL
@@ -397,10 +399,9 @@ void loop() {
         }
 
     } else {
-        // Reconnect to Wi-Fi if disconnected
+        // Handle Wi-Fi disconnection
         Serial.println("Wi-Fi disconnected, trying to reconnect...");
         WiFiManager wm;
         wm.autoConnect("ESP32-Config", "password");  // Reconnect using WiFiManager
     }
 }
-
