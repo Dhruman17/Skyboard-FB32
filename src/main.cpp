@@ -9,7 +9,6 @@
 #include <ArduinoOTA.h>   // OTA functionality
 
 
-String serialNumber = "1234567890"; // Unique serial number for each system
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
@@ -49,7 +48,7 @@ String formatTimestamp() {
 }
 
 // Function to fetch serial number and system name
-void fetchSerialNumberAndSystemName() {
+void fetchSystemName() {
     String documentPath = "Systems/" + serialNumber;
     Serial.println(documentPath);
     if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
@@ -295,6 +294,15 @@ void controlatomizers() {
 
 void setup() {
     Serial.begin(9600);
+    // Seed the random generator using analog pin noise or millis()
+    randomSeed(analogRead(0) + millis());
+
+    // Introduce a random delay (up to 10 seconds)
+    randomDelay = random(1000, 10000);
+    Serial.print("Random delay in setup: ");
+    Serial.println(randomDelay);
+    delay(randomDelay);
+
     // Initialize WiFiManager
     WiFiManager wm;
 
@@ -347,7 +355,7 @@ void setup() {
     initializeTime();
     
     // Fetch serial number and system details
-    fetchSerialNumberAndSystemName();
+    fetchSystemName();
 
     // Setup pin modes and initialize system components as before
     pinMode(WATER_LEVEL_PIN_25, INPUT);
@@ -370,6 +378,12 @@ void setup() {
 void loop() {
     if (WiFi.status() == WL_CONNECTED) {
         ArduinoOTA.handle();  // OTA update handling
+      // Introduce a random delay between operations to avoid network overload
+        if (millis() - lastConnectionCheckMillis > random(5000, 15000)) {
+            Serial.println("Adding random delay to prevent overload.");
+            delay(random(1000, 5000));
+            lastConnectionCheckMillis = millis();
+        }
 
         // Rest of your existing logic
         unsigned long currentMillis = millis();
