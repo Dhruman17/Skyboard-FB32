@@ -5,9 +5,10 @@
 #include <time.h>
 #include <credentials.h>
 #include <config.h>
+#include <WiFiManager.h>  // WiFiManager by Tzapu
+#include <ArduinoOTA.h>   // OTA functionality
 
 
-String serialNumber = "1234567890"; // Unique serial number for each system
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
@@ -20,6 +21,7 @@ time_t atomizerOnTime;
 time_t atomizerOffTime;
 bool systemLightSwitch = true; // Default to true for safety
 bool systemLightTimeCycleSwitch = false;
+unsigned long connectionOffset = 0;  // Random delay for connection
 
 // Function to initialize NTP
 void initializeTime() {
@@ -46,8 +48,8 @@ String formatTimestamp() {
     return String(buffer) + "Z";
 }
 
-// Function to fetch serial number and system name
-void fetchSerialNumberAndSystemName() {
+
+void fetchSystemName() {
     String documentPath = "Systems/" + serialNumber;
     Serial.println(documentPath);
     if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
@@ -97,24 +99,6 @@ void sendSystemNotification(String unitName, String message) {
         Serial.println("Notification sent: " + message);
     } else {
         Serial.println("Failed to send notification.");
-        Serial.println(fbdo.errorReason());
-    }
-}
-// Function to fetch system name from Firestore
-void fetchSystemName() {
-    String documentPath = systemPath;
-    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
-        FirebaseJson json;                                                                          
-        json.setJsonData(fbdo.payload());
-        FirebaseJsonData jsonData;
-        if (json.get(jsonData, "fields/systeName/stringValue")) {
-            systemName = jsonData.stringValue;
-            Serial.println("System Name: " + systemName);
-        } else {
-            Serial.println("SystemName not found or not a string");
-        }
-    } else {
-        Serial.println("Failed to fetch system name.");
         Serial.println(fbdo.errorReason());
     }
 }
@@ -278,7 +262,7 @@ void readFirestoreConfig() {
 }
 
 // Function to control the LEDs based on unit states
-void controlatomizers() {
+void controlAtomizers() {
     unsigned long currentMillis = millis();
     for (int i = 0; i < 3; i++) {
         if (unitStates[i]) {
@@ -293,38 +277,66 @@ void controlatomizers() {
 
 void setup() {
     Serial.begin(9600);
-    
-    // Generate a random delay based on the serial number to stagger connection attempts
-    randomSeed(serialNumber.toInt()); // Use the serial number to generate a unique random seed
-    randomDelay = random(1000, 120000); // Random delay between 1 second and 2 minutes
-    Serial.print("Random delay before Wi-Fi initialization: ");
-    Serial.println(randomDelay);
-    delay(randomDelay);
-    // Record the start time for the delay (using millis())
-    startTime = millis();
-    // Connect to Wi-Fi
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    Serial.print("Connecting to Wi-Fi");
-    while (WiFi.status() != WL_CONNECTED) {
-        Serial.print(".");
-    }
-    Serial.println("Connected to Wi-Fi");
+    // Generate the random delays
+    unsigned long randomDelay = random(100, 1000);  // Random between 100ms and 1000ms
+    connectionOffset = 500 + randomDelay;  // Base 500ms + random delay
+    delay(connectionOffset);
 
-    // Firebase initialization
+    // Initialize WiFiManager
+    WiFiManager wm;
+
+    // Start the configuration portal
+    bool configPortalStarted = wm.startConfigPortal("ESP32-Config", "password");
+
+    if (configPortalStarted) {
+        Serial.println("WiFi configuration successful!");
+        Serial.print("Connected to: ");
+        Serial.println(WiFi.SSID());
+        Serial.print("IP Address: ");
+        Serial.println(WiFi.localIP());
+    } else {
+        Serial.println("Failed to configure WiFi. Restarting...");
+        delay(3000);
+        ESP.restart();
+    }
+
+    // Initialize OTA
+    ArduinoOTA.onStart([]() {
+        String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
+        Serial.println("Start updating " + type);
+    });
+    ArduinoOTA.onEnd([]() {
+        Serial.println("\nUpdate Complete!");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+    ArduinoOTA.begin();
+
+    // Initialize Firebase and other components
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
     auth.user.password = USER_PASSWORD;
-
     Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
+       Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
     
     // Initialize time
     initializeTime();
     
     // Fetch serial number and system details
-    fetchSerialNumberAndSystemName();
+    fetchSystemName();
 
-    // Setup pin modes and initialize system components
+    // Setup pin modes and initialize system components as before
     pinMode(WATER_LEVEL_PIN_25, INPUT);
     pinMode(WATER_LEVEL_PIN_23, INPUT);
     pinMode(WATER_LEVEL_PIN_13, INPUT);
@@ -341,26 +353,30 @@ void setup() {
     ledcAttachPin(ATOMIZER_PIN_2, ATOMIZER_PWM_CHANNEL_2);
 }
 
-
 void loop() {
     if (WiFi.status() == WL_CONNECTED) {
-        // Perform actions related to Firebase and your system functionality
- unsigned long currentMillis = millis();
-     // Check Wi-Fi and Firebase connection
-     if (currentMillis - previousHeartbeatMillis >= HEARTBEAT_INTERVAL) {
-        sendHeartbeat();
-      
-        previousHeartbeatMillis = currentMillis;
-    }
+        unsigned long currentMillis = millis();
 
-  systemLights();
-        updateWaterLevelStates();
-        fetchAtomizerIntervals();
-        readFirestoreConfig();
-        controlatomizers(); 
-         } else {
-        // Handle Wi-Fi disconnects if needed (optional)
+        // Handle OTA
+        ArduinoOTA.handle();
+
+        if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS) {
+            sendHeartbeat();
+            systemLights();
+            previousHeartbeatMillis = currentMillis;
+        }
+
+        // Use the connection offset for other functions, including systemLights
+        if (currentMillis - lastConnectionCheckMillis >= connectionOffset) {
+            updateWaterLevelStates();
+            fetchAtomizerIntervals();
+            readFirestoreConfig();
+            controlAtomizers();
+            lastConnectionCheckMillis = currentMillis;
+        }
+    } else {
         Serial.println("Wi-Fi disconnected, trying to reconnect...");
-        WiFi.begin(WIFI_SSID, WIFI_PASSWORD); // Retry connection
+        WiFiManager wm;
+        wm.autoConnect("ESP32-Config", "password");  // Reconnect using WiFiManager
     }
 }

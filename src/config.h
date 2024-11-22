@@ -2,6 +2,11 @@
 #define CONFIG_H
 #include <addons/TokenHelper.h>
 #include <time.h>
+
+//Serial number and delays for system
+String serialNumber = "1234567890"; // Unique serial number for each system
+// Variables to track timing
+extern unsigned long connectionOffset;
 // Pin Definitions
 #define ATOMIZER_PIN_5 5
 #define ATOMIZER_PIN_4 4
@@ -21,7 +26,7 @@
 #define PWM_RESOLUTION 4 // 8-bit resolution
 
 // Timing Configurations
-const unsigned long HEARTBEAT_INTERVAL = 300000;  // 5 minutes for heartbeat
+const unsigned long INTERVAL_30_SECONDS = 300000;  // 5 minutes for heartbeat
 
 // Serial number
 extern String serialNumber;
