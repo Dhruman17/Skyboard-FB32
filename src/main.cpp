@@ -274,30 +274,60 @@ void controlAtomizers() {
         }
     }
 }
+bool connectToKnownWiFi() {
+    for (int i = 0; i < knownWiFiCount; i++) {
+        Serial.print("Attempting to connect to ");
+        Serial.println(knownWiFi[i].ssid);
+        WiFi.begin(knownWiFi[i].ssid, knownWiFi[i].password);
 
+        // Wait for connection (up to 10 seconds)
+        int attempts = 0;
+        while (WiFi.status() != WL_CONNECTED && attempts < 20) {
+            delay(500); // 500ms delay per attempt
+            Serial.print(".");
+            attempts++;
+        }
+
+        if (WiFi.status() == WL_CONNECTED) {
+            Serial.println("\nConnected to " + String(knownWiFi[i].ssid));
+            Serial.print("IP Address: ");
+            Serial.println(WiFi.localIP());
+            return true;
+        }
+
+        Serial.println("\nFailed to connect to " + String(knownWiFi[i].ssid));
+    }
+    return false; // Return false if no network connects
+}
 void setup() {
     Serial.begin(9600);
+
     // Generate the random delays
-    unsigned long randomDelay = random(100, 1000);  // Random between 100ms and 1000ms
-    connectionOffset = 500 + randomDelay;  // Base 500ms + random delay
+    unsigned long randomDelay = random(100, 1000);
+    connectionOffset = 500 + randomDelay;
     delay(connectionOffset);
 
-    // Initialize WiFiManager
-    WiFiManager wm;
+    // Attempt to connect to known Wi-Fi networks
+    if (!connectToKnownWiFi()) {
+        Serial.println("No known networks available. Starting WiFiManager...");
 
-    // Start the configuration portal
-    bool configPortalStarted = wm.startConfigPortal("ESP32-Config", "password");
+        // Initialize WiFiManager
+        WiFiManager wm;
 
-    if (configPortalStarted) {
-        Serial.println("WiFi configuration successful!");
-        Serial.print("Connected to: ");
-        Serial.println(WiFi.SSID());
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
-    } else {
-        Serial.println("Failed to configure WiFi. Restarting...");
-        delay(3000);
-        ESP.restart();
+        // Start the configuration portal
+        bool configPortalStarted = wm.startConfigPortal("ESP32-Config", "password");
+
+        if (configPortalStarted) {
+            Serial.println("WiFi configuration successful!");
+            Serial.print("Connected to: ");
+            Serial.println(WiFi.SSID());
+            Serial.print("IP Address: ");
+            Serial.println(WiFi.localIP());
+        } else {
+            Serial.println("Failed to configure WiFi. Restarting...");
+            delay(3000);
+            ESP.restart();
+        }
     }
 
     // Initialize OTA
@@ -320,7 +350,6 @@ void setup() {
         else if (error == OTA_END_ERROR) Serial.println("End Failed");
     });
     ArduinoOTA.begin();
-
     // Initialize Firebase and other components
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
@@ -329,21 +358,16 @@ void setup() {
     Firebase.reconnectWiFi(true);
        Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
-    
-    // Initialize time
+    // Other initialization code...
     initializeTime();
-    
-    // Fetch serial number and system details
     fetchSystemName();
-
-    // Setup pin modes and initialize system components as before
     pinMode(WATER_LEVEL_PIN_25, INPUT);
     pinMode(WATER_LEVEL_PIN_23, INPUT);
     pinMode(WATER_LEVEL_PIN_13, INPUT);
     pinMode(SYSTEM_POWER_PIN_12, OUTPUT);
     digitalWrite(SYSTEM_POWER_PIN_12, HIGH);
     pinMode(SYSTEM_LIGHTS_PIN_26, OUTPUT);
-    digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW); 
+    digitalWrite(SYSTEM_LIGHTS_PIN_26, LOW);
 
     ledcSetup(ATOMIZER_PWM_CHANNEL_1, PWM_FREQUENCY, PWM_RESOLUTION);
     ledcAttachPin(ATOMIZER_PIN_5, ATOMIZER_PWM_CHANNEL_1);
@@ -362,7 +386,7 @@ void loop() {
 
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS) {
             sendHeartbeat();
-            systemLights();
+            
             previousHeartbeatMillis = currentMillis;
         }
 
@@ -372,6 +396,7 @@ void loop() {
             fetchAtomizerIntervals();
             readFirestoreConfig();
             controlAtomizers();
+            systemLights();
             lastConnectionCheckMillis = currentMillis;
         }
     } else {

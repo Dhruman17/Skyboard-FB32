@@ -1,9 +1,18 @@
 #ifndef CREDENTIALS_H
 #define CREDENTIALS_H
 
-// Wi-Fi Credentials
-// #define WIFI_SSID "Verizon_B3JPTT"
-// #define WIFI_PASSWORD "update-fop6-cab"
+// Known Wi-Fi Networks
+struct WiFiCredentials {
+    const char* ssid;
+    const char* password;
+};
+
+const WiFiCredentials knownWiFi[] = {
+    {"gladwin22", "Farmer24"},
+    {"Verizon_B3JPTT", "update-fop6-cab"},
+    {"YourNetwork2", "Password2"}
+};
+const int knownWiFiCount = sizeof(knownWiFi) / sizeof(knownWiFi[0]);
 
 // Firebase Credentials
 #define API_KEY "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI"
