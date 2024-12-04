@@ -3,19 +3,22 @@
 #include <addons/TokenHelper.h>
 #include <time.h>
 
-//Serial number and delays for system
-String serialNumber = "1234567890"; // Unique serial number for each system
 // Variables to track timing
 extern unsigned long connectionOffset;
 // Pin Definitions
+#define NUMBER_OF_UNITS 3
 #define ATOMIZER_PIN_5 5
 #define ATOMIZER_PIN_4 4
 #define ATOMIZER_PIN_2 2
 #define WATER_LEVEL_PIN_25 25 // Float sensor for Unit1
 #define WATER_LEVEL_PIN_23 23 // Float sensor for Unit2
 #define WATER_LEVEL_PIN_13 13 // Float sensor for Unit3
-#define SYSTEM_LIGHTS_PIN_26 26   // GPIO 26 for LED
+#define SYSTEM_LIGHTS_PIN_26 26   // GPIO 26 for Lights
 #define SYSTEM_POWER_PIN_12 12
+
+// Pin Arrays:
+const int atomizerPins[NUMBER_OF_UNITS] = {ATOMIZER_PIN_2, ATOMIZER_PIN_4, ATOMIZER_PIN_5}
+const int waterLevelPins[NUMBER_OF_UNITS] = {R_LEVEL_PIN_13, WATER_LEVEL_PIN_23, WATER_LEVEL_PIN_25}
 
 // PWM Configuration
 #define ATOMIZER_PWM_CHANNEL_1 1
