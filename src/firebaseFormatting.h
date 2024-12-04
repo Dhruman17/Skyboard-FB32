@@ -23,23 +23,4 @@ String formatTimestamp()
     return String(buffer) + "Z";
 }
 
-void sendWaterLevelStateFirebase(bool *waterLevelState, bool *previousWaterLevelState, String *unitName)
-{
-    if (waterLevelState != previousWaterLevelState)
-    {
-        String documentPath = systemPath + "/units/" + unitName;
-        FirebaseJson content;
-        content.set("fields/waterLevelState/booleanValue", waterLevelState);
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-        {
-            Serial.println("Updated water level state for " + unitName);
-            previousWaterLevelState = waterLevelStates;
-        }
-        else
-        {
-            Serial.println("Failed to update water level state for " + unitName);
-        }
-    }
-}
-
 #endif // FIREBASEFORMATTING
