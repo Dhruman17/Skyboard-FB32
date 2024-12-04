@@ -236,7 +236,20 @@ void updateWaterLevelStates()
         {
             waterLevelStates[i] = true;
         }
-        sendWaterLevelStateFirebase(waterLevelStates[i], previousWaterLevelStates[i], unitNames[i])
+        if (waterLevelStates[i] != previousWaterLevelStates[i]){
+            String documentPath = systemPath + "/units/" + unitNames[i];
+            FirebaseJson content;
+            content.set("fields/waterLevelState/booleanValue", waterLevelStates[i]);
+            if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
+            {
+                Serial.println("Updated water level state for " + unitNames[i]);
+                previousWaterLevelStates[i] = waterLevelStates[i];
+            }
+        else
+            {
+                Serial.println("Failed to update water level state for " + unitNames[i]);
+            }
+    }
     }
 }
 
