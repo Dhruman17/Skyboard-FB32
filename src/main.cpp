@@ -316,12 +316,10 @@ void updateUnits()
                 {
                     updateWaterLevelStates();
                 }                                  // read the water level state only if the atomizers are off
-=======
                 if (atomStates[i] == false) // If the i-th atomizer is off,
                 {
                     updateWaterLevelStates(i);
                 } // read the water level state only if the atomizers are off
->>>>>>> Stashed changes
                 previousMillis[i] = currentMillis; // reset the time counter
             }
         }
