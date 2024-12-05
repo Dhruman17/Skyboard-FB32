@@ -224,32 +224,30 @@ void systemLights()
 }
 
 // Function to read water level sensors and update states
-void updateWaterLevelStates()
+void updateWaterLevelStates(int i)
 {
-    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    if (digitalRead(waterLevelPins[i]) == LOW)
     {
-        if (digitalRead(waterLevelPins[i]) == LOW)
-        {
-            waterLevelStates[i] = false;
-        }
-        else
-        {
-            waterLevelStates[i] = true;
-        }
-        if (waterLevelStates[i] != previousWaterLevelStates[i]){
-            String documentPath = systemPath + "/units/" + unitNames[i];
-            FirebaseJson content;
-            content.set("fields/waterLevelState/booleanValue", waterLevelStates[i]);
-            if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-            {
-                Serial.println("Updated water level state for " + unitNames[i]);
-                previousWaterLevelStates[i] = waterLevelStates[i];
-            }
-        else
-            {
-                Serial.println("Failed to update water level state for " + unitNames[i]);
-            }
+        waterLevelStates[i] = false;
     }
+    else
+    {
+        waterLevelStates[i] = true;
+    }
+    if (waterLevelStates[i] != previousWaterLevelStates[i])
+    {
+        String documentPath = systemPath + "/units/" + unitNames[i];
+        FirebaseJson content;
+        content.set("fields/waterLevelState/booleanValue", waterLevelStates[i]);
+        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
+        {
+            Serial.println("Updated water level state for " + unitNames[i]);
+            previousWaterLevelStates[i] = waterLevelStates[i];
+        }
+        else
+        {
+            Serial.println("Failed to update water level state for " + unitNames[i]);
+        }
     }
 }
 
@@ -301,7 +299,6 @@ void readFirestoreConfig()
     }
 }
 
-
 void updateUnits()
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
 {
@@ -315,10 +312,17 @@ void updateUnits()
                 // if more time has passed than the (atomizer on interval if the atomizer state is on, or atomizer off interval if the atomizer state is off)
                 atomStates[i] = !atomStates[i];                                   // Record the atomizer state as the opposite
                 ledcWrite(i, atomStates[i] ? PWM_ATOMIZER_ON : PWM_ATOMIZER_OFF); // Send the atomizer signal according to this opposite state
+<<<<<<< Updated upstream
                 if (!atomStates[i])
                 {
                     updateWaterLevelStates;
                 }                                  // read the water level state only if the atomizers are off
+=======
+                if (atomStates[i] == false) // If the i-th atomizer is off,
+                {
+                    updateWaterLevelStates(i);
+                } // read the water level state only if the atomizers are off
+>>>>>>> Stashed changes
                 previousMillis[i] = currentMillis; // reset the time counter
             }
         }
