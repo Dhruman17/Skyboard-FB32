@@ -22,7 +22,7 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 #define PWM_ATOMIZER_OFF 0
 
 // Timing Configurations
-const unsigned long INTERVAL_30_SECONDS = 300000;  // 5 minutes for heartbeat
+const unsigned long INTERVAL_30_SECONDS = 30000;  
 
 // Serial number
 extern String serialNumber;
