@@ -76,6 +76,27 @@ void sendHeartbeat()
     }
 }
 
+// Function to send system notification
+// void sendSystemNotification(String unitName, String message)
+// {
+//     String documentPath = "Notifications";
+//     FirebaseJson content;
+//     content.set("fields/unitName/stringValue", unitName);
+//     content.set("fields/systemName/stringValue", systemName);
+//     content.set("fields/message/stringValue", message);
+//     content.set("fields/uid/stringValue", auth.token.uid);
+//     content.set("fields/timestamp/timestampValue", formatTimestamp());
+//     if (Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw()))
+//     {
+//         Serial.println("Notification sent: " + message);
+//     }
+//     else
+//     {
+//         Serial.println("Failed to send notification.");
+//         Serial.println(fbdo.errorReason());
+//     }
+// }
+
 // Function to fetch light intervals and switches
 void fetchAtomizerIntervals()
 {
@@ -141,6 +162,7 @@ void systemLights()
         if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
         {
             digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+            // sendSystemNotification("Light System", "turned OFF due to Light Master Switch");
         }
         return;
     }
@@ -159,6 +181,7 @@ void systemLights()
                 if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
                 {
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
+                    // sendSystemNotification("Light System", "Light System turned ON");
                 }
             }
             else
@@ -166,6 +189,7 @@ void systemLights()
                 if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
                 {
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+                    // sendSystemNotification("Light System", "Light System turned OFF");
                 }
             }
         }
@@ -176,6 +200,7 @@ void systemLights()
                 if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
                 {
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
+                    // sendSystemNotification("Light System", "Light System turned ON");
                 }
             }
             else
@@ -183,6 +208,7 @@ void systemLights()
                 if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
                 {
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+                    // sendSystemNotification("Light System", "Light System turned OFF");
                 }
             }
         }
@@ -192,6 +218,7 @@ void systemLights()
         if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
         {
             digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
+            // sendSystemNotification("Light System", "Light System turned ON");
         }
     }
 }
@@ -245,11 +272,13 @@ void readFirestoreConfig()
                     {
                         Serial.println("Turning on LED for " + String(unitNames[i]));
                         ledcWrite(i, 9);
+                        // sendSystemNotification(unitNames[i], "Unit state changed: ON");
                     }
                     else
                     {
                         Serial.println("Turning off LED for " + String(unitNames[i]));
                         ledcWrite(i, 0);
+                        // sendSystemNotification(unitNames[i], "Unit state changed: OFF");
                     }
                 }
             }
@@ -300,12 +329,11 @@ bool connectToWiFi()
 {
     WiFi.mode(WIFI_AP_STA); // Enable both AP and STA modes
 
-    // Start WiFiManager Access Point
     WiFiManager wm;
     wm.setConfigPortalTimeout(180); // Keep portal active for 3 minutes
-    wm.startWebPortal(); // Start the web server for entering Wi-Fi credentials
+    wm.startWebPortal();           // Start web server for manual configuration
 
-    Serial.println("Starting WiFi connection process...");
+    Serial.println("Starting Wi-Fi connection process...");
 
     // Try connecting to known networks
     for (int i = 0; i < knownWiFiCount; i++)
@@ -315,61 +343,77 @@ bool connectToWiFi()
 
         WiFi.begin(knownWiFi[i].ssid, knownWiFi[i].password);
 
-        // Wait for connection (up to 10 seconds) while allowing the AP to function
+        // Wait for connection
         unsigned long startAttemptTime = millis();
-        while (WiFi.status() != WL_CONNECTED && (millis() - startAttemptTime) < 10000)
+        while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000)
         {
-            wm.process(); // Handle WiFiManager AP requests
-            delay(100);   // Small delay for better AP responsiveness
+            wm.process(); // Allow Wi-Fi Manager to handle requests
+            delay(100);   // Short delay for responsiveness
         }
 
         if (WiFi.status() == WL_CONNECTED)
         {
-            Serial.println("\nConnected to WiFi:");
-            Serial.println(WiFi.SSID());
+            Serial.println("\nConnected to Wi-Fi: " + String(knownWiFi[i].ssid));
             Serial.print("IP Address: ");
             Serial.println(WiFi.localIP());
-
-            wm.stopWebPortal(); // Stop the web server once connected
+            wm.stopWebPortal(); // Stop web portal
             return true;
         }
-        Serial.println("\nFailed to connect to Wi-Fi: " + String(knownWiFi[i].ssid));
     }
 
-    // If no connection, keep AP mode running for manual entry
-    Serial.println("Could not connect to known networks. Access Point active for manual configuration.");
-    wm.startConfigPortal("ESP32-Config", "password"); // Block until Wi-Fi credentials are entered manually
+    // If no connection, allow manual configuration via AP
+    Serial.println("Switching to AP mode for manual configuration...");
+    if (!wm.startConfigPortal("ESP32-Config", "password"))
+    {
+        Serial.println("Failed to configure Wi-Fi manually. Restarting...");
+        ESP.restart();
+    }
+
+    // If manual configuration succeeds
     if (WiFi.status() == WL_CONNECTED)
     {
-        Serial.println("WiFi configured via AP!");
-        Serial.println("Connected to: " + WiFi.SSID());
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
-        wm.stopWebPortal(); // Stop the web server
+        Serial.println("Wi-Fi configured via AP mode.");
         return true;
     }
 
-    // If still no connection, restart the device
-    Serial.println("Failed to configure WiFi. Restarting...");
-    delay(3000);
-    ESP.restart();
+    Serial.println("Wi-Fi setup failed.");
     return false;
 }
-
 
 void setup()
 {
     Serial.begin(9600);
 
+    // Generate the random delays
     unsigned long randomDelay = random(100, 1000);
     connectionOffset = 500 + randomDelay;
     delay(connectionOffset);
 
+    // Attempt to connect to known Wi-Fi networks
     if (!connectToWiFi())
     {
-        Serial.println("Wi-Fi setup failed. Restarting...");
-        delay(3000);
-        ESP.restart();
+        Serial.println("No known networks available. Starting WiFiManager...");
+
+        // Initialize WiFiManager
+        WiFiManager wm;
+
+        // Start the configuration portal
+        bool configPortalStarted = wm.startConfigPortal("ESP32-Config", "password");
+
+        if (configPortalStarted)
+        {
+            Serial.println("WiFi configuration successful!");
+            Serial.print("Connected to: ");
+            Serial.println(WiFi.SSID());
+            Serial.print("IP Address: ");
+            Serial.println(WiFi.localIP());
+        }
+        else
+        {
+            Serial.println("Failed to configure WiFi. Restarting...");
+            delay(3000);
+            ESP.restart();
+        }
     }
 
     // Initialize OTA
@@ -413,6 +457,7 @@ void setup()
     pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);       // Set the light pin to output
     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);     // Make sure lights are off for now
 }
+
 void loop()
 {
     if (WiFi.status() == WL_CONNECTED)
@@ -439,7 +484,7 @@ void loop()
     }
     else
     {
-        Serial.println("Wi-Fi disconnected, retrying...");
-        connectToWiFi(); // Retry Wi-Fi connection
+        Serial.println("Wi-Fi disconnected. Retrying...");
+        connectToWiFi();
     }
 }
