@@ -325,69 +325,79 @@ void updateUnits()
         }
     }
 }
-bool connectToKnownWiFi()
+bool connectToWiFi()
 {
+    WiFi.mode(WIFI_AP_STA); // Enable both AP and STA modes
+
+    // Start WiFiManager Access Point
+    WiFiManager wm;
+    wm.setConfigPortalTimeout(180); // Keep portal active for 3 minutes
+    wm.startWebPortal(); // Start the web server for entering Wi-Fi credentials
+
+    Serial.println("Starting WiFi connection process...");
+
+    // Try connecting to known networks
     for (int i = 0; i < knownWiFiCount; i++)
     {
         Serial.print("Attempting to connect to ");
         Serial.println(knownWiFi[i].ssid);
+
         WiFi.begin(knownWiFi[i].ssid, knownWiFi[i].password);
 
-        // Wait for connection (up to 10 seconds)
-        int attempts = 0;
-        while (WiFi.status() != WL_CONNECTED && attempts < 20)
+        // Wait for connection (up to 10 seconds) while allowing the AP to function
+        unsigned long startAttemptTime = millis();
+        while (WiFi.status() != WL_CONNECTED && (millis() - startAttemptTime) < 10000)
         {
-            delay(500); // 500ms delay per attempt
-            Serial.print(".");
-            attempts++;
+            wm.process(); // Handle WiFiManager AP requests
+            delay(100);   // Small delay for better AP responsiveness
         }
 
         if (WiFi.status() == WL_CONNECTED)
         {
-            Serial.println("\nConnected to " + String(knownWiFi[i].ssid));
+            Serial.println("\nConnected to WiFi:");
+            Serial.println(WiFi.SSID());
             Serial.print("IP Address: ");
             Serial.println(WiFi.localIP());
+
+            wm.stopWebPortal(); // Stop the web server once connected
             return true;
         }
-
-        Serial.println("\nFailed to connect to " + String(knownWiFi[i].ssid));
+        Serial.println("\nFailed to connect to Wi-Fi: " + String(knownWiFi[i].ssid));
     }
-    return false; // Return false if no network connects
+
+    // If no connection, keep AP mode running for manual entry
+    Serial.println("Could not connect to known networks. Access Point active for manual configuration.");
+    wm.startConfigPortal("ESP32-Config", "password"); // Block until Wi-Fi credentials are entered manually
+    if (WiFi.status() == WL_CONNECTED)
+    {
+        Serial.println("WiFi configured via AP!");
+        Serial.println("Connected to: " + WiFi.SSID());
+        Serial.print("IP Address: ");
+        Serial.println(WiFi.localIP());
+        wm.stopWebPortal(); // Stop the web server
+        return true;
+    }
+
+    // If still no connection, restart the device
+    Serial.println("Failed to configure WiFi. Restarting...");
+    delay(3000);
+    ESP.restart();
+    return false;
 }
+
 void setup()
 {
     Serial.begin(9600);
 
-    // Generate the random delays
     unsigned long randomDelay = random(100, 1000);
     connectionOffset = 500 + randomDelay;
     delay(connectionOffset);
 
-    // Attempt to connect to known Wi-Fi networks
-    if (!connectToKnownWiFi())
+    if (!connectToWiFi())
     {
-        Serial.println("No known networks available. Starting WiFiManager...");
-
-        // Initialize WiFiManager
-        WiFiManager wm;
-
-        // Start the configuration portal
-        bool configPortalStarted = wm.startConfigPortal("ESP32-Config", "password");
-
-        if (configPortalStarted)
-        {
-            Serial.println("WiFi configuration successful!");
-            Serial.print("Connected to: ");
-            Serial.println(WiFi.SSID());
-            Serial.print("IP Address: ");
-            Serial.println(WiFi.localIP());
-        }
-        else
-        {
-            Serial.println("Failed to configure WiFi. Restarting...");
-            delay(3000);
-            ESP.restart();
-        }
+        Serial.println("Wi-Fi setup failed. Restarting...");
+        delay(3000);
+        ESP.restart();
     }
 
     // Initialize OTA
@@ -431,7 +441,6 @@ void setup()
     pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);       // Set the light pin to output
     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);     // Make sure lights are off for now
 }
-
 void loop()
 {
     if (WiFi.status() == WL_CONNECTED)
@@ -444,11 +453,9 @@ void loop()
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
         {
             sendHeartbeat();
-
             previousHeartbeatMillis = currentMillis;
         }
 
-        // Use the connection offset for other functions, including systemLights
         if (currentMillis - lastConnectionCheckMillis >= connectionOffset)
         {
             fetchAtomizerIntervals();
@@ -460,8 +467,7 @@ void loop()
     }
     else
     {
-        Serial.println("Wi-Fi disconnected, trying to reconnect...");
-        WiFiManager wm;
-        wm.autoConnect("ESP32-Config", "password"); // Reconnect using WiFiManager
+        Serial.println("Wi-Fi disconnected, retrying...");
+        connectToWiFi(); // Retry Wi-Fi connection
     }
 }
