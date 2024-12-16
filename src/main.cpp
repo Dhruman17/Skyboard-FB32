@@ -76,27 +76,6 @@ void sendHeartbeat()
     }
 }
 
-// Function to send system notification
-// void sendSystemNotification(String unitName, String message)
-// {
-//     String documentPath = "Notifications";
-//     FirebaseJson content;
-//     content.set("fields/unitName/stringValue", unitName);
-//     content.set("fields/systemName/stringValue", systemName);
-//     content.set("fields/message/stringValue", message);
-//     content.set("fields/uid/stringValue", auth.token.uid);
-//     content.set("fields/timestamp/timestampValue", formatTimestamp());
-//     if (Firebase.Firestore.createDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw()))
-//     {
-//         Serial.println("Notification sent: " + message);
-//     }
-//     else
-//     {
-//         Serial.println("Failed to send notification.");
-//         Serial.println(fbdo.errorReason());
-//     }
-// }
-
 // Function to fetch light intervals and switches
 void fetchAtomizerIntervals()
 {
@@ -162,7 +141,6 @@ void systemLights()
         if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
         {
             digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
-            // sendSystemNotification("Light System", "turned OFF due to Light Master Switch");
         }
         return;
     }
@@ -181,7 +159,6 @@ void systemLights()
                 if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
                 {
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
-                    // sendSystemNotification("Light System", "Light System turned ON");
                 }
             }
             else
@@ -189,7 +166,6 @@ void systemLights()
                 if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
                 {
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
-                    // sendSystemNotification("Light System", "Light System turned OFF");
                 }
             }
         }
@@ -200,7 +176,6 @@ void systemLights()
                 if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
                 {
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
-                    // sendSystemNotification("Light System", "Light System turned ON");
                 }
             }
             else
@@ -208,7 +183,6 @@ void systemLights()
                 if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
                 {
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
-                    // sendSystemNotification("Light System", "Light System turned OFF");
                 }
             }
         }
@@ -218,7 +192,6 @@ void systemLights()
         if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
         {
             digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
-            // sendSystemNotification("Light System", "Light System turned ON");
         }
     }
 }
@@ -272,13 +245,11 @@ void readFirestoreConfig()
                     {
                         Serial.println("Turning on LED for " + String(unitNames[i]));
                         ledcWrite(i, 9);
-                        // sendSystemNotification(unitNames[i], "Unit state changed: ON");
                     }
                     else
                     {
                         Serial.println("Turning off LED for " + String(unitNames[i]));
                         ledcWrite(i, 0);
-                        // sendSystemNotification(unitNames[i], "Unit state changed: OFF");
                     }
                 }
             }
@@ -462,10 +433,10 @@ void loop()
 {
     if (WiFi.status() == WL_CONNECTED)
     {
-        unsigned long currentMillis = millis();
-
         // Handle OTA
         ArduinoOTA.handle();
+
+        unsigned long currentMillis = millis();
 
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
         {
@@ -485,6 +456,18 @@ void loop()
     else
     {
         Serial.println("Wi-Fi disconnected. Retrying...");
-        connectToWiFi();
+        while (WiFi.status() != WL_CONNECTED)
+        {
+            connectToWiFi();
+            delay(1000); // Retry every second
+        }
+
+        Serial.println("Wi-Fi reconnected. Reinitializing Firebase...");
+        // Reinitialize Firebase after reconnection
+        Firebase.begin(&config, &auth);
+        Firebase.reconnectWiFi(true);
+
+        initializeTime(); // Reinitialize time after reconnection
     }
 }
+
