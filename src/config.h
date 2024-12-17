@@ -4,7 +4,6 @@
 #include <time.h>
 
 // Variables to track timing
-extern unsigned long connectionOffset;
 // Pin Definitions
 #define NUMBER_OF_UNITS 3
 #define SYSTEM_LIGHTS_PIN 26   // GPIO 26 for Lights
@@ -22,7 +21,8 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 #define PWM_ATOMIZER_OFF 0
 
 // Timing Configurations
-const unsigned long INTERVAL_30_SECONDS = 30000;  
+const unsigned long INTERVAL_30_SECONDS = 30000;
+const unsigned long WIFI_RESET_INTERVAL = 60000;
 
 // Serial number
 extern String serialNumber;
@@ -53,7 +53,6 @@ unsigned long lastNotificationMillis = 0;
 const unsigned long resetInterval = 21600000; // 6 hours in milliseconds
 unsigned long lastResetMillis = 0;
 unsigned long startTime = 0; // Variable to store the start time of the delay
-unsigned long randomDelay = 0; // Random delay before connecting to Wi-Fi
 bool isConnected = false;  // Flag to track Wi-Fi connection status
 
 #endif // CONFIG_H

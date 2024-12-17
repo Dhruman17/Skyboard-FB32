@@ -21,7 +21,10 @@ time_t atomizerOnTime;
 time_t atomizerOffTime;
 bool systemLightSwitch = true; // Default to true for safety
 bool systemLightTimeCycleSwitch = false;
-unsigned long connectionOffset = 0; // Random delay for connection
+
+// Generate the random delays
+int randomDelay = random(100, 10000);
+int connectionOffset = 1000 + randomDelay;
 
 // Function to initialize NTP
 void initializeTime()
@@ -69,6 +72,7 @@ void sendHeartbeat()
     if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "lastSeen"))
     {
         Serial.println("Heartbeat sent.");
+        Serial.println(formatTimestamp());
     }
     else
     {
@@ -357,10 +361,6 @@ bool connectToWiFi()
 void setup()
 {
     Serial.begin(9600);
-
-    // Generate the random delays
-    unsigned long randomDelay = random(100, 1000);
-    connectionOffset = 500 + randomDelay;
     delay(connectionOffset);
 
     // Attempt to connect to known Wi-Fi networks
@@ -449,7 +449,7 @@ void loop()
 
         unsigned long currentMillis = millis();
 
-        if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
+        if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS + connectionOffset)
         {
             sendHeartbeat();
             previousHeartbeatMillis = currentMillis;
@@ -467,10 +467,16 @@ void loop()
     else
     {
         Serial.println("Wi-Fi disconnected. Retrying...");
+        unsigned long wifiTimeoutCheck = millis();
+        unsigned long currentMillisWiFi;
         while (WiFi.status() != WL_CONNECTED)
         {
+            currentMillisWiFi = millis();
             connectToWiFi();
             delay(1000); // Retry every second
+            if(currentMillisWiFi - wifiTimeoutCheck >= WIFI_RESET_INTERVAL){
+                esp_restart();
+            }
         }
 
         Serial.println("Wi-Fi reconnected. Reinitializing Firebase...");
