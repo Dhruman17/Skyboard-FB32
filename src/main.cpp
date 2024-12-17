@@ -8,6 +8,7 @@
 #include <config.h>
 #include <WiFiManager.h> // WiFiManager by Tzapu
 #include <ArduinoOTA.h>  // OTA functionality
+#include <ESPmDNS.h>
 
 FirebaseData fbdo;
 FirebaseAuth auth;
@@ -298,6 +299,8 @@ void updateUnits()
 }
 bool connectToWiFi()
 {
+    String hostname = "SA" + serialNumber;
+    WiFi.setHostname(hostname.c_str());
     WiFi.mode(WIFI_AP_STA); // Enable both AP and STA modes
 
     WiFiManager wm;
@@ -378,6 +381,7 @@ void setup()
             Serial.println(WiFi.SSID());
             Serial.print("IP Address: ");
             Serial.println(WiFi.localIP());
+            Serial.println(serialNumber.c_str());
         }
         else
         {
@@ -386,25 +390,6 @@ void setup()
             ESP.restart();
         }
     }
-
-    // Initialize OTA
-    ArduinoOTA.onStart([]()
-                       {
-        String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
-        Serial.println("Start updating " + type); });
-    ArduinoOTA.onEnd([]()
-                     { Serial.println("\nUpdate Complete!"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-                          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
-    ArduinoOTA.onError([](ota_error_t error)
-                       {
-        Serial.printf("Error[%u]: ", error);
-        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-        else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
-    ArduinoOTA.begin();
     // Initialize Firebase and other components
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
@@ -427,6 +412,32 @@ void setup()
     digitalWrite(SYSTEM_12V_POWER_PIN, HIGH); // Turn on the 12V power
     pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);       // Set the light pin to output
     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);     // Make sure lights are off for now
+
+    if (systemName != "") {   // Set the hostname to the system name
+        if (!MDNS.begin(systemName.c_str())){
+            Serial.println("Error setting up MDNS responder!");
+            delay(1000);
+        }
+    }
+    // Initialize OTA
+    ArduinoOTA.setHostname(systemName.c_str());
+    ArduinoOTA.onStart([]()
+                       {
+        String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
+        Serial.println("Start updating " + type); });
+    ArduinoOTA.onEnd([]()
+                     { Serial.println("\nUpdate Complete!"); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+                          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+    ArduinoOTA.onError([](ota_error_t error)
+                       {
+        Serial.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+        else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+        else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+        else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+        else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
+    ArduinoOTA.begin();
 }
 
 void loop()
