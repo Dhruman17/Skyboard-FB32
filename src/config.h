@@ -32,12 +32,6 @@ extern String systemPath;
 extern String unitNames[3];
 extern String systemName;
 
-// Light control settings
-extern time_t atomizerOnTime;
-extern time_t atomizerOffTime;
-extern bool systemLightSwitch;
-extern bool systemLightTimeCycleSwitch;
-
 bool unitsEnabled[3] = {false, false, false}; 
 bool previousWaterLevelStates[3] = {false, false, false};
 bool waterLevelStates[3] = {false, false, false};

@@ -15,12 +15,14 @@ FirebaseAuth auth;
 FirebaseConfig config;
 
 String systemPath;
-String unitNames[3];
+String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes 
 String systemName = ""; // Will be fetched from Firestore
-time_t atomizerOnTime;
+time_t lightOnTime;
+time_t lightOffTime;
 time_t atomizerOffTime;
-bool systemLightSwitch = true; // Default to true for safety
-bool systemLightTimeCycleSwitch = false;
+bool lightMasterSwitch = false; // The master light switch from Firebase
+bool timeCycleEnabled = false;
+bool lightState = false;
 
 // Generate the random delays
 int randomDelay = random(100, 10000);
@@ -93,7 +95,8 @@ void fetchAtomizerIntervals()
         // Fetch Light_Interval_On_Time
         if (json.get(jsonData, "fields/Light_Interval_On_Time/timestampValue"))
         {
-            atomizerOnTime = parseTime(jsonData.stringValue.c_str());
+            lightOnTime = parseTime(jsonData.stringValue.c_str());
+            Serial.println(jsonData.stringValue.c_str());
         }
         else
         {
@@ -102,7 +105,8 @@ void fetchAtomizerIntervals()
         // Fetch Light_Interval_Off_Time
         if (json.get(jsonData, "fields/Light_Interval_Off_Time/timestampValue"))
         {
-            atomizerOffTime = parseTime(jsonData.stringValue.c_str());
+            lightOffTime = parseTime(jsonData.stringValue.c_str());
+            Serial.println(jsonData.stringValue.c_str());
         }
         else
         {
@@ -111,7 +115,7 @@ void fetchAtomizerIntervals()
         // Fetch Light_Master_Switch
         if (json.get(jsonData, "fields/Light_Master_Switch/booleanValue"))
         {
-            systemLightSwitch = jsonData.boolValue;
+            lightMasterSwitch = jsonData.boolValue;
         }
         else
         {
@@ -120,7 +124,7 @@ void fetchAtomizerIntervals()
         // Fetch Light_Time_Cycle_Switch
         if (json.get(jsonData, "fields/Light_Time_Cycle_Switch/booleanValue"))
         {
-            systemLightTimeCycleSwitch = jsonData.boolValue;
+            timeCycleEnabled = jsonData.boolValue;
         }
         else
         {
@@ -141,63 +145,69 @@ void systemLights()
     struct tm *currentTime;
     time(&now);
     currentTime = localtime(&now);
-    if (!systemLightSwitch)
-    {
-        if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
-        {
-            digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
-        }
-        return;
-    }
 
     struct tm currentTimeOfDay = *currentTime;
     currentTimeOfDay.tm_year = 70; // Epoch year
     currentTimeOfDay.tm_mon = 0;   // January
     currentTimeOfDay.tm_mday = 1;  // 1st of the month
     time_t currentTime_t = mktime(&currentTimeOfDay);
-    if (systemLightTimeCycleSwitch)
+    if (timeCycleEnabled)
     {
-        if (atomizerOffTime < atomizerOnTime)
+        if (lightOffTime < lightOnTime) // if On time happens the following day (eg. 5pm off, 2am +1 on)
         {
-            if (currentTime_t >= atomizerOnTime || currentTime_t <= atomizerOffTime)
+            Serial.println(lightOnTime);
+            Serial.println(lightOffTime);
+            Serial.println(lightOffTime < lightOnTime);
+
+            if (currentTime_t >= lightOnTime || currentTime_t <= lightOffTime)
+            // if the current time is after the on time or the current time is before or the same as the off time
             {
-                if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
-                {
+                if(!lightState){
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
+                    lightState = true;
                 }
             }
-            else
-            {
-                if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
-                {
+            else{
+                // if the current time is before the on time or the current time is after the off time
+                if(lightState){
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+                    Serial.println("Lights on");
+                    lightState = false;
                 }
             }
         }
         else
+        // if the On time and off time happens the same day (eg. 9am to 5pm)
         {
-            if (currentTime_t >= atomizerOnTime && currentTime_t <= atomizerOffTime)
+            if (currentTime_t >= lightOnTime && currentTime_t <= lightOffTime)
+            // if the current time is after the on time or the same time as the off time, 
+            // and the current time is before or the same as the off time
             {
-                if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
-                {
+                if(!lightState){
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
+                    lightState = true;
                 }
             }
             else
             {
-                if (digitalRead(SYSTEM_LIGHTS_PIN) == HIGH)
-                {
+                if(lightState){
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+                    lightState = false;
                 }
             }
         }
     }
-    else
-    {
-        if (digitalRead(SYSTEM_LIGHTS_PIN) == LOW)
-        {
-            digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
+    else{
+        if(lightState != lightMasterSwitch){
+            if(lightMasterSwitch){
+                digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
+                lightState = true;
+            }
+        else{
+            digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+            lightState = false;
         }
+    }
     }
 }
 
@@ -396,8 +406,6 @@ void setup()
     auth.user.password = USER_PASSWORD;
     Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
-    Firebase.begin(&config, &auth);
-    Firebase.reconnectWiFi(true);
     // Other initialization code...
     initializeTime();
     fetchSystemName();
@@ -445,14 +453,19 @@ void loop()
     if (WiFi.status() == WL_CONNECTED)
     {
         // Handle OTA
-        ArduinoOTA.handle();
 
         unsigned long currentMillis = millis();
 
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS + connectionOffset)
         {
+            config.api_key = API_KEY;
+            auth.user.email = USER_EMAIL;
+            auth.user.password = USER_PASSWORD;
+            Firebase.begin(&config, &auth);
+            Firebase.reconnectWiFi(true);
             sendHeartbeat();
             previousHeartbeatMillis = currentMillis;
+            ArduinoOTA.handle();
         }
 
         if (currentMillis - lastConnectionCheckMillis >= connectionOffset)
@@ -481,6 +494,9 @@ void loop()
 
         Serial.println("Wi-Fi reconnected. Reinitializing Firebase...");
         // Reinitialize Firebase after reconnection
+        config.api_key = API_KEY;
+        auth.user.email = USER_EMAIL;
+        auth.user.password = USER_PASSWORD;
         Firebase.begin(&config, &auth);
         Firebase.reconnectWiFi(true);
 
