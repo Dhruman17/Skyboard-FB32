@@ -155,14 +155,11 @@ void systemLights()
     {
         if (lightOffTime < lightOnTime) // if On time happens the following day (eg. 5pm off, 2am +1 on)
         {
-            Serial.println(lightOnTime);
-            Serial.println(lightOffTime);
-            Serial.println(lightOffTime < lightOnTime);
 
             if (currentTime_t >= lightOnTime || currentTime_t <= lightOffTime)
             // if the current time is after the on time or the current time is before or the same as the off time
             {
-                if(!lightState){
+                if(!lightState){ // if the lights are off, turn them on
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
                     lightState = true;
                 }
@@ -171,7 +168,6 @@ void systemLights()
                 // if the current time is before the on time or the current time is after the off time
                 if(lightState){
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
-                    Serial.println("Lights on");
                     lightState = false;
                 }
             }
@@ -458,23 +454,22 @@ void loop()
 
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS + connectionOffset)
         {
-            config.api_key = API_KEY;
-            auth.user.email = USER_EMAIL;
-            auth.user.password = USER_PASSWORD;
-            Firebase.begin(&config, &auth);
-            Firebase.reconnectWiFi(true);
-            sendHeartbeat();
-            previousHeartbeatMillis = currentMillis;
-            ArduinoOTA.handle();
+            if(Firebase.ready()){
+                sendHeartbeat();
+                previousHeartbeatMillis = currentMillis;
+                ArduinoOTA.handle();
+            }
         }
 
         if (currentMillis - lastConnectionCheckMillis >= connectionOffset)
         {
-            fetchAtomizerIntervals();
-            readFirestoreConfig();
-            updateUnits();
-            systemLights();
-            lastConnectionCheckMillis = currentMillis;
+            if(Firebase.ready()){
+                fetchAtomizerIntervals();
+                readFirestoreConfig();
+                updateUnits();
+                systemLights();
+                lastConnectionCheckMillis = currentMillis;
+            }
         }
     }
     else
