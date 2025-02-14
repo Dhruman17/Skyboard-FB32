@@ -363,6 +363,29 @@ bool connectToWiFi()
     Serial.println("Wi-Fi setup failed.");
     return false;
 }
+void updateSystemVersion()
+{
+    if (systemPath != "")
+    {
+        String documentPath = systemPath; // Use the system path
+        FirebaseJson content;
+        content.set("fields/version/stringValue", "1.0");
+
+        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version"))
+        {
+            Serial.println("System version updated successfully in Firestore.");
+        }
+        else
+        {
+            Serial.println("Failed to update system version.");
+            Serial.println(fbdo.errorReason());
+        }
+    }
+    else
+    {
+        Serial.println("System path is not defined. Cannot update version.");
+    }
+}
 
 void setup()
 {
@@ -405,7 +428,8 @@ void setup()
     // Other initialization code...
     initializeTime();
     fetchSystemName();
-
+    // Store version in Firestore
+    updateSystemVersion();
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {                                                                  // Loop across all of the pins
         pinMode(waterLevelPins[i], INPUT_PULLUP);                      // set the pinmode of the i-th water level pin to input and use an internal pullup resistor (because this is an electrical switch)
