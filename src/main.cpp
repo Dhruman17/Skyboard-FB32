@@ -310,6 +310,7 @@ bool connectToWiFi()
     WiFi.mode(WIFI_AP_STA); // Enable both AP and STA modes
 
     WiFiManager wm;
+    //wm.resetSettings(); //---------------------------------------------------------------------- WiFi Credentials Erase
     wm.setConfigPortalTimeout(180); // Keep portal active for 3 minutes
     wm.startWebPortal();           // Start web server for manual configuration
 
@@ -343,10 +344,10 @@ bool connectToWiFi()
 
     // If no connection, allow manual configuration via AP
     Serial.println("Switching to AP mode for manual configuration...");
-    if (!wm.startConfigPortal("ESP32-Config", "password"))
+    String wifi_SSID = "SkyAcres WiFi Setup " + serialNumber;
+    if (!wm.startConfigPortal(wifi_SSID.c_str(), "password"))
     {
-        Serial.println("Failed to configure Wi-Fi manually. Restarting...");
-        ESP.restart();
+        return false;
     }
 
     // If manual configuration succeeds
@@ -355,8 +356,6 @@ bool connectToWiFi()
         Serial.println("Wi-Fi configured via AP mode.");
         return true;
     }
-
-    Serial.println("Wi-Fi setup failed.");
     return false;
 }
 void updateSystemVersion()
@@ -387,33 +386,11 @@ void setup()
 {
     Serial.begin(9600);
     delay(connectionOffset);
+    if(!connectToWiFi()){
+        Serial.println("Wi-Fi setup failed.");
+        delay(3000);
+        ESP.restart();
 
-    // Attempt to connect to known Wi-Fi networks
-    if (!connectToWiFi())
-    {
-        Serial.println("No known networks available. Starting WiFiManager...");
-
-        // Initialize WiFiManager
-        WiFiManager wm;
-
-        // Start the configuration portal
-        bool configPortalStarted = wm.startConfigPortal("ESP32-Config", "password");
-
-        if (configPortalStarted)
-        {
-            Serial.println("WiFi configuration successful!");
-            Serial.print("Connected to: ");
-            Serial.println(WiFi.SSID());
-            Serial.print("IP Address: ");
-            Serial.println(WiFi.localIP());
-            Serial.println(serialNumber.c_str());
-        }
-        else
-        {
-            Serial.println("Failed to configure WiFi. Restarting...");
-            delay(3000);
-            ESP.restart();
-        }
     }
     // Initialize Firebase and other components
     config.api_key = API_KEY;
