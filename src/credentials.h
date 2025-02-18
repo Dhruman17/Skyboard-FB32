@@ -2,7 +2,7 @@
 #define CREDENTIALS_H
 
 //Serial number and delays for system
-String serialNumber = "123456789043"; // Unique serial number for each system
+String serialNumber = "1234567890"; // Unique serial number for each system
 
 // Known Wi-Fi Networks
 struct WiFiCredentials {
@@ -11,6 +11,7 @@ struct WiFiCredentials {
 };
 
 const WiFiCredentials knownWiFi[] = {
+    {"Devil_ 4G", "Rathod@2442"},
     {"gladwin22", "Farmer24"},
 };
 const int knownWiFiCount = sizeof(knownWiFi) / sizeof(knownWiFi[0]);
