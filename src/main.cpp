@@ -294,10 +294,6 @@ void updateUnits()
                 // if more time has passed than the (atomizer on interval if the atomizer state is on, or atomizer off interval if the atomizer state is off)
                 atomStates[i] = !atomStates[i];                                   // Record the atomizer state as the opposite
                 ledcWrite(i, atomStates[i] ? PWM_ATOMIZER_ON : PWM_ATOMIZER_OFF); // Send the atomizer signal according to this opposite state
-                if (!atomStates[i])
-                {
-                    updateWaterLevelStates(i);
-                }                                  // read the water level state only if the atomizers are off
                 if (atomStates[i] == false) // If the i-th atomizer is off,
                 {
                     updateWaterLevelStates(i);
