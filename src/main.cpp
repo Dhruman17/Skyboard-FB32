@@ -9,6 +9,7 @@
 #include <WiFiManager.h> // WiFiManager by Tzapu
 #include <ArduinoOTA.h>  // OTA functionality
 #include <ESPmDNS.h>
+const String firmware_version = 1.1
 
 FirebaseData fbdo;
 FirebaseAuth auth;
@@ -364,7 +365,7 @@ void updateSystemVersion()
     {
         String documentPath = systemPath; // Use the system path
         FirebaseJson content;
-        content.set("fields/version/stringValue", "1.0");
+        content.set("fields/version/stringValue", firmware_version);
 
         if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version"))
         {
