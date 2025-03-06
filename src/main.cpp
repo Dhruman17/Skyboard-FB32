@@ -237,7 +237,16 @@ void systemLights()
 // Function to read water level sensors and update states
 void updateWaterLevelStates(int i)
 {
-    if (digitalRead(waterLevelPins[i]) == LOW)
+    tcaselect(i * 2);
+#if defined(ESP8266) || defined(ESP32)
+    Wire.begin(SDA, SCL);
+    mcp3021.init(&Wire);
+#else
+    mcp3021.init();
+#endif
+    uint16_t result = mcp3021.read();
+    int floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
+    if (floatSignal == LOW)
     {
         waterLevelStates[i] = false;
     }
