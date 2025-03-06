@@ -19,6 +19,7 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 #define PWM_RESOLUTION_ATOMIZER 4 // 8-bit resolution
 #define PWM_ATOMIZER_ON 9
 #define PWM_ATOMIZER_OFF 0
+#define TCAADDR 0x77
 
 // Timing Configurations
 const unsigned long INTERVAL_30_SECONDS = 30000;

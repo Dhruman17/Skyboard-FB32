@@ -11,6 +11,9 @@
 #include <ESPmDNS.h>
 #include <HTTPClient.h>
 #include <Update.h>
+#include "Wire.h"
+#include "MCP3X21.h" // ADC library for float sensor
+const double firmware_version = 1.1;
 
 FirebaseData fbdo;
 FirebaseAuth auth;
@@ -29,6 +32,28 @@ bool lightState = false;
 // Generate the random delays
 int randomDelay = random(100, 10000);
 int connectionOffset = 1000 + randomDelay;
+
+void tcaselect(uint8_t i)
+{
+    if (i > 7)
+        return;
+    Wire.beginTransmission(TCAADDR);
+    Wire.write(1 << i);
+    Wire.endTransmission();
+}
+namespace device
+{
+    float aref = 3.3; // Vref, this is for 3.3v compatible controller boards, for Arduino use 5.0v.
+}
+
+namespace sensor
+{
+    float ec = 0;
+    unsigned int tds = 0;
+    float ecCalibration = 1;
+}
+
+MCP3021 mcp3021;
 
 // Function to initialize NTP
 void initializeTime()
@@ -316,6 +341,7 @@ bool connectToWiFi()
     WiFi.mode(WIFI_AP_STA); // Enable both AP and STA modes
 
     WiFiManager wm;
+    // wm.resetSettings(); //---------------------------------------------------------------------- WiFi Credentials Erase
     wm.setConfigPortalTimeout(60); // Keep portal active for 1 minute
     wm.startWebPortal();           // Start web server for manual configuration
 
@@ -348,6 +374,9 @@ bool connectToWiFi()
     }
 
     // If no connection, allow manual configuration via AP
+    Serial.println("Switching to AP mode for manual configuration...");
+    String wifi_SSID = "SkyAcres WiFi Setup " + serialNumber;
+    // If no connection, allow manual configuration via AP
 if (!wm.autoConnect("ESP32-Config", "password")) {
         Serial.println("AutoConnect failed or no saved credentials. Starting manual setup...");
         
@@ -375,7 +404,7 @@ void updateSystemVersion()
     {
         String documentPath = systemPath; // Use the system path
         FirebaseJson content;
-        content.set("fields/version/stringValue", "1.0");
+        content.set("fields/version/stringValue", firmware_version);
 
         if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version"))
         {
@@ -463,7 +492,7 @@ void checkForFirmwareUpdate()
 
 void setup()
 {
-
+    Wire.begin();
     Serial.begin(115200);
     delay(connectionOffset);
 
@@ -553,6 +582,19 @@ void loop()
         {
             if (Firebase.ready())
             {
+                tcaselect(0);
+#if defined(ESP8266) || defined(ESP32)
+                Wire.begin(SDA, SCL);
+                mcp3021.init(&Wire);
+#else
+                mcp3021.init();
+#endif
+                uint16_t result = mcp3021.read();
+                // Read the raw analog value and convert to voltage
+                float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.000);
+                // Claibrate reading
+                float sensor = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
+
                 sendHeartbeat();
                 previousHeartbeatMillis = currentMillis;
                 ArduinoOTA.handle();
