@@ -20,8 +20,8 @@ FirebaseAuth auth;
 FirebaseConfig config;
 
 String systemPath;
-String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes 
-String systemName = ""; // Will be fetched from Firestore
+String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes
+String systemName = "";            // Will be fetched from Firestore
 time_t lightOnTime;
 time_t lightOffTime;
 time_t atomizerOffTime;
@@ -186,14 +186,17 @@ void systemLights()
             if (currentTime_t >= lightOnTime || currentTime_t <= lightOffTime)
             // if the current time is after the on time or the current time is before or the same as the off time
             {
-                if(!lightState){ // if the lights are off, turn them on
+                if (!lightState)
+                { // if the lights are off, turn them on
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
                     lightState = true;
                 }
             }
-            else{
+            else
+            {
                 // if the current time is before the on time or the current time is after the off time
-                if(lightState){
+                if (lightState)
+                {
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
                     lightState = false;
                 }
@@ -203,34 +206,40 @@ void systemLights()
         // if the On time and off time happens the same day (eg. 9am to 5pm)
         {
             if (currentTime_t >= lightOnTime && currentTime_t <= lightOffTime)
-            // if the current time is after the on time or the same time as the off time, 
+            // if the current time is after the on time or the same time as the off time,
             // and the current time is before or the same as the off time
             {
-                if(!lightState){
+                if (!lightState)
+                {
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
                     lightState = true;
                 }
             }
             else
             {
-                if(lightState){
+                if (lightState)
+                {
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
                     lightState = false;
                 }
             }
         }
     }
-    else{
-        if(lightState != lightMasterSwitch){
-            if(lightMasterSwitch){
+    else
+    {
+        if (lightState != lightMasterSwitch)
+        {
+            if (lightMasterSwitch)
+            {
                 digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
                 lightState = true;
             }
-        else{
-            digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
-            lightState = false;
+            else
+            {
+                digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+                lightState = false;
+            }
         }
-    }
     }
 }
 
@@ -333,7 +342,7 @@ void updateUnits()
                 if (!atomStates[i])
                 {
                     updateWaterLevelStates(i);
-                }                                  // read the water level state only if the atomizers are off
+                } // read the water level state only if the atomizers are off
                 if (atomStates[i] == false) // If the i-th atomizer is off,
                 {
                     updateWaterLevelStates(i);
@@ -348,22 +357,16 @@ bool connectToWiFi()
     String hostname = "SA" + serialNumber;
     WiFi.setHostname(hostname.c_str());
     WiFi.mode(WIFI_AP_STA); // Enable both AP and STA modes
-
     WiFiManager wm;
-    // wm.resetSettings(); //---------------------------------------------------------------------- WiFi Credentials Erase
-    wm.setConfigPortalTimeout(60); // Keep portal active for 1 minute
-    wm.startWebPortal();           // Start web server for manual configuration
-
+    wm.setConfigPortalTimeout(180); // Keep portal active for 3 minutes
+    wm.startWebPortal();            // Start web server for manual configuration
     Serial.println("Starting Wi-Fi connection process...");
-
     // Try connecting to known networks
     for (int i = 0; i < knownWiFiCount; i++)
     {
         Serial.print("Attempting to connect to ");
         Serial.println(knownWiFi[i].ssid);
-
         WiFi.begin(knownWiFi[i].ssid, knownWiFi[i].password);
-
         // Wait for connection
         unsigned long startAttemptTime = millis();
         while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000)
@@ -371,7 +374,6 @@ bool connectToWiFi()
             wm.process(); // Allow Wi-Fi Manager to handle requests
             delay(100);   // Short delay for responsiveness
         }
-
         if (WiFi.status() == WL_CONNECTED)
         {
             Serial.println("\nConnected to Wi-Fi: " + String(knownWiFi[i].ssid));
@@ -381,21 +383,12 @@ bool connectToWiFi()
             return true;
         }
     }
-
     // If no connection, allow manual configuration via AP
     Serial.println("Switching to AP mode for manual configuration...");
-    String wifi_SSID = "SkyAcres WiFi Setup " + serialNumber;
-    // If no connection, allow manual configuration via AP
-if (!wm.autoConnect("ESP32-Config", "password")) {
-        Serial.println("AutoConnect failed or no saved credentials. Starting manual setup...");
-        
-        // If autoConnect fails, start manual setup mode
-        if (!wm.startConfigPortal("ESP32-Config", "password")) {
-            Serial.println("Failed to configure Wi-Fi manually. Restarting...");
-            ESP.restart(); // Restart if user doesn't configure WiFi
-        }
-
-        Serial.println("Wi-Fi manually configured.");
+    if (!wm.startConfigPortal(hostname.c_str(), "password"))
+    {
+        Serial.println("Failed to configure Wi-Fi manually. Restarting...");
+        ESP.restart();
     }
     // If manual configuration succeeds
     if (WiFi.status() == WL_CONNECTED)
@@ -403,7 +396,6 @@ if (!wm.autoConnect("ESP32-Config", "password")) {
         Serial.println("Wi-Fi configured via AP mode.");
         return true;
     }
-
     Serial.println("Wi-Fi setup failed.");
     return false;
 }
@@ -473,7 +465,7 @@ void performOTAUpdate(String firmwareUrl)
 }
 void checkForFirmwareUpdate()
 {
-    String documentPath = systemPath + "/firmware";
+    String documentPath = systemPath + "/firmware" + serialNumber;
 
     if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
     {
@@ -554,8 +546,10 @@ void setup()
     pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);       // Set the light pin to output
     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);     // Make sure lights are off for now
 
-    if (systemName != "") {   // Set the hostname to the system name
-        if (!MDNS.begin(systemName.c_str())){
+    if (systemName != "")
+    { // Set the hostname to the system name
+        if (!MDNS.begin(systemName.c_str()))
+        {
             Serial.println("Error setting up MDNS responder!");
             delay(1000);
         }

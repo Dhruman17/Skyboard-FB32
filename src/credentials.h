@@ -2,7 +2,7 @@
 #define CREDENTIALS_H
 
 //Serial number and delays for system
-String serialNumber = "1234567890"; // Unique serial number for each system
+String serialNumber = "MR1234567890"; // Unique serial number for each system
 
 // Known Wi-Fi Networks
 struct WiFiCredentials {
