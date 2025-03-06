@@ -17,8 +17,8 @@ FirebaseAuth auth;
 FirebaseConfig config;
 
 String systemPath;
-String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes
-String systemName = "";            // Will be fetched from Firestore
+String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes 
+String systemName = ""; // Will be fetched from Firestore
 time_t lightOnTime;
 time_t lightOffTime;
 time_t atomizerOffTime;
@@ -161,17 +161,14 @@ void systemLights()
             if (currentTime_t >= lightOnTime || currentTime_t <= lightOffTime)
             // if the current time is after the on time or the current time is before or the same as the off time
             {
-                if (!lightState)
-                { // if the lights are off, turn them on
+                if(!lightState){ // if the lights are off, turn them on
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
                     lightState = true;
                 }
             }
-            else
-            {
+            else{
                 // if the current time is before the on time or the current time is after the off time
-                if (lightState)
-                {
+                if(lightState){
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
                     lightState = false;
                 }
@@ -181,40 +178,34 @@ void systemLights()
         // if the On time and off time happens the same day (eg. 9am to 5pm)
         {
             if (currentTime_t >= lightOnTime && currentTime_t <= lightOffTime)
-            // if the current time is after the on time or the same time as the off time,
+            // if the current time is after the on time or the same time as the off time, 
             // and the current time is before or the same as the off time
             {
-                if (!lightState)
-                {
+                if(!lightState){
                     digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
                     lightState = true;
                 }
             }
             else
             {
-                if (lightState)
-                {
+                if(lightState){
                     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
                     lightState = false;
                 }
             }
         }
     }
-    else
-    {
-        if (lightState != lightMasterSwitch)
-        {
-            if (lightMasterSwitch)
-            {
+    else{
+        if(lightState != lightMasterSwitch){
+            if(lightMasterSwitch){
                 digitalWrite(SYSTEM_LIGHTS_PIN, HIGH);
                 lightState = true;
             }
-            else
-            {
-                digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
-                lightState = false;
-            }
+        else{
+            digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+            lightState = false;
         }
+    }
     }
 }
 
@@ -308,7 +299,7 @@ void updateUnits()
                 if (!atomStates[i])
                 {
                     updateWaterLevelStates(i);
-                } // read the water level state only if the atomizers are off
+                }                                  // read the water level state only if the atomizers are off
                 if (atomStates[i] == false) // If the i-th atomizer is off,
                 {
                     updateWaterLevelStates(i);
@@ -357,13 +348,11 @@ bool connectToWiFi()
     }
 
     // If no connection, allow manual configuration via AP
-    if (!wm.autoConnect("ESP32-Config", "password"))
-    {
+if (!wm.autoConnect("ESP32-Config", "password")) {
         Serial.println("AutoConnect failed or no saved credentials. Starting manual setup...");
-
+        
         // If autoConnect fails, start manual setup mode
-        if (!wm.startConfigPortal("ESP32-Config", "password"))
-        {
+        if (!wm.startConfigPortal("ESP32-Config", "password")) {
             Serial.println("Failed to configure Wi-Fi manually. Restarting...");
             ESP.restart(); // Restart if user doesn't configure WiFi
         }
@@ -527,10 +516,8 @@ void setup()
     pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);       // Set the light pin to output
     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);     // Make sure lights are off for now
 
-    if (systemName != "")
-    { // Set the hostname to the system name
-        if (!MDNS.begin(systemName.c_str()))
-        {
+    if (systemName != "") {   // Set the hostname to the system name
+        if (!MDNS.begin(systemName.c_str())){
             Serial.println("Error setting up MDNS responder!");
             delay(1000);
         }

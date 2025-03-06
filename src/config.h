@@ -24,7 +24,7 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 const unsigned long INTERVAL_30_SECONDS = 30000;
 const unsigned long WIFI_RESET_INTERVAL = 60000;
 unsigned long lastFirmwareCheckMillis = 0;
-const unsigned long FIRMWARE_CHECK_INTERVAL = 360000; // Check every minute
+const unsigned long FIRMWARE_CHECK_INTERVAL = 360000; // Check every hour
 
 // Serial number
 extern String serialNumber;
