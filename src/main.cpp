@@ -9,6 +9,8 @@
 #include <WiFiManager.h> // WiFiManager by Tzapu
 #include <ArduinoOTA.h>  // OTA functionality
 #include <ESPmDNS.h>
+#include <HTTPClient.h>
+#include <Update.h>
 
 FirebaseData fbdo;
 FirebaseAuth auth;
@@ -314,7 +316,7 @@ bool connectToWiFi()
     WiFi.mode(WIFI_AP_STA); // Enable both AP and STA modes
 
     WiFiManager wm;
-    wm.setConfigPortalTimeout(180); // Keep portal active for 3 minutes
+    wm.setConfigPortalTimeout(60); // Keep portal active for 1 minute
     wm.startWebPortal();           // Start web server for manual configuration
 
     Serial.println("Starting Wi-Fi connection process...");
@@ -346,13 +348,17 @@ bool connectToWiFi()
     }
 
     // If no connection, allow manual configuration via AP
-    Serial.println("Switching to AP mode for manual configuration...");
-    if (!wm.startConfigPortal("ESP32-Config", "password"))
-    {
-        Serial.println("Failed to configure Wi-Fi manually. Restarting...");
-        ESP.restart();
-    }
+if (!wm.autoConnect("ESP32-Config", "password")) {
+        Serial.println("AutoConnect failed or no saved credentials. Starting manual setup...");
+        
+        // If autoConnect fails, start manual setup mode
+        if (!wm.startConfigPortal("ESP32-Config", "password")) {
+            Serial.println("Failed to configure Wi-Fi manually. Restarting...");
+            ESP.restart(); // Restart if user doesn't configure WiFi
+        }
 
+        Serial.println("Wi-Fi manually configured.");
+    }
     // If manual configuration succeeds
     if (WiFi.status() == WL_CONNECTED)
     {
@@ -386,10 +392,79 @@ void updateSystemVersion()
         Serial.println("System path is not defined. Cannot update version.");
     }
 }
+void performOTAUpdate(String firmwareUrl)
+{
+    HTTPClient http;
+    http.begin(firmwareUrl); // Initialize HTTP request
+
+    int httpCode = http.GET(); // Send GET request
+    if (httpCode == HTTP_CODE_OK)
+    {
+        int contentLength = http.getSize();
+        WiFiClient *stream = http.getStreamPtr();
+
+        if (!Update.begin(contentLength))
+        { // Start OTA update process
+            Serial.println("Not enough space for OTA");
+            return;
+        }
+
+        Serial.println("Starting OTA update...");
+        size_t written = Update.writeStream(*stream);
+        if (written == contentLength)
+        {
+            Serial.println("OTA update successful!");
+        }
+        else
+        {
+            Serial.println("OTA update failed!");
+        }
+
+        if (Update.end())
+        {
+            Serial.println("Rebooting...");
+            ESP.restart();
+        }
+    }
+    else
+    {
+        Serial.println("Failed to download firmware");
+    }
+
+    http.end();
+}
+void checkForFirmwareUpdate()
+{
+    String documentPath = systemPath + "/firmware";
+
+    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
+    {
+        FirebaseJson json;
+        json.setJsonData(fbdo.payload());
+        FirebaseJsonData jsonData;
+
+        if (json.get(jsonData, "fields/url/stringValue"))
+        {
+            String firmwareUrl = jsonData.stringValue;
+            Serial.println("New firmware URL found: " + firmwareUrl);
+            performOTAUpdate(firmwareUrl);
+        }
+        else
+        {
+            Serial.println("No firmware update available.");
+        }
+    }
+    else
+    {
+        Serial.println("Failed to check for firmware update.");
+        Serial.println(fbdo.errorReason());
+    }
+}
 
 void setup()
 {
-    Serial.begin(9600);
+
+    Serial.begin(115200);
     delay(connectionOffset);
 
     // Attempt to connect to known Wi-Fi networks
@@ -472,13 +547,12 @@ void loop()
 {
     if (WiFi.status() == WL_CONNECTED)
     {
-        // Handle OTA
-
         unsigned long currentMillis = millis();
 
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS + connectionOffset)
         {
-            if(Firebase.ready()){
+            if (Firebase.ready())
+            {
                 sendHeartbeat();
                 previousHeartbeatMillis = currentMillis;
                 ArduinoOTA.handle();
@@ -487,7 +561,8 @@ void loop()
 
         if (currentMillis - lastConnectionCheckMillis >= connectionOffset)
         {
-            if(Firebase.ready()){
+            if (Firebase.ready())
+            {
                 fetchAtomizerIntervals();
                 readFirestoreConfig();
                 updateUnits();
@@ -495,24 +570,34 @@ void loop()
                 lastConnectionCheckMillis = currentMillis;
             }
         }
+
+        // 🔹 **Check for Firmware Update Every Hour**
+        if (currentMillis - lastFirmwareCheckMillis >= FIRMWARE_CHECK_INTERVAL)
+        {
+            Serial.println("Checking for firmware updates...");
+            checkForFirmwareUpdate();
+            lastFirmwareCheckMillis = currentMillis;
+        }
     }
     else
     {
         Serial.println("Wi-Fi disconnected. Retrying...");
         unsigned long wifiTimeoutCheck = millis();
         unsigned long currentMillisWiFi;
+
         while (WiFi.status() != WL_CONNECTED)
         {
             currentMillisWiFi = millis();
             connectToWiFi();
             delay(1000); // Retry every second
-            if(currentMillisWiFi - wifiTimeoutCheck >= WIFI_RESET_INTERVAL){
+
+            if (currentMillisWiFi - wifiTimeoutCheck >= WIFI_RESET_INTERVAL)
+            {
                 esp_restart();
             }
         }
 
         Serial.println("Wi-Fi reconnected. Reinitializing Firebase...");
-        // Reinitialize Firebase after reconnection
         config.api_key = API_KEY;
         auth.user.email = USER_EMAIL;
         auth.user.password = USER_PASSWORD;
@@ -522,4 +607,3 @@ void loop()
         initializeTime(); // Reinitialize time after reconnection
     }
 }
-

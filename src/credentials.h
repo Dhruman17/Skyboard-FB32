@@ -11,9 +11,6 @@ struct WiFiCredentials {
 };
 
 const WiFiCredentials knownWiFi[] = {
-    {"Devil_ 4G", "Hema@2442"},
-    {"gladwin22", "Farmer24"},
-    {"Verizon_B3JPTT", "update-fop6-cab"}
     
 };
 const int knownWiFiCount = sizeof(knownWiFi) / sizeof(knownWiFi[0]);
