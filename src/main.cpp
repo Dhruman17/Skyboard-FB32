@@ -1,11 +1,12 @@
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
-#include <firebaseFormatting.h>
 #include <addons/TokenHelper.h>
 #include <addons/RTDBHelper.h>
 #include <time.h>
 #include <credentials.h>
 #include <config.h>
+#include <sensor_coms.h>
+#include <firebase_coms.h>
 #include <WiFiManager.h> // WiFiManager by Tzapu
 #include <ArduinoOTA.h>  // OTA functionality
 #include <ESPmDNS.h>
@@ -13,14 +14,12 @@
 #include <Update.h>
 #include "Wire.h"
 #include "MCP3X21.h" // ADC library for float sensor
-const double firmware_version = 1.1;
+#define FIREBASEJSON_USE_PSRAM
 
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
 
-String systemPath;
-String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes
 String systemName = "";            // Will be fetched from Firestore
 time_t lightOnTime;
 time_t lightOffTime;
@@ -28,30 +27,13 @@ time_t atomizerOffTime;
 bool lightMasterSwitch = false; // The master light switch from Firebase
 bool timeCycleEnabled = false;
 bool lightState = false;
+String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes
 
 // Generate the random delays
 int randomDelay = random(100, 10000);
 int connectionOffset = 1000 + randomDelay;
 
-void tcaselect(uint8_t i)
-{
-    if (i > 7)
-        return;
-    Wire.beginTransmission(TCAADDR);
-    Wire.write(1 << i);
-    Wire.endTransmission();
-}
-namespace device
-{
-    float aref = 3.3; // Vref, this is for 3.3v compatible controller boards, for Arduino use 5.0v.
-}
-
-namespace sensor
-{
-    float ec = 0;
-    unsigned int tds = 0;
-    float ecCalibration = 1;
-}
+WiFiManager wm;
 
 MCP3021 mcp3021;
 
@@ -61,109 +43,6 @@ void initializeTime()
     configTime(0, 0, "pool.ntp.org", "time.nist.gov");
 }
 
-void fetchSystemName()
-{
-    String documentPath = "Systems/" + serialNumber;
-    Serial.println(documentPath);
-    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
-    {
-        FirebaseJson json;
-        json.setJsonData(fbdo.payload());
-        FirebaseJsonData jsonData;
-
-        if (json.get(jsonData, "fields/systeName/stringValue"))
-        {
-            systemName = jsonData.stringValue;
-            systemPath = "Systems/" + serialNumber;
-            unitNames[0] = systemName + "-1";
-            unitNames[1] = systemName + "-2";
-            unitNames[2] = systemName + "-3";
-            Serial.println("System Name: " + systemName);
-        }
-        else
-        {
-            Serial.println("System name not found.");
-        }
-    }
-    else
-    {
-        Serial.println("Failed to fetch serial number or system name.");
-        Serial.println(fbdo.errorReason());
-    }
-}
-
-// Function to send heartbeat signal
-void sendHeartbeat()
-{
-    String documentPath = systemPath;
-    FirebaseJson content;
-    content.set("fields/lastSeen/timestampValue", formatTimestamp());
-    if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "lastSeen"))
-    {
-        Serial.println("Heartbeat sent.");
-        Serial.println(formatTimestamp());
-    }
-    else
-    {
-        Serial.println("Failed to send heartbeat.");
-        Serial.println(fbdo.errorReason());
-    }
-}
-
-// Function to fetch light intervals and switches
-void fetchAtomizerIntervals()
-{
-    String documentPath = systemPath;
-    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
-    {
-        FirebaseJson json;
-        json.setJsonData(fbdo.payload());
-        FirebaseJsonData jsonData;
-        // Fetch Light_Interval_On_Time
-        if (json.get(jsonData, "fields/Light_Interval_On_Time/timestampValue"))
-        {
-            lightOnTime = parseTime(jsonData.stringValue.c_str());
-            Serial.println(jsonData.stringValue.c_str());
-        }
-        else
-        {
-            Serial.println("Light_Interval_On_Time not found or not a timestamp");
-        }
-        // Fetch Light_Interval_Off_Time
-        if (json.get(jsonData, "fields/Light_Interval_Off_Time/timestampValue"))
-        {
-            lightOffTime = parseTime(jsonData.stringValue.c_str());
-            Serial.println(jsonData.stringValue.c_str());
-        }
-        else
-        {
-            Serial.println("Light_Interval_Off_Time not found or not a timestamp");
-        }
-        // Fetch Light_Master_Switch
-        if (json.get(jsonData, "fields/Light_Master_Switch/booleanValue"))
-        {
-            lightMasterSwitch = jsonData.boolValue;
-        }
-        else
-        {
-            Serial.println("Light_Master_Switch not found or not a boolean");
-        }
-        // Fetch Light_Time_Cycle_Switch
-        if (json.get(jsonData, "fields/Light_Time_Cycle_Switch/booleanValue"))
-        {
-            timeCycleEnabled = jsonData.boolValue;
-        }
-        else
-        {
-            Serial.println("Light_Time_Cycle_Switch not found or not a boolean");
-        }
-    }
-    else
-    {
-        Serial.println("Failed to fetch light intervals.");
-        Serial.println(fbdo.errorReason());
-    }
-}
 
 // Modify systemLights to consider Light Master Switch and Time Cycle Switch
 void systemLights()
@@ -280,51 +159,6 @@ void updateWaterLevelStates(int i)
     }
 }
 
-// Function to read system config from Firestore
-void readFirestoreConfig()
-{
-    for (int i = 0; i < 3; i++)
-    {
-        String documentPath = systemPath + "/units/" + unitNames[i];
-        if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
-        {
-            FirebaseJson json;
-            json.setJsonData(fbdo.payload());
-            FirebaseJsonData jsonData;
-            if (json.get(jsonData, "fields/unitState/booleanValue"))
-            {
-                bool newState = jsonData.boolValue;
-                if (unitsEnabled[i] != newState)
-                {
-                    unitsEnabled[i] = newState;
-                    if (unitsEnabled[i])
-                    {
-                        Serial.println("Turning on LED for " + String(unitNames[i]));
-                        ledcWrite(i, 9);
-                    }
-                    else
-                    {
-                        Serial.println("Turning off LED for " + String(unitNames[i]));
-                        ledcWrite(i, 0);
-                    }
-                }
-            }
-            if (json.get(jsonData, "fields/Interval_On/integerValue"))
-            {
-                atomizerOnIntervals[i] = jsonData.intValue * 1000;
-            }
-            if (json.get(jsonData, "fields/Interval_Off/integerValue"))
-            {
-                atomizerOffIntervals[i] = jsonData.intValue * 1000;
-            }
-        }
-        else
-        {
-            Serial.println("Failed to get document for " + String(unitNames[i]));
-            Serial.println(fbdo.errorReason());
-        }
-    }
-}
 
 void updateUnits()
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
@@ -352,53 +186,7 @@ void updateUnits()
         }
     }
 }
-bool connectToWiFi()
-{
-    String hostname = "SA" + serialNumber;
-    WiFi.setHostname(hostname.c_str());
-    WiFi.mode(WIFI_AP_STA); // Enable both AP and STA modes
-    WiFiManager wm;
-    wm.setConfigPortalTimeout(180); // Keep portal active for 3 minutes
-    wm.startWebPortal();            // Start web server for manual configuration
-    Serial.println("Starting Wi-Fi connection process...");
-    // Try connecting to known networks
-    for (int i = 0; i < knownWiFiCount; i++)
-    {
-        Serial.print("Attempting to connect to ");
-        Serial.println(knownWiFi[i].ssid);
-        WiFi.begin(knownWiFi[i].ssid, knownWiFi[i].password);
-        // Wait for connection
-        unsigned long startAttemptTime = millis();
-        while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000)
-        {
-            wm.process(); // Allow Wi-Fi Manager to handle requests
-            delay(100);   // Short delay for responsiveness
-        }
-        if (WiFi.status() == WL_CONNECTED)
-        {
-            Serial.println("\nConnected to Wi-Fi: " + String(knownWiFi[i].ssid));
-            Serial.print("IP Address: ");
-            Serial.println(WiFi.localIP());
-            wm.stopWebPortal(); // Stop web portal
-            return true;
-        }
-    }
-    // If no connection, allow manual configuration via AP
-    Serial.println("Switching to AP mode for manual configuration...");
-    if (!wm.startConfigPortal(hostname.c_str(), "password"))
-    {
-        Serial.println("Failed to configure Wi-Fi manually. Restarting...");
-        ESP.restart();
-    }
-    // If manual configuration succeeds
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        Serial.println("Wi-Fi configured via AP mode.");
-        return true;
-    }
-    Serial.println("Wi-Fi setup failed.");
-    return false;
-}
+
 void updateSystemVersion()
 {
     if (systemPath != "")
@@ -422,107 +210,104 @@ void updateSystemVersion()
         Serial.println("System path is not defined. Cannot update version.");
     }
 }
-void performOTAUpdate(String firmwareUrl)
+// void performOTAUpdate(String firmwareUrl)
+// {
+//     HTTPClient http;
+//     http.begin(firmwareUrl); // Initialize HTTP request
+
+//     int httpCode = http.GET(); // Send GET request
+//     if (httpCode == HTTP_CODE_OK)
+//     {
+//         int contentLength = http.getSize();
+//         WiFiClient *stream = http.getStreamPtr();
+
+//         if (!Update.begin(contentLength))
+//         { // Start OTA update process
+//             Serial.println("Not enough space for OTA");
+//             return;
+//         }
+
+//         Serial.println("Starting OTA update...");
+//         size_t written = Update.writeStream(*stream);
+//         if (written == contentLength)
+//         {
+//             Serial.println("OTA update successful!");
+//         }
+//         else
+//         {
+//             Serial.println("OTA update failed!");
+//         }
+
+//         if (Update.end())
+//         {
+//             Serial.println("Rebooting...");
+//             ESP.restart();
+//         }
+//     }
+//     else
+//     {
+//         Serial.println("Failed to download firmware");
+//     }
+
+//     http.end();
+// }
+// void checkForFirmwareUpdate()
+// {
+//     String documentPath = systemPath + "/firmware" + serialNumber;
+
+//     if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
+//     {
+//         FirebaseJson json;
+//         json.setJsonData(fbdo.payload());
+//         FirebaseJsonData jsonData;
+
+//         if (json.get(jsonData, "fields/url/stringValue"))
+//         {
+//             String firmwareUrl = jsonData.stringValue;
+//             Serial.println("New firmware URL found: " + firmwareUrl);
+//             performOTAUpdate(firmwareUrl);
+//         }
+//         else
+//         {
+//             Serial.println("No firmware update available.");
+//         }
+//     }
+//     else
+//     {
+//         Serial.println("Failed to check for firmware update.");
+//         Serial.println(fbdo.errorReason());
+//     }
+// }
+void sendHeartbeat()
 {
-    HTTPClient http;
-    http.begin(firmwareUrl); // Initialize HTTP request
-
-    int httpCode = http.GET(); // Send GET request
-    if (httpCode == HTTP_CODE_OK)
+    String documentPath = systemPath;
+    FirebaseJson content;
+    content.set("fields/lastSeen/timestampValue", formatTimestamp());
+    if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "lastSeen"))
     {
-        int contentLength = http.getSize();
-        WiFiClient *stream = http.getStreamPtr();
-
-        if (!Update.begin(contentLength))
-        { // Start OTA update process
-            Serial.println("Not enough space for OTA");
-            return;
-        }
-
-        Serial.println("Starting OTA update...");
-        size_t written = Update.writeStream(*stream);
-        if (written == contentLength)
-        {
-            Serial.println("OTA update successful!");
-        }
-        else
-        {
-            Serial.println("OTA update failed!");
-        }
-
-        if (Update.end())
-        {
-            Serial.println("Rebooting...");
-            ESP.restart();
-        }
+        Serial.println("Heartbeat sent.");
+        Serial.println(formatTimestamp());
     }
     else
     {
-        Serial.println("Failed to download firmware");
-    }
-
-    http.end();
-}
-void checkForFirmwareUpdate()
-{
-    String documentPath = systemPath + "/firmware" + serialNumber;
-
-    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
-    {
-        FirebaseJson json;
-        json.setJsonData(fbdo.payload());
-        FirebaseJsonData jsonData;
-
-        if (json.get(jsonData, "fields/url/stringValue"))
-        {
-            String firmwareUrl = jsonData.stringValue;
-            Serial.println("New firmware URL found: " + firmwareUrl);
-            performOTAUpdate(firmwareUrl);
-        }
-        else
-        {
-            Serial.println("No firmware update available.");
-        }
-    }
-    else
-    {
-        Serial.println("Failed to check for firmware update.");
+        Serial.println("Failed to send heartbeat.");
         Serial.println(fbdo.errorReason());
     }
 }
 
 void setup()
 {
-    Wire.begin();
-    Serial.begin(115200);
+    Serial.begin(9600);
     delay(connectionOffset);
 
     // Attempt to connect to known Wi-Fi networks
-    if (!connectToWiFi())
+    wm.setConnectTimeout(20);
+    wm.setConfigPortalTimeout(60);
+    if (!wm.autoConnect(setupWifiName.c_str()))
     {
-        Serial.println("No known networks available. Starting WiFiManager...");
-
-        // Initialize WiFiManager
-        WiFiManager wm;
-
-        // Start the configuration portal
-        bool configPortalStarted = wm.startConfigPortal("ESP32-Config", "password");
-
-        if (configPortalStarted)
-        {
-            Serial.println("WiFi configuration successful!");
-            Serial.print("Connected to: ");
-            Serial.println(WiFi.SSID());
-            Serial.print("IP Address: ");
-            Serial.println(WiFi.localIP());
-            Serial.println(serialNumber.c_str());
-        }
-        else
-        {
-            Serial.println("Failed to configure WiFi. Restarting...");
-            delay(3000);
-            ESP.restart();
-        }
+        Serial.println("Failed to configure WiFi. Restarting...");
+        delay(3000);
+        ESP.restart();
     }
     // Initialize Firebase and other components
     config.api_key = API_KEY;
@@ -532,8 +317,10 @@ void setup()
     Firebase.reconnectWiFi(true);
     // Other initialization code...
     initializeTime();
-    fetchSystemName();
-    // Store version in Firestore
+    while(!Firebase.ready()){
+        delay(100);
+    }
+    fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
     updateSystemVersion();
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {                                                                  // Loop across all of the pins
@@ -586,18 +373,14 @@ void loop()
             if (Firebase.ready())
             {
                 tcaselect(0);
-#if defined(ESP8266) || defined(ESP32)
                 Wire.begin(SDA, SCL);
                 mcp3021.init(&Wire);
-#else
-                mcp3021.init();
-#endif
                 uint16_t result = mcp3021.read();
                 // Read the raw analog value and convert to voltage
                 float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.000);
                 // Claibrate reading
                 float sensor = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
-
+                fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
                 sendHeartbeat();
                 previousHeartbeatMillis = currentMillis;
                 ArduinoOTA.handle();
@@ -608,21 +391,20 @@ void loop()
         {
             if (Firebase.ready())
             {
-                fetchAtomizerIntervals();
-                readFirestoreConfig();
+
                 updateUnits();
                 systemLights();
                 lastConnectionCheckMillis = currentMillis;
             }
         }
 
-        // 🔹 **Check for Firmware Update Every Hour**
-        if (currentMillis - lastFirmwareCheckMillis >= FIRMWARE_CHECK_INTERVAL)
-        {
-            Serial.println("Checking for firmware updates...");
-            checkForFirmwareUpdate();
-            lastFirmwareCheckMillis = currentMillis;
-        }
+        // // 🔹 **Check for Firmware Update Every Hour**
+        // if (currentMillis - lastFirmwareCheckMillis >= FIRMWARE_CHECK_INTERVAL)
+        // {
+        //     Serial.println("Checking for firmware updates...");
+        //     checkForFirmwareUpdate();
+        //     lastFirmwareCheckMillis = currentMillis;
+        // }
     }
     else
     {
@@ -633,12 +415,11 @@ void loop()
         while (WiFi.status() != WL_CONNECTED)
         {
             currentMillisWiFi = millis();
-            connectToWiFi();
             delay(1000); // Retry every second
-
-            if (currentMillisWiFi - wifiTimeoutCheck >= WIFI_RESET_INTERVAL)
-            {
-                esp_restart();
+            if (!wm.autoConnect(setupWifiName.c_str())){
+                Serial.println("Failed to configure WiFi. Restarting...");
+                delay(3000);
+                ESP.restart();
             }
         }
 

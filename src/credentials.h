@@ -2,7 +2,7 @@
 #define CREDENTIALS_H
 
 //Serial number and delays for system
-String serialNumber = "MR1234567890"; // Unique serial number for each system
+String serialNumber = "SME102982345"; // Unique serial number for each system
 
 // Known Wi-Fi Networks
 struct WiFiCredentials {
@@ -10,13 +10,7 @@ struct WiFiCredentials {
     const char* password;
 };
 
-const WiFiCredentials knownWiFi[] = {
-    {"Devil_ 4G", "Hema@2442"},
-    {"gladwin22", "Farmer24"},
-    {"Verizon_B3JPTT", "update-fop6-cab"}
-    
-};
-const int knownWiFiCount = sizeof(knownWiFi) / sizeof(knownWiFi[0]);
+String setupWifiName = "SkyAcres Setup " + serialNumber;
 
 // Firebase Credentials
 #define API_KEY "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI"

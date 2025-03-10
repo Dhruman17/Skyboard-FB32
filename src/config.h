@@ -3,6 +3,8 @@
 #include <addons/TokenHelper.h>
 #include <time.h>
 
+const String firmware_version = "1.2";
+
 // Variables to track timing
 // Pin Definitions
 #define NUMBER_OF_UNITS 3
@@ -30,15 +32,11 @@ const unsigned long FIRMWARE_CHECK_INTERVAL = 3600; // Check every hour
 // Serial number
 extern String serialNumber;
 
-// Variables for system name and units
-extern String systemPath;
-extern String unitNames[3];
-extern String systemName;
 
-bool unitsEnabled[3] = {false, false, false}; 
+bool unitsEnabled[NUMBER_OF_UNITS] = {false, false, false}; 
 bool previousWaterLevelStates[3] = {false, false, false};
 bool waterLevelStates[3] = {false, false, false};
-long atomizerOnIntervals[3] = {5000, 5000, 5000};
+long atomizerOnIntervals[NUMBER_OF_UNITS] = {5000, 5000, 5000};
 long atomizerOffIntervals[3] = {5000, 5000, 5000};
 bool atomStates[3] = {false, false, false};
 unsigned long previousMillis[3] = {0, 0, 0};

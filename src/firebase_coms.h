@@ -1,0 +1,166 @@
+#ifndef FIREBASE_COMS
+#define FIREBASE_COMS
+#include <Firebase_ESP_Client.h>
+#include <credentials.h>
+#include <config.h>
+#define FIREBASEJSON_USE_PSRAM
+
+const String systemPath = "Systems/" + serialNumber;
+
+
+time_t parseTime(const char *timestamp)
+{
+    struct tm tm;
+    strptime(timestamp, "%Y-%m-%dT%H:%M:%S", &tm);
+    tm.tm_year = 70; // Epoch year
+    tm.tm_mon = 0;   // January
+    tm.tm_mday = 1;  // 1st of the month
+    return mktime(&tm);
+}
+// Function to format timestamp correctly for Firebase
+String formatTimestamp()
+{
+    time_t now;
+    struct tm *tm_info;
+    char buffer[30];
+    time(&now);
+    tm_info = localtime(&now);
+    strftime(buffer, sizeof(buffer), "%Y-%m-%dT%H:%M:%S", tm_info);
+    return String(buffer) + "Z";
+}
+
+void fetchFirebaseSystemData(FirebaseData* pFBDO, String *pSystemName, time_t* plightOnTime, time_t* plightOffTime, bool* plightMasterSwitch, 
+    bool* ptimeCycleEnabled, String unitNames[NUMBER_OF_UNITS]){
+    if (!pFBDO || !pSystemName || !plightOnTime || !plightOffTime || !plightMasterSwitch || !ptimeCycleEnabled) {
+        Serial.println("Null pointer detected!");
+        return;
+    }
+    if (Firebase.Firestore.getDocument(pFBDO, FIREBASE_PROJECT_ID, "", systemPath.c_str())){
+        FirebaseJson json;
+        json.setJsonData(pFBDO->payload());
+        FirebaseJsonData jsonData;
+        Serial.println("Got payload");
+
+        if (json.get(jsonData, "fields/systeName/stringValue")){
+            String systemName = jsonData.stringValue;
+            *pSystemName = systemName;
+            for(int i = 0; i< NUMBER_OF_UNITS; i++){
+                String unitName = systemName + "-" + String(i);
+                unitNames[i] = unitName;
+            }
+            Serial.println("The System name from Fetch System Name is: " + *pSystemName);
+        }
+        else{
+            Serial.println("System name not found.");
+        }
+        // Fetch Light_Interval_On_Time
+        if (json.get(jsonData, "fields/Light_Interval_On_Time/timestampValue"))
+        {
+            *plightOnTime = parseTime(jsonData.stringValue.c_str());
+            Serial.println("The On Time is: " + jsonData.stringValue);
+        }
+        else
+        {
+            Serial.println("Light_Interval_On_Time not found or not a timestamp");
+        }
+        // Fetch Light_Interval_Off_Time
+        if (json.get(jsonData, "fields/Light_Interval_Off_Time/timestampValue"))
+        {
+            *plightOffTime = parseTime(jsonData.stringValue.c_str());
+            Serial.println("The Off Time is: " +jsonData.stringValue);
+        }
+        else
+        {
+            Serial.println("Light_Interval_Off_Time not found or not a timestamp");
+        }
+        // Fetch Light_Master_Switch
+        if (json.get(jsonData, "fields/Light_Master_Switch/booleanValue"))
+        {
+            *plightMasterSwitch = jsonData.boolValue;
+            Serial.println("Master Switch is: " + jsonData.stringValue);
+        }
+        else
+        {
+            Serial.println("Light_Master_Switch not found or not a boolean");
+        }
+        // Fetch Light_Time_Cycle_Switch
+        if (json.get(jsonData, "fields/Light_Time_Cycle_Switch/booleanValue"))
+        {
+            *ptimeCycleEnabled = jsonData.boolValue;
+            Serial.println("Time Cycle Switch is: " + jsonData.stringValue);
+        }
+        else
+        {
+            Serial.println("Light_Time_Cycle_Switch not found or not a boolean");
+        }
+        for (int i = 0; i < NUMBER_OF_UNITS; i++)
+        {
+                if (json.get(jsonData, "/units/" + unitNames[i] + "/fields/unitState/booleanValue"))
+                {
+                    bool newState = jsonData.boolValue;
+                    if (unitsEnabled[i] != newState)
+                    {
+                        unitsEnabled[i] = newState;
+                        if (!unitsEnabled[i])
+                        {
+                            Serial.println("Turning off atomizer for " + String(unitNames[i]));
+                            ledcWrite(i, 0);
+                        }
+                    }
+                }
+                if (jsonData, "/units/" + unitNames[i] + "/fields/Interval_On/integerValue")
+                {
+                    atomizerOnIntervals[i] = jsonData.intValue * 1000;
+                }
+                if (jsonData, "/units/" + unitNames[i] + "/fields/Interval_Off/integerValue")
+                {
+                    atomizerOffIntervals[i] = jsonData.intValue * 1000;
+                }
+            }
+    }
+    else{
+        Serial.println("Failed to fetch data.");
+        Serial.println(pFBDO->errorReason());
+    }
+}
+
+void fetchFirebaseUnitData(FirebaseData* pFBDO, bool runitsEnabled[NUMBER_OF_UNITS], long rAtomizerOnIntervals[NUMBER_OF_UNITS], long rAtomizerOffIntervals[NUMBER_OF_UNITS], String unitNames[NUMBER_OF_UNITS]){
+    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    {
+        String documentPath = systemPath + "/units/" + unitNames[i];
+        if (Firebase.Firestore.getDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
+        {
+            FirebaseJson json;
+            json.setJsonData(pFBDO->payload());
+            FirebaseJsonData jsonData;
+            if (json.get(jsonData, "fields/unitState/booleanValue"))
+            {
+                bool newState = jsonData.boolValue;
+                if (unitsEnabled[i] != newState)
+                {
+                    unitsEnabled[i] = newState;
+                    if (!unitsEnabled[i])
+                    {
+                        Serial.println("Turning off atomizer for " + String(unitNames[i]));
+                        ledcWrite(i, 0);
+                    }
+                }
+            }
+            if (json.get(jsonData, "fields/Interval_On/integerValue"))
+            {
+                atomizerOnIntervals[i] = jsonData.intValue * 1000;
+            }
+            if (json.get(jsonData, "fields/Interval_Off/integerValue"))
+            {
+                atomizerOffIntervals[i] = jsonData.intValue * 1000;
+            }
+        }
+        else
+        {
+            Serial.println("Failed to get document for " + String(unitNames[i]));
+            Serial.println(pFBDO->errorReason());
+        }
+    }
+
+}
+#endif // 
