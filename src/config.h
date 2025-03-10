@@ -3,7 +3,7 @@
 #include <addons/TokenHelper.h>
 #include <time.h>
 
-const String firmware_version = "1.2";
+const double firmware_version = 1.3;
 
 // Variables to track timing
 // Pin Definitions
