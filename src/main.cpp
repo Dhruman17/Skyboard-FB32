@@ -34,6 +34,8 @@ String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes
 // Generate the random delays
 int randomDelay = random(100, 10000);
 int connectionOffset = 1000 + randomDelay;
+bool wifiConnected = false; // Track Wi-Fi connection status
+bool configPortalRunning = false;
 
 WiFiManager wm;
 
@@ -176,10 +178,6 @@ void updateUnits()
                 atomStates[i] = !atomStates[i];                                   // Record the atomizer state as the opposite
                 ledcWrite(i, atomStates[i] ? PWM_ATOMIZER_ON : PWM_ATOMIZER_OFF); // Send the atomizer signal according to this opposite state
                 if (!atomStates[i])
-                {
-                    updateWaterLevelStates(i);
-                } // read the water level state only if the atomizers are off
-                if (atomStates[i] == false) // If the i-th atomizer is off,
                 {
                     updateWaterLevelStates(i);
                 } // read the water level state only if the atomizers are off
@@ -500,7 +498,9 @@ void setup()
         else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
         else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
         else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
+#ifdef ENABLE_ARDUINO_OTA
     ArduinoOTA.begin();
+#endif
 }
 
 void loop()
