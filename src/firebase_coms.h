@@ -140,5 +140,22 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
         }
     }
 }
+void sendECValueToFirebase(FirebaseData *pFBDO, float ecValue)
+{
+    String documentPath = systemPath; // Root system path for EC sensor data
+    FirebaseJson content;
+    content.set("fields/ECValue/doubleValue", ecValue);
+    content.set("fields/ECLastUpdated/timestampValue", formatTimestamp());
+
+    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "ECValue,ECLastUpdated"))
+    {
+        Serial.println("EC value successfully sent to Firebase.");
+    }
+    else
+    {
+        Serial.print("Failed to send EC value: ");
+        Serial.println(pFBDO->errorReason());
+    }
+}
 
 #endif //
