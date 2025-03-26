@@ -164,147 +164,148 @@ void systemLights()
 //       }
 //     }
 //   }
-// Function to read water level sensors and update states
-void updateWaterLevelStates()
-{
-    // tcaselect(i * 2);
-    // delay(100);
-    //  uint16_t result = mcp3021.read();
-    //  float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-    //  Serial.print("Channel ");
-    //  Serial.print(i);
-    //  Serial.print(" | Raw ADC: ");
-    //  Serial.print(result);
-    //  Serial.print(" | Voltage: ");
-    //  Serial.println(floatSignal, 3);
-    //  if (floatSignal < 0.5)
-    //  {
-    //      waterLevelStates[i] = false;
-    //  }
-    //  else
-    //  {
-    //      waterLevelStates[i] = true;
-    //  }
-    //  if (waterLevelStates[i] != previousWaterLevelStates[i])
-    //  {
-    //      String documentPath = systemPath + "/units/" + unitNames[i];
-    //      FirebaseJson content;
-    //      content.set("fields/waterLevelState/booleanValue", waterLevelStates[i]);
-    //      if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-    //      {
-    //          Serial.println("Updated water level state for " + unitNames[i]);
-    //          previousWaterLevelStates[i] = waterLevelStates[i];
-    //      }
-    //      else
-    //      {
-    //          Serial.println("Failed to update water level state for " + unitNames[i]);
-    //      }
-    //  }
-    // delay(100);
 
-    tcaselect(0);
-    // delay(100);
-    uint16_t result = mcp3021.read();
-    float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-    Serial.print("Channel ");
-    Serial.print(0);
-    Serial.print(" | Raw ADC: ");
-    Serial.print(result);
-    Serial.print(" | Voltage: ");
-    Serial.println(floatSignal, 3);
-    if (floatSignal < 0.5)
-    {
-        waterLevelStates[0] = false;
-    }
-    else
-    {
-        waterLevelStates[0] = true;
-    }
-    if (waterLevelStates[0] != previousWaterLevelStates[0])
-    {
-        String documentPath = systemPath + "/units/" + unitNames[0];
-        FirebaseJson content;
-        content.set("fields/waterLevelState/booleanValue", waterLevelStates[0]);
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-        {
-            Serial.println("Updated water level state for " + unitNames[0]);
-            previousWaterLevelStates[0] = waterLevelStates[0];
-        }
-        else
-        {
-            Serial.println("Failed to update water level state for " + unitNames[0]);
-        }
-    }
-    // delay(100);
-    tcaselect(2);
-    // delay(100);
-    result = mcp3021.read();
-    floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-    Serial.print("Channel ");
-    Serial.print(2);
-    Serial.print(" | Raw ADC: ");
-    Serial.print(result);
-    Serial.print(" | Voltage: ");
-    Serial.println(floatSignal, 3);
-    if (floatSignal < 0.5)
-    {
-        waterLevelStates[1] = false;
-    }
-    else
-    {
-        waterLevelStates[1] = true;
-    }
-    if (waterLevelStates[1] != previousWaterLevelStates[1])
-    {
-        String documentPath = systemPath + "/units/" + unitNames[1];
-        FirebaseJson content;
-        content.set("fields/waterLevelState/booleanValue", waterLevelStates[1]);
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-        {
-            Serial.println("Updated water level state for " + unitNames[1]);
-            previousWaterLevelStates[1] = waterLevelStates[1];
-        }
-        else
-        {
-            Serial.println("Failed to update water level state for " + unitNames[1]);
-        }
-    }
-    // delay(100);
-    tcaselect(4);
-    // delay(100);
-    result = mcp3021.read();
-    floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-    Serial.print("Channel ");
-    Serial.print(4);
-    Serial.print(" | Raw ADC: ");
-    Serial.print(result);
-    Serial.print(" | Voltage: ");
-    Serial.println(floatSignal, 3);
-    if (floatSignal < 0.5)
-    {
-        waterLevelStates[2] = false;
-    }
-    else
-    {
-        waterLevelStates[2] = true;
-    }
-    if (waterLevelStates[2] != previousWaterLevelStates[2])
-    {
-        String documentPath = systemPath + "/units/" + unitNames[2];
-        FirebaseJson content;
-        content.set("fields/waterLevelState/booleanValue", waterLevelStates[2]);
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-        {
-            Serial.println("Updated water level state for " + unitNames[2]);
-            previousWaterLevelStates[2] = waterLevelStates[2];
-        }
-        else
-        {
-            Serial.println("Failed to update water level state for " + unitNames[2]);
-        }
-    }
-    delay(1000);
-}
+// Function to read water level sensors and update states
+// void updateWaterLevelStates()
+// {
+//     // tcaselect(i * 2);
+//     // delay(100);
+//     //  uint16_t result = mcp3021.read();
+//     //  float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
+//     //  Serial.print("Channel ");
+//     //  Serial.print(i);
+//     //  Serial.print(" | Raw ADC: ");
+//     //  Serial.print(result);
+//     //  Serial.print(" | Voltage: ");
+//     //  Serial.println(floatSignal, 3);
+//     //  if (floatSignal < 0.5)
+//     //  {
+//     //      waterLevelStates[i] = false;
+//     //  }
+//     //  else
+//     //  {
+//     //      waterLevelStates[i] = true;
+//     //  }
+//     //  if (waterLevelStates[i] != previousWaterLevelStates[i])
+//     //  {
+//     //      String documentPath = systemPath + "/units/" + unitNames[i];
+//     //      FirebaseJson content;
+//     //      content.set("fields/waterLevelState/booleanValue", waterLevelStates[i]);
+//     //      if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
+//     //      {
+//     //          Serial.println("Updated water level state for " + unitNames[i]);
+//     //          previousWaterLevelStates[i] = waterLevelStates[i];
+//     //      }
+//     //      else
+//     //      {
+//     //          Serial.println("Failed to update water level state for " + unitNames[i]);
+//     //      }
+//     //  }
+//     // delay(100);
+
+//     tcaselect(0);
+//     // delay(100);
+//     uint16_t result = mcp3021.read();
+//     float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
+//     Serial.print("Channel ");
+//     Serial.print(0);
+//     Serial.print(" | Raw ADC: ");
+//     Serial.print(result);
+//     Serial.print(" | Voltage: ");
+//     Serial.println(floatSignal, 3);
+//     if (floatSignal < 0.5)
+//     {
+//         waterLevelStates[0] = false;
+//     }
+//     else
+//     {
+//         waterLevelStates[0] = true;
+//     }
+//     if (waterLevelStates[0] != previousWaterLevelStates[0])
+//     {
+//         String documentPath = systemPath + "/units/" + unitNames[0];
+//         FirebaseJson content;
+//         content.set("fields/waterLevelState/booleanValue", waterLevelStates[0]);
+//         if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
+//         {
+//             Serial.println("Updated water level state for " + unitNames[0]);
+//             previousWaterLevelStates[0] = waterLevelStates[0];
+//         }
+//         else
+//         {
+//             Serial.println("Failed to update water level state for " + unitNames[0]);
+//         }
+//     }
+//     // delay(100);
+//     tcaselect(2);
+//     // delay(100);
+//     result = mcp3021.read();
+//     floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
+//     Serial.print("Channel ");
+//     Serial.print(2);
+//     Serial.print(" | Raw ADC: ");
+//     Serial.print(result);
+//     Serial.print(" | Voltage: ");
+//     Serial.println(floatSignal, 3);
+//     if (floatSignal < 0.5)
+//     {
+//         waterLevelStates[1] = false;
+//     }
+//     else
+//     {
+//         waterLevelStates[1] = true;
+//     }
+//     if (waterLevelStates[1] != previousWaterLevelStates[1])
+//     {
+//         String documentPath = systemPath + "/units/" + unitNames[1];
+//         FirebaseJson content;
+//         content.set("fields/waterLevelState/booleanValue", waterLevelStates[1]);
+//         if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
+//         {
+//             Serial.println("Updated water level state for " + unitNames[1]);
+//             previousWaterLevelStates[1] = waterLevelStates[1];
+//         }
+//         else
+//         {
+//             Serial.println("Failed to update water level state for " + unitNames[1]);
+//         }
+//     }
+//     // delay(100);
+//     tcaselect(4);
+//     // delay(100);
+//     result = mcp3021.read();
+//     floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
+//     Serial.print("Channel ");
+//     Serial.print(4);
+//     Serial.print(" | Raw ADC: ");
+//     Serial.print(result);
+//     Serial.print(" | Voltage: ");
+//     Serial.println(floatSignal, 3);
+//     if (floatSignal < 0.5)
+//     {
+//         waterLevelStates[2] = false;
+//     }
+//     else
+//     {
+//         waterLevelStates[2] = true;
+//     }
+//     if (waterLevelStates[2] != previousWaterLevelStates[2])
+//     {
+//         String documentPath = systemPath + "/units/" + unitNames[2];
+//         FirebaseJson content;
+//         content.set("fields/waterLevelState/booleanValue", waterLevelStates[2]);
+//         if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
+//         {
+//             Serial.println("Updated water level state for " + unitNames[2]);
+//             previousWaterLevelStates[2] = waterLevelStates[2];
+//         }
+//         else
+//         {
+//             Serial.println("Failed to update water level state for " + unitNames[2]);
+//         }
+//     }
+//     delay(1000);
+// }
 
 // void updateECStates(){
 //     tcaselect(0);
@@ -315,6 +316,44 @@ void updateWaterLevelStates()
 //     // Claibrate reading
 //     float sensor = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
 // }
+// Function to read EC sensor value from MCP3021 ADC
+void readECSensorValue()
+{
+    tcaselect(1);
+    // Wire.begin(SDA, SCL);
+    // mcp3021.init(&Wire);
+    uint16_t result = mcp3021.read();
+
+    float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.0);
+    float calibratedEC = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc); // your calibration formula
+
+    // sensor::ec = calibratedEC * sensor::ecCalibration; // Store calibrated EC value in sensor namespace
+    Serial.print("EC sensor 1 reading: ");
+    Serial.print(calibratedEC);
+    // delay(100);
+    tcaselect(3);
+    // Wire.begin(SDA, SCL);
+    // mcp3021.init(&Wire);
+    uint16_t result2 = mcp3021.read();
+
+    float rawEc2 = (mcp3021.toVoltage(result2, 3300) / 1000.0);
+    float calibratedEC2 = 0.727 - (0.365 * rawEc2) + (0.416 * rawEc2 * rawEc2); // your calibration formula
+
+    Serial.print("  |  EC sensor 2 reading: ");
+    Serial.print(calibratedEC2);
+    // delay(100);
+    tcaselect(5);
+    // Wire.begin(SDA, SCL);
+    // mcp3021.init(&Wire);
+    uint16_t result3 = mcp3021.read();
+
+    float rawEc3 = (mcp3021.toVoltage(result3, 3300) / 1000.0);
+    float calibratedEC3 = 0.727 - (0.365 * rawEc3) + (0.416 * rawEc3 * rawEc3); // your calibration formula
+
+    Serial.print("  |  EC sensor 3 reading: ");
+    Serial.print(calibratedEC3);
+    delay(100);
+}
 
 void updateUnits()
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
@@ -333,6 +372,7 @@ void updateUnits()
                 {
                     // updateWaterLevelStates();
                     // readWaterLevel();
+                    readECSensorValue();
                 } // read the water level state only if the atomizers are off
                 previousMillis[i] = currentMillis; // reset the time counter
             }
@@ -585,24 +625,6 @@ void sendHeartbeat()
         Serial.println(fbdo.errorReason());
     }
 }
-// Function to read EC sensor value from MCP3021 ADC
-float readECSensorValue()
-{
-    tcaselect(0);
-    Wire.begin(SDA, SCL);
-    mcp3021.init(&Wire);
-    uint16_t result = mcp3021.read();
-
-    float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.0);
-    float calibratedEC = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc); // your calibration formula
-
-    sensor::ec = calibratedEC * sensor::ecCalibration; // Store calibrated EC value in sensor namespace
-
-    Serial.print("EC sensor reading: ");
-    Serial.println(sensor::ec);
-
-    return sensor::ec;
-}
 
 void setup()
 {
@@ -690,8 +712,9 @@ void loop()
         {
             if (Firebase.ready())
             {
-                float currentEC = readECSensorValue();   // Read EC value
-                sendECValueToFirebase(&fbdo, currentEC); // Send EC value to Firebase
+                // float currentEC = readECSensorValue();   // Read EC value
+                // Serial.println(currentEC);
+                // sendECValueToFirebase(&fbdo, currentEC); // Send EC value to Firebase
                 fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
                 fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
                 Serial.println(unitsEnabled[0]);
