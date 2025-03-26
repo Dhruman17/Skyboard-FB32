@@ -319,40 +319,27 @@ void systemLights()
 // Function to read EC sensor value from MCP3021 ADC
 void readECSensorValue()
 {
-    tcaselect(1);
-    // Wire.begin(SDA, SCL);
-    // mcp3021.init(&Wire);
-    uint16_t result = mcp3021.read();
+    float calibratedECs[NUMBER_OF_UNITS];
+    int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
 
-    float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.0);
-    float calibratedEC = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc); // your calibration formula
+    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    {
+        tcaselect(tcaChannels[i]);
+        uint16_t result = mcp3021.read();
+        float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.0);
+        float calibratedEC = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
+        calibratedECs[i] = calibratedEC;
 
-    // sensor::ec = calibratedEC * sensor::ecCalibration; // Store calibrated EC value in sensor namespace
-    Serial.print("EC sensor 1 reading: ");
-    Serial.print(calibratedEC);
-    // delay(100);
-    tcaselect(3);
-    // Wire.begin(SDA, SCL);
-    // mcp3021.init(&Wire);
-    uint16_t result2 = mcp3021.read();
+        Serial.print("EC sensor ");
+        Serial.print(i + 1);
+        Serial.print(" reading: ");
+        Serial.println(calibratedEC);
 
-    float rawEc2 = (mcp3021.toVoltage(result2, 3300) / 1000.0);
-    float calibratedEC2 = 0.727 - (0.365 * rawEc2) + (0.416 * rawEc2 * rawEc2); // your calibration formula
-
-    Serial.print("  |  EC sensor 2 reading: ");
-    Serial.print(calibratedEC2);
-    // delay(100);
-    tcaselect(5);
-    // Wire.begin(SDA, SCL);
-    // mcp3021.init(&Wire);
-    uint16_t result3 = mcp3021.read();
-
-    float rawEc3 = (mcp3021.toVoltage(result3, 3300) / 1000.0);
-    float calibratedEC3 = 0.727 - (0.365 * rawEc3) + (0.416 * rawEc3 * rawEc3); // your calibration formula
-
-    Serial.print("  |  EC sensor 3 reading: ");
-    Serial.print(calibratedEC3);
-    delay(100);
+        if (!unitNames[i].isEmpty())
+        {
+            sendUnitECValueToFirebase(&fbdo, unitNames[i], calibratedEC);
+        }
+    }
 }
 
 void updateUnits()
@@ -719,6 +706,7 @@ void loop()
                 fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
                 Serial.println(unitsEnabled[0]);
                 sendHeartbeat();
+                readECSensorValue(); // This already sends to Firebase
                 previousHeartbeatMillis = currentMillis;
                 ArduinoOTA.handle();
             }
