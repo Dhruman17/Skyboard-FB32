@@ -156,5 +156,21 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
         Serial.println("Failed to update EC value for " + unitName + ": " + pFBDO->errorReason());
     }
 }
+void sendUnitWaterLevelToFirebase(FirebaseData *pFBDO, const String &unitName, float waterLevel)
+{
+    String documentPath = systemPath + "/units/" + unitName;
+    FirebaseJson content;
+    content.set("fields/Cap_Water_Level/doubleValue", waterLevel);
+    content.set("fields/Cap_Water_Updated/timestampValue", formatTimestamp());
+
+    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "Cap_Water_Level,Cap_Water_Updated"))
+    {
+        Serial.println("Water level updated for " + unitName);
+    }
+    else
+    {
+        Serial.println("Failed to update water level for " + unitName + ": " + pFBDO->errorReason());
+    }
+}
 
 #endif //

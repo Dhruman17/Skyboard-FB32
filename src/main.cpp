@@ -316,6 +316,58 @@ void systemLights()
 //     // Claibrate reading
 //     float sensor = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
 // }
+
+void readWaterLevel()
+{
+    int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
+
+    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    {
+        tcaselect(tcaChannels[i]);
+
+        FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
+        FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+
+        delay(100); // Wait for measurement to complete
+        uint16_t value[2];
+
+        if (!FDC.readMeasurement(MEASURMENT, value))
+        {
+            int16_t msb = (int16_t)value[0];
+            int32_t capacitance = ((int32_t)457) * msb;
+            capacitance /= 1000;
+            capacitance += ((int32_t)3028) * capdac;
+            measuredCap = (float)capacitance / 1000.0; // in pF
+
+            waterLevel = (measuredCap - 1.58) / 0.107;
+
+            Serial.print("Unit ");
+            Serial.print(i);
+            Serial.print(" | Capacitance: ");
+            Serial.print(measuredCap, 4);
+            Serial.print(" pF | Water Level: ");
+            Serial.println(waterLevel);
+
+            if (!unitNames[i].isEmpty())
+            {
+                sendUnitWaterLevelToFirebase(&fbdo, unitNames[i], waterLevel);
+            }
+
+            // Adjust CAPDAC if needed
+            if (msb > UPPER_BOUND)
+            {
+                if (capdac < FDC1004_CAPDAC_MAX)
+                    capdac++;
+            }
+            else if (msb < LOWER_BOUND)
+            {
+                if (capdac > 0)
+                    capdac--;
+            }
+        }
+    }
+}
+
 // Function to read EC sensor value from MCP3021 ADC
 void readECSensorValue()
 {
@@ -707,6 +759,7 @@ void loop()
                 Serial.println(unitsEnabled[0]);
                 sendHeartbeat();
                 readECSensorValue(); // This already sends to Firebase
+                readWaterLevel();
                 previousHeartbeatMillis = currentMillis;
                 ArduinoOTA.handle();
             }
