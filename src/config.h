@@ -22,10 +22,6 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 #define PWM_ATOMIZER_ON 9
 #define PWM_ATOMIZER_OFF 0
 #define TCAADDR 0x77
-#define UPPER_BOUND 0X4000
-#define LOWER_BOUND (-1 * UPPER_BOUND)
-#define CHANNEL 2
-#define MEASURMENT 0
 // Timing Configurations
 const unsigned long INTERVAL_30_SECONDS = 30000;
 const unsigned long WIFI_RESET_INTERVAL = 60000;

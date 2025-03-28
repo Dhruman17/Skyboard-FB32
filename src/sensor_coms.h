@@ -1,6 +1,12 @@
 #ifndef SENSOR_COMS
 #define SENSOR_COMS
 #include "Wire.h"
+
+#define UPPER_BOUND 0X4000 // max readout capacitance
+#define LOWER_BOUND (-1 * UPPER_BOUND)
+#define CHANNEL 2    // channel to be read
+#define MEASURMENT 0 // measurment channel
+
 void tcaselect(uint8_t i)
 {
     if (i > 7)

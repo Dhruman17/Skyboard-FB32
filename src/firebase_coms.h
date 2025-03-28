@@ -156,7 +156,7 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
         Serial.println("Failed to update EC value for " + unitName + ": " + pFBDO->errorReason());
     }
 }
-void sendUnitWaterLevelToFirebase(FirebaseData *pFBDO, const String &unitName, float waterLevel)
+void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, float waterLevel)
 {
     String documentPath = systemPath + "/units/" + unitName;
     FirebaseJson content;

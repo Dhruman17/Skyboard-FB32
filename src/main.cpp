@@ -129,254 +129,117 @@ void systemLights()
         }
     }
 }
-// void readWaterLevel(){
-//     tcaselect(2);
-//     FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
-//     FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
-
-//     //wait for completion
-//     delay(100);
-//     uint16_t value[2];
-//     if (! FDC.readMeasurement(MEASURMENT, value))
-//     {
-//       int16_t msb = (int16_t) value[0];
-//       int32_t capacitance = ((int32_t)457) * ((int32_t)msb); //in attofarads
-//       capacitance /= 1000;   //in femtofarads
-//       capacitance += ((int32_t)3028) * ((int32_t)capdac);
-//       measuredCap = (float)capacitance/1000; // in pF
-//       //Blynk.virtualWrite(V23, measuredCap);
-//       Serial.print((((float)capacitance/1000)),4);
-//       Serial.print("  pf, ");
-//       waterLevel = (measuredCap-1.58)/0.107;
-//       //Blynk.virtualWrite(V24, waterLevel);
-//       Serial.print(" |L = ");
-//       Serial.print(waterLevel);
-
-//       if (msb > UPPER_BOUND)               // adjust capdac accordingly
-//       {
-//         if (capdac < FDC1004_CAPDAC_MAX)
-//         capdac++;
-//       }
-//       else if (msb < LOWER_BOUND)
-//       {
-//         if (capdac > 0)
-//         capdac--;
-//       }
-//     }
-//   }
-
-// Function to read water level sensors and update states
-// void updateWaterLevelStates()
-// {
-//     // tcaselect(i * 2);
-//     // delay(100);
-//     //  uint16_t result = mcp3021.read();
-//     //  float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-//     //  Serial.print("Channel ");
-//     //  Serial.print(i);
-//     //  Serial.print(" | Raw ADC: ");
-//     //  Serial.print(result);
-//     //  Serial.print(" | Voltage: ");
-//     //  Serial.println(floatSignal, 3);
-//     //  if (floatSignal < 0.5)
-//     //  {
-//     //      waterLevelStates[i] = false;
-//     //  }
-//     //  else
-//     //  {
-//     //      waterLevelStates[i] = true;
-//     //  }
-//     //  if (waterLevelStates[i] != previousWaterLevelStates[i])
-//     //  {
-//     //      String documentPath = systemPath + "/units/" + unitNames[i];
-//     //      FirebaseJson content;
-//     //      content.set("fields/waterLevelState/booleanValue", waterLevelStates[i]);
-//     //      if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-//     //      {
-//     //          Serial.println("Updated water level state for " + unitNames[i]);
-//     //          previousWaterLevelStates[i] = waterLevelStates[i];
-//     //      }
-//     //      else
-//     //      {
-//     //          Serial.println("Failed to update water level state for " + unitNames[i]);
-//     //      }
-//     //  }
-//     // delay(100);
-
-//     tcaselect(0);
-//     // delay(100);
-//     uint16_t result = mcp3021.read();
-//     float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-//     Serial.print("Channel ");
-//     Serial.print(0);
-//     Serial.print(" | Raw ADC: ");
-//     Serial.print(result);
-//     Serial.print(" | Voltage: ");
-//     Serial.println(floatSignal, 3);
-//     if (floatSignal < 0.5)
-//     {
-//         waterLevelStates[0] = false;
-//     }
-//     else
-//     {
-//         waterLevelStates[0] = true;
-//     }
-//     if (waterLevelStates[0] != previousWaterLevelStates[0])
-//     {
-//         String documentPath = systemPath + "/units/" + unitNames[0];
-//         FirebaseJson content;
-//         content.set("fields/waterLevelState/booleanValue", waterLevelStates[0]);
-//         if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-//         {
-//             Serial.println("Updated water level state for " + unitNames[0]);
-//             previousWaterLevelStates[0] = waterLevelStates[0];
-//         }
-//         else
-//         {
-//             Serial.println("Failed to update water level state for " + unitNames[0]);
-//         }
-//     }
-//     // delay(100);
-//     tcaselect(2);
-//     // delay(100);
-//     result = mcp3021.read();
-//     floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-//     Serial.print("Channel ");
-//     Serial.print(2);
-//     Serial.print(" | Raw ADC: ");
-//     Serial.print(result);
-//     Serial.print(" | Voltage: ");
-//     Serial.println(floatSignal, 3);
-//     if (floatSignal < 0.5)
-//     {
-//         waterLevelStates[1] = false;
-//     }
-//     else
-//     {
-//         waterLevelStates[1] = true;
-//     }
-//     if (waterLevelStates[1] != previousWaterLevelStates[1])
-//     {
-//         String documentPath = systemPath + "/units/" + unitNames[1];
-//         FirebaseJson content;
-//         content.set("fields/waterLevelState/booleanValue", waterLevelStates[1]);
-//         if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-//         {
-//             Serial.println("Updated water level state for " + unitNames[1]);
-//             previousWaterLevelStates[1] = waterLevelStates[1];
-//         }
-//         else
-//         {
-//             Serial.println("Failed to update water level state for " + unitNames[1]);
-//         }
-//     }
-//     // delay(100);
-//     tcaselect(4);
-//     // delay(100);
-//     result = mcp3021.read();
-//     floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-//     Serial.print("Channel ");
-//     Serial.print(4);
-//     Serial.print(" | Raw ADC: ");
-//     Serial.print(result);
-//     Serial.print(" | Voltage: ");
-//     Serial.println(floatSignal, 3);
-//     if (floatSignal < 0.5)
-//     {
-//         waterLevelStates[2] = false;
-//     }
-//     else
-//     {
-//         waterLevelStates[2] = true;
-//     }
-//     if (waterLevelStates[2] != previousWaterLevelStates[2])
-//     {
-//         String documentPath = systemPath + "/units/" + unitNames[2];
-//         FirebaseJson content;
-//         content.set("fields/waterLevelState/booleanValue", waterLevelStates[2]);
-//         if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "waterLevelState"))
-//         {
-//             Serial.println("Updated water level state for " + unitNames[2]);
-//             previousWaterLevelStates[2] = waterLevelStates[2];
-//         }
-//         else
-//         {
-//             Serial.println("Failed to update water level state for " + unitNames[2]);
-//         }
-//     }
-//     delay(1000);
-// }
-
-// void updateECStates(){
-//     tcaselect(0);
-//     mcp3021.init(&Wire);
-//     uint16_t result = mcp3021.read();
-//     // Read the raw analog value and convert to voltage
-//     float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.000);
-//     // Claibrate reading
-//     float sensor = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
-// }
-
 void readWaterLevel()
 {
-    int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4}; // Adjust TCA channels if needed
+    tcaselect(0);
+    FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
+    FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
 
-    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    // wait for completion
+    delay(100);
+    uint16_t value[2];
+    if (!FDC.readMeasurement(MEASURMENT, value))
     {
-        tcaselect(tcaChannels[i]); // Select the TCA9548A channel
-        delay(10);                 // Short delay to ensure channel switch is stable
-
-        // Configure and trigger measurement
-        if (!FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac))
+        int16_t msb = (int16_t)value[0];
+        int32_t capacitance = ((int32_t)457) * ((int32_t)msb); // in attofarads
+        capacitance /= 1000;                                   // in femtofarads
+        capacitance += ((int32_t)3028) * ((int32_t)capdac);
+        measuredCap = (float)capacitance / 1000; // in pF
+        // Blynk.virtualWrite(V23, measuredCap);
+        Serial.print((((float)capacitance / 1000)), 4);
+        Serial.print("  pf, ");
+        waterLevel = (measuredCap - 1.58) / 0.107;
+        // Blynk.virtualWrite(V24, waterLevel);
+        Serial.print(" |L = ");
+        Serial.print(waterLevel);
+        if (!unitNames[0].isEmpty())
         {
-            Serial.printf("Failed to configure FDC1004 for unit %d\n", i);
-            continue;
+            sendUnitCapValueToFirebase(&fbdo, unitNames[0], measuredCap);
         }
-
-        if (!FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ))
+        if (msb > UPPER_BOUND) // adjust capdac accordingly
         {
-            Serial.printf("Failed to trigger FDC1004 for unit %d\n", i);
-            continue;
+            if (capdac < FDC1004_CAPDAC_MAX)
+                capdac++;
         }
-
-        delay(100); // Wait for conversion
-
-        uint16_t value[2];
-        if (!FDC.readMeasurement(MEASURMENT, value))
+        else if (msb < LOWER_BOUND)
         {
-            int16_t msb = (int16_t)value[0];
-            int32_t capacitance = 457L * msb;
-            capacitance /= 1000;
-            capacitance += 3028L * capdac;
-            measuredCap = (float)capacitance / 1000.0; // in pF
-
-            waterLevel = (measuredCap - 1.58) / 0.107; // Your calibration
-
-            Serial.printf("Unit %d | Cap: %.2f pF | Water Level: %.2f\n", i, measuredCap, waterLevel);
-
-            if (!unitNames[i].isEmpty())
-            {
-                sendUnitWaterLevelToFirebase(&fbdo, unitNames[i], waterLevel);
-            }
-
-            // CAPDAC auto-adjust
-            if (msb > UPPER_BOUND)
-            {
-                if (capdac < FDC1004_CAPDAC_MAX)
-                    capdac++;
-            }
-            else if (msb < LOWER_BOUND)
-            {
-                if (capdac > 0)
-                    capdac--;
-            }
+            if (capdac > 0)
+                capdac--;
         }
-        else
+    }
+
+    tcaselect(2);
+    FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
+    FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+
+    // wait for completion
+    delay(100);
+    value[2];
+    if (!FDC.readMeasurement(MEASURMENT, value))
+    {
+        int16_t msb = (int16_t)value[0];
+        int32_t capacitance = ((int32_t)457) * ((int32_t)msb); // in attofarads
+        capacitance /= 1000;                                   // in femtofarads
+        capacitance += ((int32_t)3028) * ((int32_t)capdac);
+        measuredCap = (float)capacitance / 1000; // in pF
+        // Blynk.virtualWrite(V23, measuredCap);
+        Serial.print((((float)capacitance / 1000)), 4);
+        Serial.print("  pf, ");
+        waterLevel = (measuredCap - 1.58) / 0.107;
+        // Blynk.virtualWrite(V24, waterLevel);
+        Serial.print(" |L = ");
+        Serial.print(waterLevel);
+        if (!unitNames[1].isEmpty())
         {
-            Serial.printf("Failed to read measurement for unit %d\n", i);
+            sendUnitCapValueToFirebase(&fbdo, unitNames[1], measuredCap);
         }
+        if (msb > UPPER_BOUND) // adjust capdac accordingly
+        {
+            if (capdac < FDC1004_CAPDAC_MAX)
+                capdac++;
+        }
+        else if (msb < LOWER_BOUND)
+        {
+            if (capdac > 0)
+                capdac--;
+        }
+    }
 
-        delay(50); // Optional delay between unit reads
+    tcaselect(4);
+    FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
+    FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+
+    // wait for completion
+    delay(100);
+    value[2];
+    if (!FDC.readMeasurement(MEASURMENT, value))
+    {
+        int16_t msb = (int16_t)value[0];
+        int32_t capacitance = ((int32_t)457) * ((int32_t)msb); // in attofarads
+        capacitance /= 1000;                                   // in femtofarads
+        capacitance += ((int32_t)3028) * ((int32_t)capdac);
+        measuredCap = (float)capacitance / 1000; // in pF
+        // Blynk.virtualWrite(V23, measuredCap);
+        Serial.print((((float)capacitance / 1000)), 4);
+        Serial.print("  pf, ");
+        waterLevel = (measuredCap - 1.58) / 0.107;
+        // Blynk.virtualWrite(V24, waterLevel);
+        Serial.print(" |L = ");
+        Serial.print(waterLevel);
+        if (!unitNames[2].isEmpty())
+        {
+            sendUnitCapValueToFirebase(&fbdo, unitNames[2], measuredCap);
+        }
+        if (msb > UPPER_BOUND) // adjust capdac accordingly
+        {
+            if (capdac < FDC1004_CAPDAC_MAX)
+                capdac++;
+        }
+        else if (msb < LOWER_BOUND)
+        {
+            if (capdac > 0)
+                capdac--;
+        }
     }
 }
 
