@@ -319,41 +319,47 @@ void systemLights()
 
 void readWaterLevel()
 {
-    int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
+    int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4}; // Adjust TCA channels if needed
 
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
-        tcaselect(tcaChannels[i]);
+        tcaselect(tcaChannels[i]); // Select the TCA9548A channel
+        delay(10);                 // Short delay to ensure channel switch is stable
 
-        FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
-        FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+        // Configure and trigger measurement
+        if (!FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac))
+        {
+            Serial.printf("Failed to configure FDC1004 for unit %d\n", i);
+            continue;
+        }
 
-        delay(100); // Wait for measurement to complete
+        if (!FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ))
+        {
+            Serial.printf("Failed to trigger FDC1004 for unit %d\n", i);
+            continue;
+        }
+
+        delay(100); // Wait for conversion
+
         uint16_t value[2];
-
         if (!FDC.readMeasurement(MEASURMENT, value))
         {
             int16_t msb = (int16_t)value[0];
-            int32_t capacitance = ((int32_t)457) * msb;
+            int32_t capacitance = 457L * msb;
             capacitance /= 1000;
-            capacitance += ((int32_t)3028) * capdac;
+            capacitance += 3028L * capdac;
             measuredCap = (float)capacitance / 1000.0; // in pF
 
-            waterLevel = (measuredCap - 1.58) / 0.107;
+            waterLevel = (measuredCap - 1.58) / 0.107; // Your calibration
 
-            Serial.print("Unit ");
-            Serial.print(i);
-            Serial.print(" | Capacitance: ");
-            Serial.print(measuredCap, 4);
-            Serial.print(" pF | Water Level: ");
-            Serial.println(waterLevel);
+            Serial.printf("Unit %d | Cap: %.2f pF | Water Level: %.2f\n", i, measuredCap, waterLevel);
 
             if (!unitNames[i].isEmpty())
             {
                 sendUnitWaterLevelToFirebase(&fbdo, unitNames[i], waterLevel);
             }
 
-            // Adjust CAPDAC if needed
+            // CAPDAC auto-adjust
             if (msb > UPPER_BOUND)
             {
                 if (capdac < FDC1004_CAPDAC_MAX)
@@ -365,6 +371,12 @@ void readWaterLevel()
                     capdac--;
             }
         }
+        else
+        {
+            Serial.printf("Failed to read measurement for unit %d\n", i);
+        }
+
+        delay(50); // Optional delay between unit reads
     }
 }
 
