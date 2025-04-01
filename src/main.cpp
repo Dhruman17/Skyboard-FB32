@@ -412,29 +412,32 @@ void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
         Serial.println("Writing firmware...");
         size_t written = 0;
         int chunkSize = 1024;
-
-        while (stream->available())
+        unsigned long timeout = millis();
+        while (written < contentLength)
         {
-            uint8_t buffer[chunkSize];
-            int bytesRead = stream->read(buffer, chunkSize);
-            if (bytesRead <= 0)
+            if (stream->available())
             {
-                Serial.println("No more data available to read. Breaking out of loop.");
-                break;
+                uint8_t buffer[chunkSize];
+                int bytesRead = stream->read(buffer, chunkSize);
+                if (bytesRead <= 0)
+                {
+                    Serial.println("Read error or no data.");
+                    break;
+                }
+
+                written += Update.write(buffer, bytesRead);
+                Serial.printf("Total bytes written: %u\n", written);
+
+                timeout = millis(); // Reset timeout on successful read
             }
-
-            Serial.print("Bytes received: ");
-            Serial.println(bytesRead);
-
-            written += Update.write(buffer, bytesRead);
-            Serial.print("Total bytes written: ");
-            Serial.println(written);
-
-            // **Stop writing once the expected firmware size is reached**
-            if (written >= contentLength)
+            else
             {
-                Serial.println("Reached expected firmware size. Stopping update.");
-                break;
+                delay(10);
+                if (millis() - timeout > 10000)
+                { // 10s timeout
+                    Serial.println("Timeout waiting for more data.");
+                    break;
+                }
             }
         }
 
