@@ -55,7 +55,8 @@ namespace SystemConfig {
     // Firebase Configuration
     static constexpr const char* FIREBASE_PROJECT_ID = "skyboard-fb32";  // Firebase project ID
     static constexpr const char* systemPath = "systems";  // Base path for system data
-    static constexpr const char* UNIT_PATH_FORMAT = "systems/%s/units/%d";  // Format for unit paths
+    static constexpr const char* UNIT_PATH_FORMAT = "systems/%s/units/%d";
+    static constexpr const char* SYSTEM_PATH_FORMAT = "systems/%s";
     static constexpr const char* SYSTEM_LAST_SEEN_PATH = "lastSeen";  // Path for last seen timestamp
     
     // Sensor Configuration

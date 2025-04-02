@@ -36,15 +36,33 @@ private:
     FirebaseData& fbdo;
     SemaphoreHandle_t mutex;
     
-    // Batch operation tracking
-    struct BatchOperation {
+    // Batch operation structure
+    struct BatchedUpdate {
         int unitIndex;
         String fieldPath;
         String value;
         String valueType;
+        
+        // Default constructor
+        BatchedUpdate() : unitIndex(0), fieldPath(""), value(""), valueType("") {}
+        
+        // Constructor to handle const values
+        BatchedUpdate(int idx, const char* path, const String& val, const char* type)
+            : unitIndex(idx), fieldPath(path), value(val), valueType(type) {}
+            
+        // Assignment operator to handle const values
+        BatchedUpdate& operator=(const BatchedUpdate& other) {
+            if (this != &other) {
+                unitIndex = other.unitIndex;
+                fieldPath = other.fieldPath;
+                value = other.value;
+                valueType = other.valueType;
+            }
+            return *this;
+        }
     };
     
-    std::vector<BatchOperation> batchOperations;
+    std::vector<BatchedUpdate> batchOperations;
     static constexpr size_t MAX_BATCH_SIZE = 10;
     static constexpr uint32_t BATCH_TIMEOUT_MS = 1000;  // 1 second timeout
     unsigned long lastBatchFlushTime = 0;
@@ -139,35 +157,35 @@ public:
     }
     
     /**
-     * Adds an operation to the batch
-     * Thread-safe: Yes
-     * @param unitIndex Unit index
-     * @param fieldPath Field path in document
-     * @param value Value to set
-     * @param valueType Value type
-     * @return true if operation was added successfully
+     * Adds a field update to the batch
+     * @param unitIndex Index of the unit
+     * @param fieldPath Path to the field in Firestore
+     * @param value Value to update
+     * @param valueType Type of the value ("string", "float", "bool", etc.)
+     * @return true if added successfully
      */
     bool addToBatch(int unitIndex, const char* fieldPath, const String& value, const char* valueType) {
         if (!takeMutex()) {
+            Serial.println("Failed to take mutex in addToBatch");
             return false;
         }
         
-        BatchOperation op;
-        op.unitIndex = unitIndex;
-        op.fieldPath = fieldPath;
-        op.value = value;
-        op.valueType = valueType;
-        
-        batchOperations.push_back(op);
-        
-        bool result = true;
-        if (batchOperations.size() >= MAX_BATCH_SIZE || 
-            (millis() - lastBatchFlushTime) >= BATCH_TIMEOUT_MS) {
-            result = flushBatch();
+        // Check for duplicate entries
+        for (auto& entry : batchOperations) {
+            if (entry.unitIndex == unitIndex && 
+                entry.fieldPath == fieldPath) {
+                // Update existing entry instead of adding duplicate
+                entry = BatchedUpdate(unitIndex, fieldPath, value, valueType);
+                giveMutex();
+                return true;
+            }
         }
         
+        // Add new entry if no duplicate found
+        batchOperations.push_back(BatchedUpdate(unitIndex, fieldPath, value, valueType));
+        
         giveMutex();
-        return result;
+        return true;
     }
     
     /**
@@ -187,7 +205,7 @@ public:
         bool success = true;
         
         // Group operations by unit
-        std::map<int, std::vector<BatchOperation>> unitOperations;
+        std::map<int, std::vector<BatchedUpdate>> unitOperations;
         for (const auto& op : batchOperations) {
             unitOperations[op.unitIndex].push_back(op);
         }
@@ -252,6 +270,46 @@ public:
                 ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
                 String("Field update failed: ") + fbdo.errorReason().c_str(),
                 "FirebaseManager::updateField"
+            );
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Updates system health information
+     * @param field The health field to update
+     * @param data The data to update with
+     * @return true if update was successful
+     */
+    bool updateSystemHealth(const char* field, const std::map<const char*, String>& data) {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        if (!createPath(pathBuffer, sizeof(pathBuffer), 
+                       SystemConfig::SYSTEM_PATH_FORMAT, 
+                       SystemConfig::SERIAL_NUMBER)) {
+            giveMutex();
+            return false;
+        }
+        
+        documentJson.clear();
+        for (const auto& pair : data) {
+            documentJson.set(pair.first, pair.second);
+        }
+        
+        bool success = Firebase.Firestore.patchDocument(&fbdo, 
+                                                      SystemConfig::FIREBASE_PROJECT_ID, 
+                                                      "", pathBuffer, 
+                                                      documentJson.raw(), field);
+        
+        if (!success) {
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
+                String("System health update failed: ") + fbdo.errorReason().c_str(),
+                "FirebaseManager::updateSystemHealth"
             );
         }
         

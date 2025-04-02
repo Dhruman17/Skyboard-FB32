@@ -79,6 +79,18 @@ private:
     SemaphoreHandle_t mutex;
     static constexpr uint32_t MUTEX_TIMEOUT_MS = 100;
     
+    // Connection state tracking
+    unsigned long lastConnectionCheck;
+    unsigned long lastReconnectAttempt;
+    uint8_t reconnectAttempts;
+    bool wasConnected;
+    uint32_t currentBackoffDelay;
+    
+    // Heap monitoring
+    static constexpr uint32_t HEAP_MONITOR_INTERVAL = 3600000;  // 1 hour
+    unsigned long lastHeapCheck;
+    uint32_t minHeapEver;
+    
     /**
      * Takes mutex with timeout
      * Thread-safe: Yes
@@ -259,7 +271,8 @@ public:
                  UnitManager& unit, FirebaseManager& firebase, SystemState& state)
         : networkManager(network), otaManager(ota), lightManager(light), 
           unitManager(unit), firebaseManager(firebase), systemState(state), 
-          initialized(false), mutex(NULL) {
+          initialized(false), mutex(NULL),
+          lastHeapCheck(0), minHeapEver(ESP.getFreeHeap()) {
         connectionOffset = 1000 + random(100, 10000);
         initializeStrings();
         
@@ -344,9 +357,8 @@ public:
     }
     
     /**
-     * Main system update loop
-     * Thread-safe: Yes
-     * Handles all periodic tasks and system monitoring
+     * Updates system state and handles periodic tasks
+     * Should be called in the main loop
      */
     void update() {
         if (!networkManager.isConnected()) {
@@ -359,6 +371,25 @@ public:
         
         unsigned long currentMillis = millis();
         unsigned long adjustedMillis = currentMillis + connectionOffset;
+        
+        // Monitor heap usage every hour
+        if (currentMillis - lastHeapCheck >= HEAP_MONITOR_INTERVAL) {
+            uint32_t currentHeap = ESP.getFreeHeap();
+            if (currentHeap < minHeapEver) {
+                minHeapEver = currentHeap;
+            }
+            
+            // Log heap status
+            Serial.printf("Heap Status - Free: %u, Min Ever: %u\n", currentHeap, minHeapEver);
+            
+            // Update in Firebase
+            firebaseManager.updateSystemHealth("heapStatus", {
+                {"free", String(currentHeap)},
+                {"minEver", String(minHeapEver)}
+            });
+            
+            lastHeapCheck = currentMillis;
+        }
         
         // Handle OTA updates
         ArduinoOTA.handle();
@@ -379,10 +410,9 @@ public:
                                      parseTimeString(lightOffTime));
             lightManager.update();
             
-            // Update timestamps and handle OTA
+            // Update timestamps
             systemState.previousHeartbeatMillis = adjustedMillis;
             systemState.lastConnectionCheckMillis = adjustedMillis;
-            otaManager.handle();
         }
         
         // Check for firmware updates (using unadjusted time since it's independent of connection offset)

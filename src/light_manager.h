@@ -2,6 +2,7 @@
 #define LIGHT_MANAGER_H
 
 #include "config.h"
+#include "error_manager.h"
 #include <time.h>
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -46,6 +47,14 @@ private:
     unsigned long lastLightStateChange;
     bool fallbackLightState;
     
+    // Time management
+    static constexpr uint32_t TIME_VALIDATION_INTERVAL = 3600000;  // 1 hour
+    static constexpr uint8_t MAX_TIME_FAILURES = 3;  // Maximum consecutive time failures before alert
+    
+    unsigned long lastTimeValidation;
+    uint8_t consecutiveTimeFailures;
+    bool timeValid;
+    
     /**
      * Safely takes the mutex with timeout
      * @return true if mutex was taken successfully
@@ -62,43 +71,46 @@ private:
     }
     
     /**
-     * Gets the current time of day in seconds since midnight
-     * Used for comparing against on/off times
-     * @return Current time of day in seconds since midnight
+     * Gets current time of day in seconds since midnight
+     * Thread-safe: Yes
+     * @return Current time of day in seconds
      */
     time_t getCurrentTimeOfDay() {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in getCurrentTimeOfDay");
             return 0;
         }
         
-        time_t result = 0;
-        time_t now;
-        time(&now);
-        if (now < 1000000000) { // If time is not set (before year 2000)
-            Serial.println("Time not set, using fallback cycle");
+        time_t currentTime;
+        time(&currentTime);
+        
+        // Validate time every hour
+        if (millis() - lastTimeValidation >= TIME_VALIDATION_INTERVAL) {
+            struct tm timeinfo;
+            if (!getLocalTime(&timeinfo)) {
+                consecutiveTimeFailures++;
+                if (consecutiveTimeFailures >= MAX_TIME_FAILURES) {
+                    timeValid = false;
+                    Serial.println("CRITICAL ERROR: Persistent time synchronization failure");
+                }
+            } else {
+                consecutiveTimeFailures = 0;
+                timeValid = true;
+            }
+            lastTimeValidation = millis();
+        }
+        
+        // If time is invalid, return 0 to prevent incorrect lighting control
+        if (!timeValid) {
             giveMutex();
             return 0;
         }
         
-        struct tm *currentTime = localtime(&now);
-        if (!currentTime) {
-            Serial.println("Failed to get local time, using fallback cycle");
-            giveMutex();
-            return 0;
-        }
+        struct tm timeinfo;
+        localtime_r(&currentTime, &timeinfo);
+        time_t timeOfDay = timeinfo.tm_hour * 3600 + timeinfo.tm_min * 60;
         
-        struct tm currentTimeOfDay = *currentTime;
-        currentTimeOfDay.tm_year = 0;
-        currentTimeOfDay.tm_mon = 0;
-        currentTimeOfDay.tm_mday = 0;
-        currentTimeOfDay.tm_hour = currentTime->tm_hour;
-        currentTimeOfDay.tm_min = currentTime->tm_min;
-        currentTimeOfDay.tm_sec = currentTime->tm_sec;
-        
-        result = mktime(&currentTimeOfDay);
         giveMutex();
-        return result;
+        return timeOfDay;
     }
     
     /**
@@ -188,7 +200,8 @@ public:
                     timeCycleEnabled(false), onTime(0), offTime(0),
                     initialized(false), pinErrorCount(0),
                     lastLightStateChange(0), fallbackLightState(false),
-                    mutex(NULL) {
+                    mutex(NULL), lastTimeValidation(0), consecutiveTimeFailures(0),
+                    timeValid(true) {
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
             Serial.println("CRITICAL ERROR: Failed to create mutex in LightManager");

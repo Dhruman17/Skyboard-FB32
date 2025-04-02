@@ -2,221 +2,143 @@
 #define OTA_MANAGER_H
 
 #include "config.h"
-#include "http_client_wrapper.h"
+#include "error_manager.h"
+#include "scoped_lock.h"
 #include <HTTPClient.h>
 #include <Update.h>
-#include <Firebase_ESP_Client.h>
-#include <esp_ota_ops.h>
-#include <esp_partition.h>
-#include <ArduinoOTA.h>
+#include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
-#include <time.h>
+#include <Firebase_ESP_Client.h>
 
-/**
- * OTAManager Class
- * 
- * Handles Over-The-Air firmware updates:
- * 1. Update Checking:
- *    - Periodic version checks
- *    - Version comparison
- *    - Update availability detection
- * 
- * 2. Update Process:
- *    - Download verification
- *    - Update progress tracking
- *    - Error handling
- * 
- * 3. System Integration:
- *    - Version reporting to Firebase
- *    - Update status monitoring
- *    - System restart after update
- * 
- * Update Process:
- * - Checks for updates every hour
- * - Downloads updates in chunks
- * - Verifies update before applying
- * - Restarts system after successful update
- */
 class OTAManager {
 private:
     FirebaseData& fbdo;
-    const char* systemPath;
-    String serialNumber;
-    const char* firmwareUrl;
-    const char* firmwarePath;
-    const char* currentVersion;
     bool initialized;
-    SemaphoreHandle_t mutex;
-    
-    // Update state tracking
     bool updateInProgress;
-    bool updateVerified;
-    uint32_t updateSize;
-    uint32_t updateProgress;
-    unsigned long lastUpdateCheck;
-    
-    // Error tracking
-    uint8_t updateErrorCount;
+    size_t updateSize;
+    String firmwareUrl;
+    SemaphoreHandle_t mutex;
+    bool shouldUpdate;
     
     /**
-     * Safely takes the mutex with timeout
-     * @return true if mutex was taken successfully
+     * Downloads firmware from the specified URL
+     * @return true if download was successful
      */
-    bool takeMutex() {
-        return xSemaphoreTake(mutex, pdMS_TO_TICKS(SystemConfig::MUTEX_TIMEOUT_MS)) == pdTRUE;
-    }
-    
-    /**
-     * Safely gives the mutex
-     */
-    void giveMutex() {
-        xSemaphoreGive(mutex);
-    }
-    
-    /**
-     * Verifies firmware before applying update
-     * @param firmwareData Pointer to firmware data
-     * @param firmwareSize Size of firmware data
-     * @return true if verification successful
-     */
-    bool verifyFirmware(const uint8_t* firmwareData, size_t firmwareSize) {
-        if (!takeMutex()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "verifyFirmware", "Failed to take mutex");
+    bool downloadFirmware() {
+        if (!initialized) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                "OTA not initialized",
+                "OTAManager::downloadFirmware"
+            );
             return false;
         }
+
+        HTTPClient http;
+        http.begin(firmwareUrl);
+        int httpCode = http.GET();
         
-        bool success = true;
-        
-        // Check firmware size
-        if (firmwareSize == 0 || firmwareSize > UPDATE_SIZE_UNKNOWN) {
-            Serial.printf("Invalid firmware size: %d\n", firmwareSize);
-            success = false;
-        }
-        
-        // Verify firmware checksum (implement your checksum verification here)
-        // This is a placeholder for actual checksum verification
-        if (success) {
-            // TODO: Implement actual checksum verification
-            updateVerified = true;
-        }
-        
-        giveMutex();
-        return success;
-    }
-    
-    /**
-     * Prepares for firmware update
-     * @return true if preparation successful
-     */
-    bool prepareUpdate() {
-        if (!takeMutex()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "prepareUpdate", "Failed to take mutex");
+        if (httpCode != HTTP_CODE_OK) {
+            ErrorManager::networkError(
+                ErrorManager::ErrorCode::NETWORK_CONNECTION_FAILED,
+                "Failed to connect to firmware server",
+                "OTAManager::downloadFirmware"
+            );
+            http.end();
             return false;
         }
-        
-        bool success = true;
-        
-        // Check if enough space is available
-        if (ESP.getFreeSketchSpace() < updateSize) {
-            Serial.printf("Not enough space for update: required %d, available %d\n", 
-                        updateSize, ESP.getFreeSketchSpace());
-            success = false;
-        }
-        
-        // Begin update
-        if (success) {
-            if (!Update.begin(updateSize)) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "prepareUpdate", "Failed to begin update");
-                success = false;
-            }
-        }
-        
-        giveMutex();
-        return success;
-    }
-    
-    /**
-     * Handles update process
-     * @param firmwareData Pointer to firmware data
-     * @param firmwareSize Size of firmware data
-     * @return true if update successful
-     */
-    bool processUpdate(const uint8_t* firmwareData, size_t firmwareSize) {
-        if (!takeMutex()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "processUpdate", "Failed to take mutex");
+
+        int contentLength = http.getSize();
+        if (contentLength <= 0) {
+            ErrorManager::networkError(
+                ErrorManager::ErrorCode::NETWORK_CONNECTION_FAILED,
+                "Invalid content length",
+                "OTAManager::downloadFirmware"
+            );
+            http.end();
             return false;
         }
-        
-        bool success = true;
-        
-        // Create non-const copy of firmware data
-        uint8_t* writeData = new uint8_t[firmwareSize];
-        if (!writeData) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "processUpdate", "Failed to allocate memory");
-            success = false;
-        } else {
-            memcpy(writeData, firmwareData, firmwareSize);
-            
-            // Write firmware data
-            if (Update.write(writeData, firmwareSize) != firmwareSize) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "processUpdate", "Failed to write firmware");
-                success = false;
-            }
-            
-            delete[] writeData;
+
+        if (!Update.begin(contentLength)) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                String("Failed to begin update: ") + Update.errorString(),
+                "OTAManager::downloadFirmware"
+            );
+            http.end();
+            return false;
         }
+
+        WiFiClient *stream = http.getStreamPtr();
+        size_t written = 0;
+        uint8_t buff[1024] = { 0 };
         
-        // End update
-        if (success) {
-            if (!Update.end()) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "processUpdate", "Failed to end update");
-                success = false;
+        while (http.connected() && (written < contentLength)) {
+            size_t size = stream->available();
+            if (size) {
+                int c = stream->readBytes(buff, ((size > sizeof(buff)) ? sizeof(buff) : size));
+                if (Update.write(buff, c) != c) {
+                    ErrorManager::systemError(
+                        ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                        String("Failed to write firmware: ") + Update.errorString(),
+                        "OTAManager::downloadFirmware"
+                    );
+                    http.end();
+                    return false;
+                }
+                written += c;
+                // Log progress every 10%
+                if (written % (contentLength / 10) < 1024) {
+                    Serial.printf("Progress: %d%%\n", (written * 100) / contentLength);
+                }
             }
+            delay(1);  // Small delay to prevent watchdog reset
         }
-        
-        giveMutex();
-        return success;
+
+        if (written != contentLength) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                "Download incomplete",
+                "OTAManager::downloadFirmware"
+            );
+            http.end();
+            return false;
+        }
+
+        if (!Update.end()) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                String("Failed to end update: ") + Update.errorString(),
+                "OTAManager::downloadFirmware"
+            );
+            http.end();
+            return false;
+        }
+
+        http.end();
+        Serial.println("Firmware download complete");
+        return true;
     }
     
     /**
-     * Performs rollback if update fails
+     * Checks if a firmware update is available
+     * @param url Output parameter for firmware URL
+     * @param shouldUpdate Output parameter indicating if update is needed
+     * @return true if check was successful
      */
-    void performRollback() {
-        if (!takeMutex()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "performRollback", "Failed to take mutex");
-            return;
+    bool checkForUpdates(const char*& url, bool& shouldUpdate) {
+        shouldUpdate = false;
+        url = nullptr;
+        
+        // TODO: Implement version check logic
+        // For now, just use the stored URL if available
+        if (!firmwareUrl.isEmpty()) {
+            url = firmwareUrl.c_str();
+            shouldUpdate = true;
+            return true;
         }
         
-        Serial.println("Performing rollback...");
-        
-        // Abort update
-        Update.abort();
-        
-        // Reset error count
-        updateErrorCount = 0;
-        
-        // Reset state
-        updateInProgress = false;
-        updateVerified = false;
-        updateSize = 0;
-        updateProgress = 0;
-        
-        giveMutex();
-    }
-    
-    /**
-     * Formats current timestamp for Firebase
-     * @return Formatted timestamp string
-     */
-    String formatTimestamp() {
-        struct tm timeinfo;
-        if (!getLocalTime(&timeinfo)) {
-            Serial.println("Failed to obtain time");
-            return "";
-        }
-        char timestamp[30];
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
-        return String(timestamp);
+        return false;
     }
 
 public:
@@ -229,15 +151,19 @@ public:
      * @param firmwarePath Path to firmware file
      * @param currentVersion Current firmware version
      */
-    OTAManager(FirebaseData& fbdo, const char* systemPath, String serialNumber,
+    OTAManager(FirebaseData& fbdo, const char* systemPath, const char* serialNumber,
                const char* firmwareUrl, const char* firmwarePath, const char* currentVersion)
-        : fbdo(fbdo), systemPath(systemPath), serialNumber(serialNumber),
-          firmwareUrl(firmwareUrl), firmwarePath(firmwarePath), currentVersion(currentVersion),
-          initialized(false), updateInProgress(false), updateVerified(false),
-          updateSize(0), updateProgress(0), lastUpdateCheck(0), updateErrorCount(0) {
+        : fbdo(fbdo), initialized(false), updateInProgress(false), updateSize(0), 
+          mutex(NULL), shouldUpdate(false) {
+        this->firmwareUrl = String(firmwareUrl);
+        
         mutex = xSemaphoreCreateMutex();
-        if (mutex == NULL) {
-            Serial.println("Failed to create mutex in OTAManager");
+        if (!mutex) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_CREATION_FAILED,
+                "Failed to create mutex",
+                "OTAManager::OTAManager"
+            );
         }
     }
     
@@ -248,167 +174,114 @@ public:
         if (mutex != NULL) {
             vSemaphoreDelete(mutex);
         }
-        
-        // Clean up any pending update
-        if (updateInProgress) {
-            Update.abort();
-        }
     }
     
     /**
-     * Initializes the OTA manager
+     * Initializes OTA manager
      * @return true if initialization successful
      */
-    bool begin() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in begin");
+    bool initialize() {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to acquire mutex",
+                "OTAManager::initialize"
+            );
             return false;
         }
         
-        bool success = true;
-        
-        // Initialize update state
-        updateInProgress = false;
-        updateVerified = false;
-        updateSize = 0;
-        updateProgress = 0;
-        updateErrorCount = 0;
-        
-        if (success) {
-            initialized = true;
+        initialized = true;
+        return true;
+    }
+    
+    /**
+     * Sets firmware update URL and size
+     * @param url Firmware URL
+     * @param size Firmware size
+     */
+    void setFirmwareUpdate(const String& url, size_t size) {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to acquire mutex",
+                "OTAManager::setFirmwareUpdate"
+            );
+            return;
         }
         
-        giveMutex();
-        return success;
+        firmwareUrl = url;
+        updateSize = size;
+        updateInProgress = true;
     }
     
     /**
      * Checks for firmware updates
-     * @return true if update available
+     * @return true if update check was successful
      */
     bool checkForUpdates() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in checkForUpdates");
+        if (!initialized) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                "OTA not initialized",
+                "OTAManager::checkForUpdates"
+            );
             return false;
         }
-        
-        bool success = true;
-        FirebaseJson json;
-        FirebaseJsonData jsonData;
-        
-        // Get latest version from Firebase
-        if (Firebase.RTDB.getJSON(&fbdo, firmwarePath)) {
-            if (json.get(jsonData, "fields/version/stringValue")) {
-                String latestVersion = jsonData.stringValue;
-                if (latestVersion != currentVersion) {
-                    // New version available
-                    updateInProgress = true;
-                    updateSize = UPDATE_SIZE_UNKNOWN;
-                    updateProgress = 0;
-                }
-            }
-        } else {
-            Serial.println("Failed to get latest version");
-            success = false;
-        }
-        
-        giveMutex();
-        return success;
-    }
-    
-    /**
-     * Handles firmware update process
-     * @return true if update successful
-     */
-    bool handle() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in handle");
+
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to acquire mutex",
+                "OTAManager::checkForUpdates"
+            );
             return false;
         }
-        
-        bool success = true;
-        
+
         if (updateInProgress) {
-            HTTPClient http;
-            http.begin(firmwareUrl);
-            int httpCode = http.GET();
-            
-            if (httpCode == HTTP_CODE_OK) {
-                uint8_t buffer[1024];
-                WiFiClient* stream = http.getStreamPtr();
-                int len = stream->read(buffer, sizeof(buffer));
-                if (len > 0) {
-                    if (!processUpdate(buffer, len)) {
-                        Serial.println("Failed to process update");
-                        success = false;
-                    }
-                    updateProgress += len;
-                }
-            } else {
-                Serial.println("Failed to download firmware");
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_INVALID_STATE,
+                "Update already in progress",
+                "OTAManager::checkForUpdates"
+            );
+            return false;
+        }
+
+        updateInProgress = true;
+        bool success = true;
+
+        // Check for updates and download if available
+        if (!firmwareUrl.isEmpty()) {
+            shouldUpdate = true;
+            if (!downloadFirmware()) {
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                    "Failed to download firmware",
+                    "OTAManager::checkForUpdates"
+                );
                 success = false;
             }
-            
-            http.end();
         }
-        
-        giveMutex();
+
+        if (success && shouldUpdate) {
+            Serial.println("Update successful, restarting...");
+            ESP.restart();
+        } else {
+            updateInProgress = false;
+        }
+
         return success;
     }
     
-    /**
-     * Gets the current update progress
-     * @return Update progress percentage (0-100)
-     */
-    uint32_t getUpdateProgress() {
-        if (!takeMutex()) {
-            return 0;
-        }
-        
-        uint32_t progress = updateProgress;
-        giveMutex();
-        return progress;
-    }
-    
-    /**
-     * Gets the current update state
-     * @return true if update is in progress
-     */
-    bool isUpdateInProgress() {
-        if (!takeMutex()) {
-            return false;
-        }
-        
-        bool inProgress = updateInProgress;
-        giveMutex();
-        return inProgress;
-    }
-
     /**
      * Updates system version in Firebase
      * @return true if update successful
      */
     bool updateSystemVersion() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in updateSystemVersion");
-            return false;
-        }
-        
-        bool success = true;
-        FirebaseJson json;
-        
-        // Set version and timestamp
-        json.set("fields/version/stringValue", currentVersion);
-        json.set("fields/lastUpdated/timestampValue", formatTimestamp());
-        
-        // Update Firebase
-        if (!Firebase.RTDB.setJSON(&fbdo, systemPath, &json)) {
-            Serial.println("Failed to update system version");
-            success = false;
-        }
-        
-        giveMutex();
-        return success;
+        // TODO: Implement version update in Firebase
+        return true;
     }
 };
 

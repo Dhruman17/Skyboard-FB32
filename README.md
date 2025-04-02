@@ -38,7 +38,7 @@ A sophisticated vertical farming control system built for ESP32, featuring multi
 - Error reporting and diagnostics
 - Secure Firebase credentials management:
   - Web-based configuration portal
-  - EEPROM storage for credentials
+  - Preferences storage for credentials
   - Automatic reconnection with new credentials
   - Password-protected access
 
@@ -180,7 +180,7 @@ A sophisticated vertical farming control system built for ESP32, featuring multi
 
 3. Save and apply:
    - Click "Save Configuration"
-   - System will store credentials in EEPROM
+   - System will store credentials in Preferences (non-volatile storage)
    - System will restart with new credentials
    - Verify connection in Firebase console
 
@@ -242,9 +242,19 @@ systems/{systemId}/
 7. Monitor system health metrics
 8. Review error logs
 9. Verify Firebase credentials:
-   - Check EEPROM storage
+   - Check Preferences storage
    - Verify connection in Firebase console
    - Test reconnection with new credentials
+
+## Flash Partition Layout (4MB)
+
+| Partition | Type | Size    | Purpose                        |
+|-----------|------|---------|--------------------------------|
+| NVS       | data | 20 KB   | Non-volatile storage           |
+| OTA Data  | data | 8 KB    | OTA state tracking             |
+| App 0     | app  | 1.75 MB | Primary firmware               |
+| App 1     | app  | 1.75 MB | OTA firmware backup            |
+| SPIFFS    | data | 448 KB  | File storage (web UI, config)  |
 
 ## Contributing
 1. Fork the repository
