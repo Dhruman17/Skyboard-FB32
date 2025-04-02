@@ -34,20 +34,27 @@
  */
 class SensorManager {
 private:
-    /**
-     * Takes the mutex with a timeout
-     * @return true if mutex was taken successfully
-     */
-    inline bool takeMutex() const {
-        return xSemaphoreTake(mutex, pdMS_TO_TICKS(SystemConfig::MUTEX_TIMEOUT_MS)) == pdTRUE;
-    }
-    
-    /**
-     * Gives back the mutex
-     */
-    inline void giveMutex() const {
-        xSemaphoreGive(mutex);
-    }
+    // RAII-style mutex lock helper
+    class ScopedLock {
+    private:
+        SemaphoreHandle_t& mutex;
+        bool locked;
+
+    public:
+        ScopedLock(SemaphoreHandle_t& m) : mutex(m), locked(false) {
+            if (xSemaphoreTake(mutex, pdMS_TO_TICKS(SystemConfig::MUTEX_TIMEOUT_MS)) == pdTRUE) {
+                locked = true;
+            }
+        }
+
+        ~ScopedLock() {
+            if (locked) {
+                xSemaphoreGive(mutex);
+            }
+        }
+
+        bool isLocked() const { return locked; }
+    };
 
     HardwareManager& hardwareManager;
     FDC1004* fdc1004[SystemConfig::NUMBER_OF_UNITS];
@@ -83,7 +90,8 @@ private:
      * @return true if initialization successful
      */
     bool initializeFDC1004(int unitIndex) {
-        if (!takeMutex()) {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "initializeFDC1004");
             return false;
         }
@@ -141,7 +149,6 @@ private:
             safeDelete(fdc1004[unitIndex]);
         }
         
-        giveMutex();
         return success;
     }
     
@@ -151,7 +158,8 @@ private:
      * @return true if initialization successful
      */
     bool initializeMCP3021(int unitIndex) {
-        if (!takeMutex()) {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "initializeMCP3021");
             return false;
         }
@@ -196,7 +204,6 @@ private:
             safeDelete(mcp3021[unitIndex]);
         }
         
-        giveMutex();
         return success;
     }
     
@@ -283,19 +290,19 @@ private:
             return -1.0f;
         }
         
-        // Use heap allocation for large arrays to prevent stack overflow
-        float* readings = new (std::nothrow) float[NUM_SAMPLES];
-        if (readings == nullptr) {
+        // Use unique_ptr for automatic cleanup
+        std::unique_ptr<float[]> readings(new (std::nothrow) float[NUM_SAMPLES]);
+        if (!readings) {
             Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "readFDC1004Averaged", unitIndex, "Failed to allocate memory for readings");
             return -1.0f;
         }
         
         uint8_t validReadings = 0;
         
-        // Take mutex once for all readings to prevent race conditions
-        if (!takeMutex()) {
+        // Use ScopedLock for mutex management
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "readFDC1004Averaged");
-            delete[] readings;
             return -1.0f;
         }
         
@@ -308,17 +315,14 @@ private:
             delay(READING_DELAY);
         }
         
-        giveMutex();
-        
         float result = -1.0f;
         if (validReadings > 0) {
             float mean, stdDev, filteredSum;
             uint8_t filteredCount;
-            detectOutliers(readings, validReadings, mean, stdDev, filteredSum, filteredCount);
+            detectOutliers(readings.get(), validReadings, mean, stdDev, filteredSum, filteredCount);
             result = filteredCount > 0 ? filteredSum / filteredCount : -1.0f;
         }
         
-        delete[] readings;
         return result;
     }
     
@@ -334,19 +338,19 @@ private:
             return -1.0f;
         }
         
-        // Use heap allocation for large arrays to prevent stack overflow
-        float* readings = new (std::nothrow) float[NUM_SAMPLES];
-        if (readings == nullptr) {
+        // Use unique_ptr for automatic cleanup
+        std::unique_ptr<float[]> readings(new (std::nothrow) float[NUM_SAMPLES]);
+        if (!readings) {
             Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "readMCP3021Averaged", unitIndex, "Failed to allocate memory for readings");
             return -1.0f;
         }
         
         uint8_t validReadings = 0;
         
-        // Take mutex once for all readings to prevent race conditions
-        if (!takeMutex()) {
+        // Use ScopedLock for mutex management
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "readMCP3021Averaged");
-            delete[] readings;
             return -1.0f;
         }
         
@@ -359,17 +363,14 @@ private:
             delay(READING_DELAY);
         }
         
-        giveMutex();
-        
         float result = -1.0f;
         if (validReadings > 0) {
             float mean, stdDev, filteredSum;
             uint8_t filteredCount;
-            detectOutliers(readings, validReadings, mean, stdDev, filteredSum, filteredCount);
+            detectOutliers(readings.get(), validReadings, mean, stdDev, filteredSum, filteredCount);
             result = filteredCount > 0 ? filteredSum / filteredCount : -1.0f;
         }
         
-        delete[] readings;
         return result;
     }
 
@@ -431,7 +432,8 @@ public:
      * Memory Management: Properly deletes all sensor instances
      */
     void cleanup() {
-        if (!takeMutex()) {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "cleanup");
             return;
         }
@@ -443,7 +445,6 @@ public:
         }
         
         initialized = false;
-        giveMutex();
     }
     
     /**
@@ -457,7 +458,8 @@ public:
             return false;
         }
         
-        if (!takeMutex()) {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "cleanupSensor");
             return false;
         }
@@ -470,7 +472,6 @@ public:
             success = initializeMCP3021(unitIndex);
         }
         
-        giveMutex();
         return success;
     }
     
@@ -479,7 +480,8 @@ public:
      * @return true if initialization successful
      */
     bool begin() {
-        if (!takeMutex()) {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "begin");
             return false;
         }
@@ -509,7 +511,6 @@ public:
             cleanup();
         }
         
-        giveMutex();
         return success;
     }
     
@@ -537,7 +538,8 @@ public:
      * @return true if recovery was successful
      */
     bool handleCriticalFailure(const char* errorType) {
-        if (!takeMutex()) {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "handleCriticalFailure");
             return false;
         }
@@ -571,8 +573,6 @@ public:
             
             success = true;
         }
-        
-        giveMutex();
         
         if (!success) {
             Serial.printf("System recovery failed after %d attempts\n", SystemConfig::MAX_SENSOR_RETRIES);
@@ -625,7 +625,8 @@ public:
      * @return true if readings successful
      */
     bool readAllWaterLevels(float levels[SystemConfig::NUMBER_OF_UNITS]) {
-        if (!takeMutex()) {
+        ScopedLock lock(mutex);
+        if (!lock.isLocked()) {
             Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "readAllWaterLevels");
             return false;
         }
@@ -641,18 +642,24 @@ public:
             }
         }
         
-        giveMutex();
-        
         // If too many failures, attempt system recovery
         if (failureCount >= SystemConfig::NUMBER_OF_UNITS / 2) {
-            // Take mutex again for recovery
-            if (takeMutex()) {
+            // Create a new ScopedLock for recovery
+            ScopedLock recoveryLock(mutex);
+            if (recoveryLock.isLocked()) {
                 handleCriticalFailure("sensor reading");
-                giveMutex();
             }
         }
         
         return success;
+    }
+
+    /**
+     * Gets the hardware manager reference
+     * @return Reference to hardware manager
+     */
+    HardwareManager& getHardwareManager() {
+        return hardwareManager;
     }
 };
 

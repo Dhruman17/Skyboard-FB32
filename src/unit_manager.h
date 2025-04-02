@@ -2,6 +2,8 @@
 #define UNIT_MANAGER_H
 
 #include "config.h"
+#include "error_manager.h"
+#include "firebase_manager.h"
 #include "sensor_coms.h"
 #include <Firebase_ESP_Client.h>
 
@@ -31,7 +33,7 @@
 class UnitManager {
 private:
     SystemState& systemState;
-    FirebaseData& fbdo;
+    FirebaseManager& firebaseManager;
     SensorManager& sensorManager;
     
     // Pre-allocate string space to prevent fragmentation
@@ -40,10 +42,6 @@ private:
     
     unsigned long previousMillis[SystemConfig::NUMBER_OF_UNITS];
     mutable bool atomizerStates[SystemConfig::NUMBER_OF_UNITS];
-    
-    // Firebase JSON objects (reused to prevent memory fragmentation)
-    FirebaseJson unitJson;
-    FirebaseJsonData jsonData;
     
     // Reusable buffer for water level readings
     static constexpr float INVALID_WATER_LEVEL = -1.0f;
@@ -58,7 +56,7 @@ private:
     mutable uint8_t i2cErrorCount;  // Made mutable to allow modification in const methods
     
     // Error tracking
-    uint8_t consecutiveErrors[SystemConfig::NUMBER_OF_UNITS] = {0};
+    mutable uint8_t consecutiveErrors[SystemConfig::NUMBER_OF_UNITS] = {0};
     uint8_t firebaseErrorCount = 0;
     uint8_t sensorErrorCount = 0;
     
@@ -113,7 +111,11 @@ private:
      */
     bool createFirebasePath(char* buffer, size_t bufferSize, const char* format, ...) {
         if (!buffer || bufferSize == 0) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_GENERIC, "createFirebasePath", "Invalid buffer");
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_PATH_INVALID,
+                "Invalid buffer",
+                "UnitManager::createFirebasePath"
+            );
             return false;
         }
         
@@ -123,7 +125,11 @@ private:
         va_end(args);
         
         if (written >= bufferSize) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_GENERIC, "createFirebasePath", "Buffer overflow");
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_PATH_INVALID,
+                "Buffer overflow",
+                "UnitManager::createFirebasePath"
+            );
             return false;
         }
         return true;
@@ -149,23 +155,74 @@ private:
      * @param errorType Type of error ("water" or "ec")
      * @return true if error was handled successfully
      */
-    bool handleSensorError(int unitIndex, const char* errorType) {
+    bool handleSensorError(int unitIndex, const char* errorType) const {
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::handleSensorError"
+            );
+            return false;
+        }
+        
+        bool success = true;
         consecutiveErrors[unitIndex]++;
         
         if (consecutiveErrors[unitIndex] >= SystemConfig::MAX_CONSECUTIVE_ERRORS) {
-            Serial.printf("Too many consecutive %s sensor errors for unit %d, attempting recovery\n", 
-                         errorType, unitIndex);
+            ErrorManager::sensorError(
+                ErrorManager::ErrorCode::SENSOR_READ_FAILED,
+                String("Too many consecutive ") + errorType + " sensor errors for unit " + String(unitIndex),
+                "UnitManager::handleSensorError"
+            );
             
             // Attempt sensor recalibration
             if (!recalibrateSensor(unitIndex, errorType)) {
-                Serial.printf("Failed to recover %s sensor for unit %d\n", errorType, unitIndex);
-                return false;
+                ErrorManager::sensorError(
+                    ErrorManager::ErrorCode::SENSOR_READ_FAILED,
+                    String("Failed to recover ") + errorType + " sensor for unit " + String(unitIndex),
+                    "UnitManager::handleSensorError"
+                );
+                success = false;
+            } else {
+                consecutiveErrors[unitIndex] = 0;
             }
-            
-            consecutiveErrors[unitIndex] = 0;
         }
         
-        return true;
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Sets the multiplexer for a specific unit
+     * @param unitIndex Index of the unit
+     * @return true if multiplexer was set successfully
+     */
+    bool setMultiplexer(int unitIndex) const {
+        if (!isValidAndEnabled(unitIndex)) {
+            return false;
+        }
+        
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::setMultiplexer"
+            );
+            return false;
+        }
+        
+        bool success = sensorManager.getHardwareManager().selectUnitAndSensor(unitIndex, SystemConfig::FDC1004_CHANNEL);
+        
+        if (!success) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_I2C_ERROR,
+                String("Failed to set multiplexer for unit ") + String(unitIndex),
+                "UnitManager::setMultiplexer"
+            );
+        }
+        
+        giveMutex();
+        return success;
     }
     
     /**
@@ -174,8 +231,17 @@ private:
      * @param sensorType Type of sensor ("water" or "ec")
      * @return true if recalibration was successful
      */
-    bool recalibrateSensor(int unitIndex, const char* sensorType) {
+    bool recalibrateSensor(int unitIndex, const char* sensorType) const {
         if (!isValidAndEnabled(unitIndex)) {
+            return false;
+        }
+        
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::recalibrateSensor"
+            );
             return false;
         }
         
@@ -185,6 +251,8 @@ private:
         } else if (strcmp(sensorType, SystemConfig::SENSOR_TYPE_EC) == 0) {
             success = sensorManager.cleanupSensor(unitIndex, SystemConfig::SENSOR_TYPE_EC);
         }
+        
+        giveMutex();
         
         if (success) {
             handleSensorError(unitIndex, sensorType);
@@ -201,11 +269,19 @@ private:
         firebaseErrorCount++;
         
         if (firebaseErrorCount >= SystemConfig::MAX_FIREBASE_RETRIES) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, operation, "Too many errors, attempting recovery");
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
+                String("Too many errors in ") + operation + ", attempting recovery",
+                "UnitManager::handleFirebaseError"
+            );
             
             // Attempt to reconnect to Firebase
             if (!reconnectFirebase()) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, operation, "Failed to recover connection");
+                ErrorManager::firebaseError(
+                    ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
+                    String("Failed to recover connection in ") + operation,
+                    "UnitManager::handleFirebaseError"
+                );
                 return false;
             }
             
@@ -237,300 +313,328 @@ private:
      * @param unitIndex Index of the unit
      * @param fieldPath Path to the field in Firebase
      * @param value Value to update
-     * @param valueType Type of value ("stringValue", "booleanValue", etc.)
+     * @param valueType Type of value
      * @return true if update was successful
      */
     bool updateUnitField(int unitIndex, const char* fieldPath, const String& value, const char* valueType) {
-        if (!isValidAndEnabled(unitIndex)) return false;
-        
-        char path[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
-        snprintf(path, sizeof(path), SystemConfig::UNIT_PATH_FORMAT, SystemConfig::SERIAL_NUMBER, unitIndex);
-        
-        FirebaseJson unitJson;
-        unitJson.set(fieldPath, value);
-        
-        for (int retry = 0; retry < SystemConfig::MAX_FIREBASE_RETRIES; retry++) {
-            if (Firebase.Firestore.patchDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", path, unitJson.raw(), fieldPath)) {
-                return true;
-            }
-            delay(SystemConfig::FIREBASE_RETRY_DELAY_MS);
+        if (!isValidAndEnabled(unitIndex)) {
+            return false;
         }
-        return false;
+        
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::updateUnitField"
+            );
+            return false;
+        }
+        
+        bool success = firebaseManager.addToBatch(unitIndex, fieldPath, value, valueType);
+        
+        if (!success) {
+            handleFirebaseError("updateUnitField");
+        }
+        
+        giveMutex();
+        return success;
     }
     
-    // Overload for boolean values
+    /**
+     * Updates a field in Firebase for a specific unit with enhanced error recovery
+     * Thread-safe: Yes (uses mutex)
+     * Error Handling: Includes retry mechanism and connection recovery
+     * @param unitIndex Index of the unit
+     * @param fieldPath Path to the field in Firebase
+     * @param value Value to update
+     * @param valueType Type of value
+     * @return true if update was successful
+     */
     bool updateUnitField(int unitIndex, const char* fieldPath, bool value, const char* valueType) {
-        return updateUnitField(unitIndex, fieldPath, String(value), valueType);
+        return updateUnitField(unitIndex, fieldPath, value ? "true" : "false", valueType);
     }
     
-    // Overload for float values
+    /**
+     * Updates a field in Firebase for a specific unit with enhanced error recovery
+     * Thread-safe: Yes (uses mutex)
+     * Error Handling: Includes retry mechanism and connection recovery
+     * @param unitIndex Index of the unit
+     * @param fieldPath Path to the field in Firebase
+     * @param value Value to update
+     * @param valueType Type of value
+     * @return true if update was successful
+     */
     bool updateUnitField(int unitIndex, const char* fieldPath, float value, const char* valueType) {
-        return updateUnitField(unitIndex, fieldPath, String(value, 6), valueType);
+        return updateUnitField(unitIndex, fieldPath, String(value, 3), valueType);
     }
     
-    // Overload for integer values
+    /**
+     * Updates a field in Firebase for a specific unit with enhanced error recovery
+     * Thread-safe: Yes (uses mutex)
+     * Error Handling: Includes retry mechanism and connection recovery
+     * @param unitIndex Index of the unit
+     * @param fieldPath Path to the field in Firebase
+     * @param value Value to update
+     * @param valueType Type of value
+     * @return true if update was successful
+     */
     bool updateUnitField(int unitIndex, const char* fieldPath, int value, const char* valueType) {
         return updateUnitField(unitIndex, fieldPath, String(value), valueType);
     }
     
     /**
-     * Reads a unit's document from Firebase and caches the data
+     * Reads a unit's document from Firebase
      * @param unitIndex Index of the unit
-     * @return true if document was read successfully
+     * @return true if read was successful
      */
     bool readUnitDocument(int unitIndex) {
         if (!isValidAndEnabled(unitIndex)) {
             return false;
         }
         
-        char pathBuffer[256];
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::readUnitDocument"
+            );
+            return false;
+        }
+        
+        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
         if (!createUnitPath(pathBuffer, sizeof(pathBuffer), unitIndex)) {
+            giveMutex();
             return false;
         }
         
-        if (!Firebase.Firestore.getDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", pathBuffer)) {
-            return false;
+        bool success = firebaseManager.updateField(pathBuffer, "lastRead", String(millis()));
+        
+        if (!success) {
+            handleFirebaseError("readUnitDocument");
         }
         
-        unitJson.clear();
-        unitJson.setJsonData(fbdo.payload());
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Takes mutex with timeout
+     * Thread-safe: Yes
+     * @return true if mutex was taken
+     */
+    bool takeMutex() const {
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::takeMutex"
+            );
+            return false;
+        }
         return true;
     }
     
     /**
-     * Safely takes the mutex with timeout
-     * @return true if mutex was taken successfully
-     */
-    bool takeMutex() const {
-        return xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) == pdTRUE;
-    }
-    
-    /**
-     * Safely gives the mutex
+     * Releases mutex
+     * Thread-safe: Yes
      */
     void giveMutex() const {
         xSemaphoreGive(mutex);
     }
     
     /**
-     * Sets the multiplexer to the specified unit with error handling
-     * @param unitIndex Index of the unit to select
-     * @return true if successful
+     * Updates water level for a specific unit
+     * @param unitIndex Index of the unit
      */
-    bool setMultiplexer(int unitIndex) const {
+    void updateWaterLevel(int unitIndex) {
+        if (!isValidAndEnabled(unitIndex)) {
+            return;
+        }
+        
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::updateWaterLevel"
+            );
+            return;
+        }
+        
+        // Only read water level if atomizer is off
+        if (!atomizerStates[unitIndex]) {
+            if (!setMultiplexer(unitIndex)) {
+                giveMutex();
+                return;
+            }
+            
+            float waterLevel = sensorManager.readWaterLevel(unitIndex);
+            if (waterLevel >= 0) {
+                waterLevels[unitIndex] = waterLevel;
+                updateUnitField(unitIndex, "waterLevel", waterLevel, "float");
+            } else {
+                handleSensorError(unitIndex, SystemConfig::SENSOR_TYPE_WATER);
+            }
+        }
+        
+        giveMutex();
+    }
+    
+    /**
+     * Updates water level readings for all units
+     */
+    void updateWaterLevelReadings() {
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            if (systemState.unitsEnabled[i]) {
+                updateWaterLevel(i);
+            }
+        }
+    }
+    
+    /**
+     * Verifies and corrects hardware state for a unit
+     * @param unitIndex Index of the unit
+     * @return true if hardware state is valid
+     */
+    bool verifyAndCorrectHardwareState(int unitIndex) {
         if (!isValidAndEnabled(unitIndex)) {
             return false;
         }
         
-        // Set multiplexer to select the unit
-        Wire.beginTransmission(SystemConfig::PCA_ADDRS[unitIndex]);
-        Wire.write(0x00);  // Select all channels
-        
-        uint8_t result = Wire.endTransmission();
-        if (result != 0) {
-            i2cErrorCount++;
-            Serial.printf("I2C error in setMultiplexer for unit %d: %d\n", unitIndex, result);
-            
-            if (i2cErrorCount >= MAX_I2C_ERRORS) {
-                Serial.println("Too many I2C errors, resetting I2C bus...");
-                Wire.end();
-                delay(100);
-                Wire.begin(SystemConfig::I2C_SDA, SystemConfig::I2C_SCL);
-                i2cErrorCount = 0;
-            }
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::verifyAndCorrectHardwareState"
+            );
             return false;
-        }
-        
-        i2cErrorCount = 0;  // Reset error count on success
-        return true;
-    }
-    
-    /**
-     * Updates water level state and readings for a unit
-     * @param unitIndex Index of the unit
-     */
-    void updateWaterLevel(int unitIndex) {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in updateWaterLevel");
-            return;
-        }
-        
-        // Skip disabled units
-        if (!systemState.unitsEnabled[unitIndex]) {
-            giveMutex();
-            return;
-        }
-        
-        // Update water level state
-        bool newWaterLevelState = (digitalRead(SystemConfig::WATER_LEVEL_PINS[unitIndex]) != LOW);
-        if (systemState.waterLevelStates[unitIndex] != newWaterLevelState) {
-            systemState.waterLevelStates[unitIndex] = newWaterLevelState;
-            updateUnitField(unitIndex, "fields/waterLevelState/booleanValue", newWaterLevelState, "booleanValue");
-            systemState.previousWaterLevelStates[unitIndex] = newWaterLevelState;
-        }
-        
-        // Update water level reading if atomizer is off
-        bool atomState;
-        if (getAtomizerState(unitIndex, atomState) && !atomState) {
-            float newWaterLevel = sensorManager.readWaterLevel(unitIndex);
-            if (newWaterLevel >= 0) {  // Valid reading
-                waterLevels[unitIndex] = newWaterLevel;
-                updateUnitField(unitIndex, "fields/waterLevel/doubleValue", newWaterLevel, "doubleValue");
-            } else {
-                waterLevels[unitIndex] = INVALID_WATER_LEVEL;
-            }
-        }
-        
-        giveMutex();
-    }
-    
-    /**
-     * Updates water level readings for all units with enhanced error recovery
-     * Thread-safe: Yes (uses mutex)
-     * Performance: Batches Firebase updates to reduce network calls
-     * Error Handling: Includes retry mechanism and sensor recalibration
-     */
-    void updateWaterLevelReadings() {
-        if (!takeMutex()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "updateWaterLevelReadings");
-            return;
         }
         
         bool success = true;
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (!systemState.unitsEnabled[i]) {
-                continue;
-            }
-            
-            // Update water level reading if atomizer is off
-            bool atomState;
-            if (getAtomizerState(i, atomState) && !atomState) {
-                float newWaterLevel = sensorManager.readWaterLevel(i);
-                if (newWaterLevel >= 0) {  // Valid reading
-                    waterLevels[i] = newWaterLevel;
-                    if (!updateUnitField(i, "fields/waterLevel/doubleValue", newWaterLevel, "doubleValue")) {
-                        success = false;
-                    }
-                } else {
-                    waterLevels[i] = INVALID_WATER_LEVEL;
-                    if (!handleSensorError(i, SystemConfig::SENSOR_TYPE_WATER)) {
-                        Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "updateWaterLevelReadings", i, "Failed to read water level");
-                        success = false;
-                    }
-                }
-            }
+        
+        // Check multiplexer state
+        if (!setMultiplexer(unitIndex)) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_I2C_ERROR,
+                String("Failed to verify multiplexer state for unit ") + String(unitIndex),
+                "UnitManager::verifyAndCorrectHardwareState"
+            );
+            success = false;
+        }
+        
+        // Check sensor states by attempting to read them
+        if (sensorManager.readWaterLevel(unitIndex) < 0) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_I2C_ERROR,
+                String("Failed to verify water level sensor for unit ") + String(unitIndex),
+                "UnitManager::verifyAndCorrectHardwareState"
+            );
+            success = false;
+        }
+        
+        if (sensorManager.readECValue(unitIndex) < 0) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_I2C_ERROR,
+                String("Failed to verify EC sensor for unit ") + String(unitIndex),
+                "UnitManager::verifyAndCorrectHardwareState"
+            );
+            success = false;
         }
         
         giveMutex();
-        if (!success) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "updateWaterLevelReadings", -1, "Some updates failed");
-        }
-    }
-    
-    /**
-     * Verifies and corrects hardware state mismatch
-     * @param unitIndex Index of the unit to check
-     * @return true if state is correct or was corrected
-     */
-    bool verifyAndCorrectHardwareState(int unitIndex) {
-        bool currentState;
-        if (!getAtomizerState(unitIndex, currentState)) {
-            Serial.println("Failed to get atomizer state for unit " + String(unitIndex));
-            return false;
-        }
-        
-        // Verify hardware state matches software state
-        bool hardwareState = (ledcRead(unitIndex) == SystemConfig::PWM_ATOMIZER_ON);
-        if (currentState != hardwareState) {
-            if (!setAtomizerState(unitIndex, hardwareState)) {
-                Serial.println("Failed to correct atomizer state mismatch for unit " + String(unitIndex));
-                return false;
-            }
-            Serial.println("Corrected atomizer state mismatch for unit " + String(unitIndex));
-        }
-        return true;
+        return success;
     }
     
     /**
      * Updates atomizer timing for a unit
-     * @param unitIndex Index of the unit to update
+     * @param unitIndex Index of the unit
      * @param currentMillis Current time in milliseconds
      */
     void updateAtomizerTiming(int unitIndex, unsigned long currentMillis) {
-        bool currentState;
-        if (!getAtomizerState(unitIndex, currentState)) {
+        if (!isValidAndEnabled(unitIndex)) {
             return;
         }
         
-        // Check timing for state change
-        if (currentMillis - previousMillis[unitIndex] >= 
-            (currentState ? systemState.atomizerOnIntervals[unitIndex] : 
-                          systemState.atomizerOffIntervals[unitIndex])) {
-            bool newState = !currentState;
-            if (!updateAtomizerState(unitIndex, newState)) {
-                Serial.println("Failed to update atomizer state for unit " + String(unitIndex));
-                return;
-            }
-            
-            if (!newState) {
-                updateWaterLevel(unitIndex);
-            }
-            
-            previousMillis[unitIndex] = currentMillis;
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::updateAtomizerTiming"
+            );
+            return;
         }
+        
+        unsigned long elapsed = currentMillis - previousMillis[unitIndex];
+        
+        // Update atomizer state based on timing
+        if (elapsed >= DefaultValues::ATOMIZER_ON_INTERVAL) {
+            if (!atomizerStates[unitIndex]) {
+                atomizerStates[unitIndex] = true;
+                updateUnitField(unitIndex, "atomizerOn", true, "bool");
+            }
+        } else if (elapsed >= DefaultValues::ATOMIZER_OFF_INTERVAL) {
+            if (atomizerStates[unitIndex]) {
+                atomizerStates[unitIndex] = false;
+                updateUnitField(unitIndex, "atomizerOn", false, "bool");
+            }
+        }
+        
+        giveMutex();
+    }
+    
+    /**
+     * Initializes the unit manager
+     * @return true if initialization was successful
+     */
+    bool begin() {
+        mutex = xSemaphoreCreateMutex();
+        if (!mutex) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_CREATION_FAILED,
+                "Failed to create mutex",
+                "UnitManager::begin"
+            );
+            return false;
+        }
+        
+        // Initialize arrays
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            previousMillis[i] = 0;
+            atomizerStates[i] = false;
+            waterLevels[i] = INVALID_WATER_LEVEL;
+            consecutiveErrors[i] = 0;
+        }
+        
+        i2cErrorCount = 0;
+        firebaseErrorCount = 0;
+        sensorErrorCount = 0;
+        
+        return true;
     }
 
 public:
     /**
      * Constructor
      * @param state Reference to system state
-     * @param fbdo Reference to Firebase data object
+     * @param firebase Reference to Firebase manager
      * @param sensor Reference to sensor manager
      */
-    UnitManager(SystemState& state, FirebaseData& fbdo, SensorManager& sensor)
-        : systemState(state), fbdo(fbdo), sensorManager(sensor) {
-        // Initialize arrays
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            previousMillis[i] = 0;
-            atomizerStates[i] = false;
-            waterLevels[i] = INVALID_WATER_LEVEL;  // Initialize with invalid reading
-            // Pre-allocate space for unit names
-            unitNames[i].reserve(UNIT_NAME_MAX_LENGTH);
-        }
-        
-        // Create mutex for thread safety
-        mutex = xSemaphoreCreateMutex();
+    UnitManager(SystemState& state, FirebaseManager& firebase, SensorManager& sensor)
+        : systemState(state), firebaseManager(firebase), sensorManager(sensor) {
+        begin();
     }
     
     /**
      * Destructor
      */
     ~UnitManager() {
-        if (mutex != NULL) {
+        if (mutex) {
             vSemaphoreDelete(mutex);
         }
     }
     
     /**
-     * Initializes the unit manager
-     * @return true if initialization successful
-     */
-    bool begin() {
-        // Initialize unit names from Firebase
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (readUnitDocument(i)) {
-                if (unitJson.get(jsonData, "fields/unitName/stringValue")) {
-                    unitNames[i] = jsonData.stringValue;
-                }
-            }
-        }
-        
-        return true;
-    }
-    
-    /**
-     * Checks if the atomizer is on for a specific unit
-     * @param unitIndex Index of the unit to check
+     * Checks if a unit's atomizer is on
+     * @param unitIndex Index of the unit
      * @return true if atomizer is on
      */
     bool isAtomizerOn(int unitIndex) const {
@@ -538,38 +642,49 @@ public:
             return false;
         }
         
-        bool state = false;
+        bool state;
         if (!getAtomizerState(unitIndex, state)) {
-            Serial.println("Failed to read atomizer state in isAtomizerOn");
+            return false;
         }
         return state;
     }
     
     /**
-     * Reads EC sensor value from a specific unit
-     * @param unitIndex Index of the unit to read from
-     * @return EC value (0-1)
+     * Reads EC sensor value for a unit
+     * @param unitIndex Index of the unit
+     * @return EC value or -1 if error
      */
     float readECSensorValue(const int& unitIndex) const {
-        // First check if unit is valid and enabled
-        if (unitIndex < 0 || unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
-            return INVALID_WATER_LEVEL;  // Use same invalid value for consistency
+        if (!isValidAndEnabled(unitIndex)) {
+            return -1;
         }
         
-        if (!systemState.unitsEnabled[unitIndex]) {
-            return INVALID_WATER_LEVEL;  // Don't read sensors for disabled units
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::readECSensorValue"
+            );
+            return -1;
         }
         
-        // Set the multiplexer to the correct unit
-        if (!setMultiplexer(unitIndex)) {
-            return INVALID_WATER_LEVEL;
+        float value = -1;
+        
+        // Only read EC if atomizer is off
+        if (!atomizerStates[unitIndex]) {
+            if (!setMultiplexer(unitIndex)) {
+                giveMutex();
+                return -1;
+            }
+            
+            value = sensorManager.readECValue(unitIndex);
+            if (value < 0) {
+                handleSensorError(unitIndex, SystemConfig::SENSOR_TYPE_EC);
+            }
         }
         
-        float ecValue = sensorManager.readECValue(unitIndex);
-        if (ecValue >= 0) {
-            ecValue = ecValue / 100.0f;  // Convert to 0-1 range
-        }
-        return ecValue;
+        giveMutex();
+        return value;
     }
     
     /**
@@ -577,148 +692,89 @@ public:
      * @param names Array of unit names
      */
     void updateUnitNames(const String names[SystemConfig::NUMBER_OF_UNITS]) {
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (names[i] != unitNames[i]) {
-                // Truncate name if it exceeds max length
-                String newName = names[i];
-                if (newName.length() > UNIT_NAME_MAX_LENGTH) {
-                    newName = newName.substring(0, UNIT_NAME_MAX_LENGTH);
-                    Serial.println("Warning: Unit name truncated for unit " + String(i));
-                }
-                unitNames[i] = newName;
-                // Update Firebase with new unit name
-                updateUnitField(i, "fields/unitName/stringValue", newName, "stringValue");
-            }
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::updateUnitNames"
+            );
+            return;
         }
+        
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            unitNames[i] = names[i];
+        }
+        
+        giveMutex();
     }
     
     /**
-     * Updates unit configuration from Firebase with batched reads
-     * Thread-safe: Yes (uses mutex)
-     * Performance: Reads all unit data in a single batch operation
-     * Error Handling: Includes retry mechanism for failed Firebase operations
+     * Updates unit data from Firebase
      */
     void updateUnitData() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in updateUnitData");
-            return;
-        }
-        
-        // Read all unit documents in a single batch
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            uint8_t retries = 0;
-            bool success = false;
-            
-            while (!success && retries < SystemConfig::MAX_FIREBASE_RETRIES) {
-                if (readUnitDocument(i)) {
-                    // Update unit name
-                    if (unitJson.get(jsonData, SystemConfig::UNIT_NAME_PATH)) {
-                        String newName = jsonData.stringValue;
-                        if (newName != unitNames[i]) {
-                            if (newName.length() > UNIT_NAME_MAX_LENGTH) {
-                                newName = newName.substring(0, UNIT_NAME_MAX_LENGTH);
-                                Serial.println("Warning: Unit name truncated for unit " + String(i));
-                            }
-                            unitNames[i] = newName;
-                        }
-                    }
-                    
-                    // Update unit state
-                    if (unitJson.get(jsonData, SystemConfig::UNIT_ENABLED_PATH)) {
-                        systemState.unitsEnabled[i] = jsonData.boolValue;
-                    }
-                    
-                    // Update intervals
-                    if (unitJson.get(jsonData, SystemConfig::UNIT_ON_INTERVAL_PATH)) {
-                        systemState.atomizerOnIntervals[i] = jsonData.intValue;
-                    }
-                    if (unitJson.get(jsonData, SystemConfig::UNIT_OFF_INTERVAL_PATH)) {
-                        systemState.atomizerOffIntervals[i] = jsonData.intValue;
-                    }
-                    
-                    success = true;
-                } else {
-                    retries++;
-                    if (retries < SystemConfig::MAX_FIREBASE_RETRIES) {
-                        delay(SystemConfig::FIREBASE_RETRY_DELAY_MS);
-                    }
-                }
-            }
-            
-            if (!success) {
-                Serial.println("Failed to update unit data for unit " + String(i));
+            if (systemState.unitsEnabled[i]) {
+                readUnitDocument(i);
             }
         }
-        
-        giveMutex();
     }
     
     /**
-     * Updates unit states and irrigation timing
-     * Called in the main loop to handle unit operations
+     * Main update loop
      */
     void update() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in update");
-            return;
-        }
-        
         unsigned long currentMillis = millis();
+        
+        // Update water levels
+        updateWaterLevelReadings();
+        
+        // Update atomizer states
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (!isValidAndEnabled(i)) {
-                continue;
+            if (systemState.unitsEnabled[i]) {
+                updateAtomizerTiming(i, currentMillis);
             }
-            
-            // Verify and correct hardware state
-            if (!verifyAndCorrectHardwareState(i)) {
-                continue;
-            }
-            
-            // Update atomizer timing
-            updateAtomizerTiming(i, currentMillis);
-            
-            // Update water level state and reading
-            updateWaterLevel(i);
         }
         
-        giveMutex();
+        // Update unit data in Firebase
+        updateUnitData();
     }
     
     /**
-     * Updates atomizer PWM state for a unit with thread safety
+     * Updates atomizer state for a unit
      * @param unitIndex Index of the unit
-     * @param isOn Whether the atomizer should be on
-     * @return true if update was successful, false otherwise
+     * @param isOn New state
+     * @return true if update was successful
      */
     bool updateAtomizerState(int unitIndex, bool isOn) {
         if (!isValidAndEnabled(unitIndex)) {
             return false;
         }
         
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            ledcWrite(unitIndex, isOn ? SystemConfig::PWM_ATOMIZER_ON : SystemConfig::PWM_ATOMIZER_OFF);
-            atomizerStates[unitIndex] = isOn;
-            xSemaphoreGive(mutex);
-            Serial.println(String(isOn ? "Turning on" : "Turning off") + " atomizer for " + String(unitNames[unitIndex]));
-            return true;
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::updateAtomizerState"
+            );
+            return false;
         }
-        return false;
+        
+        bool success = setAtomizerState(unitIndex, isOn);
+        
+        if (success) {
+            success = updateUnitField(unitIndex, "atomizerOn", isOn, "bool");
+        }
+        
+        giveMutex();
+        return success;
     }
     
     /**
-     * Reads water levels for all units and updates Firebase
-     * Only reads for units where the atomizer is off
-     * Thread-safe: Yes (uses mutex)
+     * Reads water level for all units
      */
     void readWaterLevel() {
-        if (!takeMutex()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "readWaterLevel");
-            return;
-        }
-        
         updateWaterLevelReadings();
-        giveMutex();
     }
-}; // End of UnitManager class
+};
 
 #endif // UNIT_MANAGER_H 

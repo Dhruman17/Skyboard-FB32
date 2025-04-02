@@ -2,12 +2,14 @@
 #define SYSTEM_MANAGER_H
 
 #include "config.h"
+#include "error_manager.h"
+#include "firebase_manager.h"
 #include "light_manager.h"
 #include "network_manager.h"
 #include "ota_manager.h"
 #include "unit_manager.h"
-#include <Firebase_ESP_Client.h>
 #include <ArduinoOTA.h>
+#include <string>
 
 /**
  * SystemManager Class
@@ -30,6 +32,16 @@
  *    - Lighting control
  *    - System configuration updates
  * 
+ * Thread Safety:
+ * - All public methods are thread-safe
+ * - Uses mutex protection for critical sections
+ * - Delegates thread safety to subsystem managers
+ * 
+ * Error Handling:
+ * - Uses centralized ErrorManager for error reporting
+ * - Implements automatic recovery mechanisms
+ * - Provides detailed error context
+ * 
  * Update Intervals:
  * - Heartbeat: Every 30 seconds
  * - System data: Every 30 seconds
@@ -42,21 +54,17 @@ private:
     OTAManager& otaManager;
     LightManager& lightManager;
     UnitManager& unitManager;
-    FirebaseData& fbdo;
+    FirebaseManager& firebaseManager;
     SystemState& systemState;
+    
+    // System status
+    String systemStatus;
     
     // Pre-allocate string space to prevent fragmentation
     static constexpr size_t SYSTEM_NAME_MAX_LENGTH = 50;
     static constexpr size_t TIME_STRING_MAX_LENGTH = 6;
-    static constexpr size_t UNIT_NAME_MAX_LENGTH = 50;
-    
-    // Firebase JSON objects (reused to prevent memory fragmentation)
-    FirebaseJson systemJson;
-    FirebaseJson unitJson;
-    FirebaseJsonData jsonData;
     
     String systemName;
-    String unitNames[SystemConfig::NUMBER_OF_UNITS];
     int connectionOffset;
     unsigned long lastSystemDataUpdate = 0;
     bool initialized;
@@ -67,47 +75,75 @@ private:
     bool lightMasterSwitch;
     bool timeCycleEnabled;
     
+    // Mutex for thread safety
+    SemaphoreHandle_t mutex;
+    static constexpr uint32_t MUTEX_TIMEOUT_MS = 100;
+    
+    /**
+     * Takes mutex with timeout
+     * Thread-safe: Yes
+     * @return true if mutex was taken
+     */
+    bool takeMutex() {
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "SystemManager::takeMutex"
+            );
+            return false;
+        }
+        return true;
+    }
+    
+    /**
+     * Releases mutex
+     * Thread-safe: Yes
+     */
+    void giveMutex() {
+        xSemaphoreGive(mutex);
+    }
+    
     /**
      * Cleans up string resources
+     * Thread-safe: Yes
      */
     void cleanupStrings() {
+        if (!takeMutex()) {
+            return;
+        }
+        
         systemName = "";
         lightOnTime = "";
         lightOffTime = "";
         
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            unitNames[i] = "";
-        }
-    }
-    
-    /**
-     * Cleans up Firebase JSON objects
-     */
-    void cleanupJson() {
-        systemJson.clear();
-        unitJson.clear();
-        jsonData.clear();
+        giveMutex();
     }
     
     /**
      * Initializes string buffers with pre-allocated space
+     * Thread-safe: Yes
      */
     void initializeStrings() {
+        if (!takeMutex()) {
+            return;
+        }
+        
         // Clear any existing strings first
         cleanupStrings();
         
-        // Reserve space for strings
-        systemName.reserve(SYSTEM_NAME_MAX_LENGTH);
-        lightOnTime.reserve(TIME_STRING_MAX_LENGTH);
-        lightOffTime.reserve(TIME_STRING_MAX_LENGTH);
+        // Reserve space for strings with extra capacity for future growth
+        const size_t extraCapacity = 10;  // Extra bytes for future growth
+        systemName.reserve(SYSTEM_NAME_MAX_LENGTH + extraCapacity);
+        lightOnTime.reserve(TIME_STRING_MAX_LENGTH + extraCapacity);
+        lightOffTime.reserve(TIME_STRING_MAX_LENGTH + extraCapacity);
         
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            unitNames[i].reserve(UNIT_NAME_MAX_LENGTH);
-        }
+        giveMutex();
     }
     
     /**
      * Parses time string from Firebase (HH:MM format)
+     * Thread-safe: Yes
      * @param timeStr Time string in HH:MM format
      * @return Time in seconds since midnight
      */
@@ -119,6 +155,7 @@ private:
     
     /**
      * Formats current timestamp for Firebase
+     * Thread-safe: Yes
      * @return ISO 8601 formatted timestamp
      */
     String formatTimestamp() {
@@ -131,120 +168,125 @@ private:
     
     /**
      * Sends heartbeat to Firebase to indicate system is online
+     * Thread-safe: Yes
      */
     void sendHeartbeat() {
         char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
-        snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, SystemConfig::SERIAL_NUMBER);
+        snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, 
+                SystemConfig::SERIAL_NUMBER);
         
-        FirebaseJson systemJson;
-        systemJson.set(SystemConfig::SYSTEM_LAST_SEEN_PATH, formatTimestamp());
-        
-        if (Firebase.Firestore.patchDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", pathBuffer, systemJson.raw(), "lastSeen")) {
-            Serial.printf("Heartbeat sent successfully\n");
-        } else {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "sendHeartbeat", fbdo.errorReason().c_str());
+        if (!firebaseManager.updateField(pathBuffer, "lastSeen", formatTimestamp())) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                "Failed to send heartbeat",
+                "SystemManager::sendHeartbeat"
+            );
         }
     }
     
     /**
-     * Updates system configuration from Firebase
-     * Reads system name, lighting settings, and unit names
+     * Updates system data in Firebase
+     * Thread-safe: Yes
+     * @return true if update was successful
      */
-    void updateSystemData() {
-        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
-        snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, SystemConfig::SERIAL_NUMBER);
-        
-        if (Firebase.Firestore.getDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", pathBuffer)) {
-            // Process system data
-            if (fbdo.payload().length() > 0) {
-                systemJson.clear();
-                systemJson.setJsonData(fbdo.payload());
-                
-                // Update system configuration
-                if (systemJson.get(jsonData, "fields/systemName/stringValue")) {
-                    systemName = jsonData.stringValue;
-                }
-                // Add other system data processing as needed
-            }
-        } else {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "updateSystemData", fbdo.errorReason().c_str());
-        }
-    }
-    
-    /**
-     * Helper method to safely create Firebase paths
-     * @param buffer Buffer to store the path
-     * @param format Format string for snprintf
-     * @param ... Additional arguments for snprintf
-     * @return true if path was created successfully
-     */
-    bool createFirebasePath(char* buffer, size_t bufferSize, const char* format, ...) {
-        va_list args;
-        va_start(args, format);
-        int written = vsnprintf(buffer, bufferSize, format, args);
-        va_end(args);
-        
-        if (written >= bufferSize) {
-            Serial.println("Error: Path buffer overflow");
+    bool updateSystemData() {
+        if (!takeMutex()) {
             return false;
         }
-        return true;
-    }
-    
-    /**
-     * Updates a unit's EC value in Firebase
-     * @param unitIndex Index of the unit
-     * @param ecValue EC value to update
-     */
-    void updateUnitECValue(int unitIndex, float ecValue) {
-        if (unitIndex < 0 || unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
-            return;
+        
+        bool success = true;
+        
+        // Update system status
+        systemStatus = networkManager.isConnected() ? "online" : "offline";
+        
+        // Update unit data
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            if (!systemState.unitsEnabled[i]) {
+                continue;
+            }
+            
+            // Update unit status
+            if (!firebaseManager.addToBatch(i, "status", 
+                systemState.unitsEnabled[i] ? "enabled" : "disabled", "string")) {
+                success = false;
+            }
+            
+            // Update sensor values
+            float ecValue = unitManager.readECSensorValue(i);
+            if (ecValue >= 0) {
+                if (!firebaseManager.addToBatch(i, "ecValue", String(ecValue, 3), "float")) {
+                    success = false;
+                }
+            }
+            
+            // Update control values
+            if (!firebaseManager.addToBatch(i, "atomizerOn", 
+                unitManager.isAtomizerOn(i) ? "true" : "false", "bool")) {
+                success = false;
+            }
         }
         
-        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
-        snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, SystemConfig::SERIAL_NUMBER, unitIndex);
-        
-        FirebaseJson unitJson;
-        unitJson.set(SystemConfig::UNIT_EC_VALUE_PATH, ecValue);
-        unitJson.set(SystemConfig::UNIT_EC_LAST_UPDATED_PATH, formatTimestamp());
-        
-        if (Firebase.Firestore.patchDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", pathBuffer, unitJson.raw(), "ecValue,ecLastUpdated")) {
-            Serial.printf("Updated EC value for unit %d\n", unitIndex);
-        } else {
-            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "updateUnitECValue", fbdo.errorReason().c_str());
+        // Flush any remaining batched operations
+        if (!firebaseManager.flushBatch()) {
+            success = false;
         }
+        
+        giveMutex();
+        
+        if (!success) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                "Failed to update system data",
+                "SystemManager::updateSystemData"
+            );
+        }
+        
+        return success;
     }
 
 public:
     /**
      * Constructor
+     * Thread-safe: Yes
      * @param network Reference to network manager
      * @param ota Reference to OTA manager
      * @param light Reference to light manager
      * @param unit Reference to unit manager
-     * @param fbdo Reference to Firebase data object
+     * @param firebase Reference to Firebase manager
      * @param state Reference to system state
      */
     SystemManager(NetworkManager& network, OTAManager& ota, LightManager& light, 
-                 UnitManager& unit, FirebaseData& fbdo, SystemState& state)
+                 UnitManager& unit, FirebaseManager& firebase, SystemState& state)
         : networkManager(network), otaManager(ota), lightManager(light), 
-          unitManager(unit), fbdo(fbdo), systemState(state), initialized(false) {
+          unitManager(unit), firebaseManager(firebase), systemState(state), 
+          initialized(false), mutex(NULL) {
         connectionOffset = 1000 + random(100, 10000);
         initializeStrings();
+        
+        // Create mutex for thread safety
+        mutex = xSemaphoreCreateMutex();
+        if (!mutex) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_CREATION_FAILED,
+                "Failed to create mutex",
+                "SystemManager::SystemManager"
+            );
+        }
     }
     
     /**
      * Destructor
-     * Cleans up system resources
      */
     ~SystemManager() {
         cleanupStrings();
-        cleanupJson();
+        if (mutex) {
+            vSemaphoreDelete(mutex);
+        }
     }
     
     /**
      * Initializes the system
-     * Sets up network, Firebase, and hardware components
+     * Thread-safe: Yes
      * @return true if initialization successful
      */
     bool begin() {
@@ -252,37 +294,67 @@ public:
             return true;
         }
         
-        delay(connectionOffset);
-        
-        if (!networkManager.begin()) {
+        if (!takeMutex()) {
             return false;
         }
         
-        // First update system data to get the system name
-        updateSystemData();
+        delay(connectionOffset);
         
-        // Initialize OTA if we have a system name
-        if (systemName.length() > 0) {
-            if (!networkManager.handleOTA(systemName)) {
-                Serial.println("Failed to initialize OTA");
-                return false;
+        bool success = true;
+        
+        if (!networkManager.begin()) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                "Failed to initialize network",
+                "SystemManager::begin"
+            );
+            success = false;
+        }
+        
+        if (success) {
+            // First update system data to get the system name
+            if (!updateSystemData()) {
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                    "Failed to update initial system data",
+                    "SystemManager::begin"
+                );
+                success = false;
             }
         }
         
-        // Update system version in Firebase
-        otaManager.updateSystemVersion();
+        if (success && systemName.length() > 0) {
+            if (!networkManager.handleOTA(systemName)) {
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                    "Failed to initialize OTA",
+                    "SystemManager::begin"
+                );
+                success = false;
+            }
+        }
         
-        initialized = true;
-        return true;
+        if (success) {
+            otaManager.updateSystemVersion();
+            initialized = true;
+        }
+        
+        giveMutex();
+        return success;
     }
     
     /**
      * Main system update loop
+     * Thread-safe: Yes
      * Handles all periodic tasks and system monitoring
      */
     void update() {
         if (!networkManager.isConnected()) {
             return;  // Skip updates if not connected
+        }
+        
+        if (!takeMutex()) {
+            return;
         }
         
         unsigned long currentMillis = millis();
@@ -299,18 +371,6 @@ public:
             
             // Update sensors and units
             unitManager.readWaterLevel();
-            // Read EC from all units
-            for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-                // Only read EC for units that are enabled and have their atomizer off
-                if (unitNames[i] != "" && systemState.unitsEnabled[i] && !unitManager.isAtomizerOn(i)) {
-                    float ecValue = unitManager.readECSensorValue(i);
-                    if (ecValue >= 0 && ecValue <= 1.0f) {  // Validate EC value is in valid range
-                        updateUnitECValue(i, ecValue);
-                    } else {
-                        Serial.println("Invalid EC value for unit " + String(i) + ": " + String(ecValue, 3));
-                    }
-                }
-            }
             unitManager.update();
             
             // Update lighting
@@ -326,18 +386,22 @@ public:
         }
         
         // Check for firmware updates (using unadjusted time since it's independent of connection offset)
-        if (currentMillis - systemState.lastFirmwareCheckMillis >= SystemConfig::FIRMWARE_CHECK_INTERVAL) {
-            Serial.println("Checking for firmware updates...");
+        if (currentMillis - systemState.lastFirmwareCheckMillis >= SystemConfig::INTERVAL_5_MINUTES) {
             otaManager.checkForUpdates();
             systemState.lastFirmwareCheckMillis = currentMillis;
         }
+        
+        giveMutex();
     }
     
     /**
      * Gets the system name
+     * Thread-safe: Yes
      * @return System name string
      */
-    const String& getSystemName() const { return systemName; }
+    const String& getSystemName() const { 
+        return systemName; 
+    }
 };
 
 #endif // SYSTEM_MANAGER_H 

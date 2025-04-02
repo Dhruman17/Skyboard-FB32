@@ -8,7 +8,7 @@
 #include <Firebase_ESP_Client.h>
 #include <ArduinoOTA.h>
 #include <time.h>
-#include <EEPROM.h>
+#include <Preferences.h>
 #include <vector>
 
 /**
@@ -76,6 +76,12 @@ private:
     static constexpr const char* DEFAULT_OTA_PASSWORD = "admin";
     String otaPassword;
     
+    // Preferences for credential storage
+    Preferences preferences;
+    static constexpr const char* PREF_NAMESPACE = "firebase";
+    static constexpr const char* PREF_EMAIL_KEY = "email";
+    static constexpr const char* PREF_PASSWORD_KEY = "password";
+    
     /**
      * Safely takes the mutex with timeout
      * @return true if mutex was taken successfully
@@ -92,7 +98,7 @@ private:
     }
     
     /**
-     * Loads Firebase credentials from EEPROM
+     * Loads Firebase credentials from Preferences
      */
     void loadFirebaseCredentials() {
         if (!takeMutex()) {
@@ -100,27 +106,15 @@ private:
             return;
         }
         
-        // Initialize EEPROM
-        EEPROM.begin(SystemConfig::EEPROM_SIZE);
+        // Initialize Preferences
+        preferences.begin(PREF_NAMESPACE, false);
         
         // Set hardcoded API key
         apiKey = SystemConfig::FIREBASE_API_KEY;
         
-        // Read Email
-        email = "";
-        for (int i = 0; i < 128; i++) {
-            char c = EEPROM.read(SystemConfig::EEPROM_EMAIL_ADDR + i);
-            if (c == '\0') break;
-            email += c;
-        }
-        
-        // Read Password
-        password = "";
-        for (int i = 0; i < 128; i++) {
-            char c = EEPROM.read(SystemConfig::EEPROM_PASSWORD_ADDR + i);
-            if (c == '\0') break;
-            password += c;
-        }
+        // Read Email and Password from Preferences
+        email = preferences.getString(PREF_EMAIL_KEY, "");
+        password = preferences.getString(PREF_PASSWORD_KEY, "");
         
         giveMutex();
     }
@@ -152,7 +146,7 @@ private:
     }
     
     /**
-     * Saves Firebase credentials to EEPROM
+     * Saves Firebase credentials to Preferences
      */
     void saveFirebaseCredentials() {
         if (!takeMutex()) {
@@ -162,30 +156,15 @@ private:
         
         // Validate credentials before saving
         if (!validateCredentials()) {
-            Serial.println("Invalid credentials, not saving to EEPROM");
+            Serial.println("Invalid credentials, not saving to Preferences");
             giveMutex();
             return;
         }
         
-        // Only clear the credential sections, not the entire EEPROM
-        for (int i = 0; i < CREDENTIAL_MAX_LENGTH; i++) {
-            EEPROM.write(SystemConfig::EEPROM_EMAIL_ADDR + i, 0);
-            EEPROM.write(SystemConfig::EEPROM_PASSWORD_ADDR + i, 0);
-        }
+        // Save to Preferences
+        preferences.putString(PREF_EMAIL_KEY, email);
+        preferences.putString(PREF_PASSWORD_KEY, password);
         
-        // Write Email
-        for (size_t i = 0; i < email.length(); i++) {
-            EEPROM.write(SystemConfig::EEPROM_EMAIL_ADDR + i, email[i]);
-        }
-        EEPROM.write(SystemConfig::EEPROM_EMAIL_ADDR + email.length(), '\0');
-        
-        // Write Password
-        for (size_t i = 0; i < password.length(); i++) {
-            EEPROM.write(SystemConfig::EEPROM_PASSWORD_ADDR + i, password[i]);
-        }
-        EEPROM.write(SystemConfig::EEPROM_PASSWORD_ADDR + password.length(), '\0');
-        
-        EEPROM.commit();
         giveMutex();
     }
     
@@ -198,12 +177,8 @@ private:
         password = "";
         otaPassword = "";
         
-        // Clear EEPROM credential sections
-        for (int i = 0; i < CREDENTIAL_MAX_LENGTH; i++) {
-            EEPROM.write(SystemConfig::EEPROM_EMAIL_ADDR + i, 0);
-            EEPROM.write(SystemConfig::EEPROM_PASSWORD_ADDR + i, 0);
-        }
-        EEPROM.commit();
+        // Clear Preferences
+        preferences.clear();
     }
     
     /**
@@ -240,7 +215,7 @@ private:
                 }
             }
             
-            // Save to EEPROM
+            // Save to Preferences
             saveFirebaseCredentials();
             
             // Reinitialize Firebase with new credentials
@@ -446,7 +421,7 @@ public:
             Serial.println("Failed to create mutex in NetworkManager");
         }
         
-        // Load Firebase credentials from EEPROM
+        // Load Firebase credentials from Preferences
         loadFirebaseCredentials();
     }
     

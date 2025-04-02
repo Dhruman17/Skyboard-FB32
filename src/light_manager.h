@@ -67,16 +67,24 @@ private:
      * @return Current time of day in seconds since midnight
      */
     time_t getCurrentTimeOfDay() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in getCurrentTimeOfDay");
+            return 0;
+        }
+        
+        time_t result = 0;
         time_t now;
         time(&now);
         if (now < 1000000000) { // If time is not set (before year 2000)
             Serial.println("Time not set, using fallback cycle");
+            giveMutex();
             return 0;
         }
         
         struct tm *currentTime = localtime(&now);
         if (!currentTime) {
             Serial.println("Failed to get local time, using fallback cycle");
+            giveMutex();
             return 0;
         }
         
@@ -88,7 +96,9 @@ private:
         currentTimeOfDay.tm_min = currentTime->tm_min;
         currentTimeOfDay.tm_sec = currentTime->tm_sec;
         
-        return mktime(&currentTimeOfDay);
+        result = mktime(&currentTimeOfDay);
+        giveMutex();
+        return result;
     }
     
     /**
@@ -177,18 +187,25 @@ public:
     LightManager() : lightState(false), masterSwitch(false),
                     timeCycleEnabled(false), onTime(0), offTime(0),
                     initialized(false), pinErrorCount(0),
-                    lastLightStateChange(0), fallbackLightState(false) {
+                    lastLightStateChange(0), fallbackLightState(false),
+                    mutex(NULL) {
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
-            Serial.println("Failed to create mutex in LightManager");
+            Serial.println("CRITICAL ERROR: Failed to create mutex in LightManager");
+            // Consider implementing a fallback mechanism or system reset here
         }
     }
     
     /**
      * Destructor
+     * Ensures proper cleanup of resources
      */
     ~LightManager() {
         if (mutex != NULL) {
+            // Ensure we're not holding the mutex before deleting
+            if (xSemaphoreGetMutexHolder(mutex) == xTaskGetCurrentTaskHandle()) {
+                xSemaphoreGive(mutex);
+            }
             vSemaphoreDelete(mutex);
         }
     }

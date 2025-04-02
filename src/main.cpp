@@ -23,6 +23,7 @@
 #include "system_manager.h"
 #include "unit_manager.h"
 #include "preferences_manager.h"
+#include "firebase_manager.h"
 
 #define FIREBASEJSON_USE_PSRAM
 
@@ -46,8 +47,11 @@ SystemState systemState;  // System state tracking
 HardwareManager hardwareManager;
 SensorManager sensorManager(hardwareManager);
 
+// Initialize Firebase
+FirebaseManager firebaseManager(fbdo);
+
 // Unit management (3 vertical farming units)
-UnitManager unitManager(systemState, fbdo, sensorManager);
+UnitManager unitManager(systemState, firebaseManager, sensorManager);
 
 // System-wide control
 LightManager lightManager;  // Shared lighting system
@@ -57,7 +61,7 @@ OTAManager otaManager(fbdo, SystemConfig::systemPath, SystemConfig::SERIAL_NUMBE
                      SystemConfig::FIRMWARE_VERSION);
 
 // Main system coordinator
-SystemManager systemManager(networkManager, otaManager, lightManager, unitManager, fbdo, systemState);
+SystemManager systemManager(networkManager, otaManager, lightManager, unitManager, firebaseManager, systemState);
 
 // Non-volatile storage for settings
 PreferencesManager preferencesManager;
@@ -87,6 +91,11 @@ void setup() {
     
     // Load settings from storage first
     loadSettingsFromStorage();
+    
+    // Initialize Firebase
+    config.api_key = SystemConfig::FIREBASE_API_KEY;
+    config.database_url = SystemConfig::FIREBASE_DATABASE_URL;
+    Firebase.begin(&config, &auth);
     
     // Initialize hardware components (required for operation)
     if (!hardwareManager.begin()) {

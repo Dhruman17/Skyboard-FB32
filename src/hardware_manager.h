@@ -58,6 +58,90 @@ private:
     }
     
     /**
+     * Cleans up hardware resources
+     */
+    void cleanup() {
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "cleanup");
+            return;
+        }
+        
+        // Reset multiplexer states
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            multiplexerStates[i] = false;
+            pwmInitialized[i] = false;
+        }
+        
+        // Reset I2C bus
+        Wire.end();
+        
+        // Reset error count
+        i2cErrorCount = 0;
+        
+        initialized = false;
+        giveMutex();
+    }
+    
+    /**
+     * Initializes hardware resources
+     * @return true if initialization successful
+     */
+    bool initialize() {
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "initialize");
+            return false;
+        }
+        
+        bool success = true;
+        
+        // Initialize I2C
+        Wire.begin();
+        Wire.setClock(100000);  // Set I2C clock to 100kHz
+        
+        // Initialize multiplexer states
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            multiplexerStates[i] = false;
+            pwmInitialized[i] = false;
+        }
+        
+        // Initialize PWM for atomizers
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            if (!initializePWM(i)) {
+                Serial.printf("Failed to initialize PWM for unit %d\n", i);
+                success = false;
+                break;
+            }
+        }
+        
+        if (success) {
+            initialized = true;
+        } else {
+            cleanup();
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Initializes PWM for a specific unit
+     * @param unitIndex Index of the unit
+     * @return true if initialization successful
+     */
+    bool initializePWM(int unitIndex) {
+        if (unitIndex < 0 || unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            return false;
+        }
+        
+        // Initialize PWM pin
+        pinMode(SystemConfig::ATOMIZER_PINS[unitIndex], OUTPUT);
+        analogWrite(SystemConfig::ATOMIZER_PINS[unitIndex], 0);
+        
+        pwmInitialized[unitIndex] = true;
+        return true;
+    }
+    
+    /**
      * Selects a unit using the main multiplexer with error handling
      * @param unitIndex Index of the unit to select
      * @return true if selection successful
@@ -117,94 +201,6 @@ private:
     }
     
     /**
-     * Initializes I2C with error handling and recovery
-     * @return true if initialization successful
-     */
-    bool initializeI2C() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in initializeI2C");
-            return false;
-        }
-        
-        bool success = true;
-        i2cErrorCount = 0;
-        
-        // Initialize I2C
-        Wire.begin();
-        Wire.setClock(100000); // 100kHz I2C clock
-        
-        // Test main multiplexer
-        Wire.beginTransmission(SystemConfig::TCAADDR);
-        if (Wire.endTransmission() != 0) {
-            Serial.println("Failed to communicate with main multiplexer");
-            success = false;
-        }
-        
-        // Test unit multiplexers
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (!selectUnit(i)) {
-                Serial.println("Failed to select unit " + String(i));
-                success = false;
-            }
-            
-            Wire.beginTransmission(SystemConfig::PCA_ADDRS[i]);
-            if (Wire.endTransmission() != 0) {
-                Serial.println("Failed to communicate with unit " + String(i) + " multiplexer");
-                success = false;
-            }
-        }
-        
-        giveMutex();
-        return success;
-    }
-    
-    /**
-     * Initializes GPIO pins with error checking
-     * @return true if initialization successful
-     */
-    bool initializePins() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in initializePins");
-            return false;
-        }
-        
-        bool success = true;
-        
-        // Initialize water level pins
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (SystemConfig::WATER_LEVEL_PINS[i] != -1) {
-                pinMode(SystemConfig::WATER_LEVEL_PINS[i], INPUT_PULLUP);
-            }
-        }
-        
-        // Initialize PWM channels for atomizers
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (SystemConfig::ATOMIZER_PINS[i] != -1) {
-                ledcSetup(i, SystemConfig::PWM_FREQUENCY_ATOMIZER, SystemConfig::PWM_RESOLUTION_ATOMIZER);
-                ledcAttachPin(SystemConfig::ATOMIZER_PINS[i], i);
-                ledcWrite(i, SystemConfig::PWM_ATOMIZER_OFF);
-                pwmInitialized[i] = true;
-            } else {
-                pwmInitialized[i] = false;
-            }
-        }
-        
-        // Initialize system pins
-        if (SystemConfig::SYSTEM_12V_POWER_PIN != -1) {
-            pinMode(SystemConfig::SYSTEM_12V_POWER_PIN, OUTPUT);
-            digitalWrite(SystemConfig::SYSTEM_12V_POWER_PIN, HIGH);
-        }
-        
-        if (SystemConfig::SYSTEM_LIGHTS_PIN != -1) {
-            pinMode(SystemConfig::SYSTEM_LIGHTS_PIN, OUTPUT);
-            digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
-        }
-        
-        giveMutex();
-        return success;
-    }
-    
-    /**
      * Resets I2C bus if too many errors occur
      */
     void resetI2CIfNeeded() {
@@ -233,57 +229,44 @@ public:
     /**
      * Constructor
      */
-    HardwareManager() : initialized(false), i2cErrorCount(0) {
-        mutex = xSemaphoreCreateMutex();
-        if (mutex == NULL) {
-            Serial.println("Failed to create mutex in HardwareManager");
-        }
-        
-        // Initialize state arrays
+    HardwareManager() : initialized(false), mutex(NULL), i2cErrorCount(0) {
+        // Initialize arrays
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             multiplexerStates[i] = false;
             pwmInitialized[i] = false;
+        }
+        
+        // Create mutex for thread safety
+        mutex = xSemaphoreCreateMutex();
+        if (mutex == NULL) {
+            Serial.println("CRITICAL ERROR: Failed to create mutex in HardwareManager");
         }
     }
     
     /**
      * Destructor
+     * Ensures proper cleanup of hardware resources
      */
     ~HardwareManager() {
+        cleanup();
         if (mutex != NULL) {
+            // Ensure we're not holding the mutex before deleting
+            if (xSemaphoreGetMutexHolder(mutex) == xTaskGetCurrentTaskHandle()) {
+                xSemaphoreGive(mutex);
+            }
             vSemaphoreDelete(mutex);
         }
     }
     
     /**
-     * Initializes hardware components
-     * Sets up I2C, PWM, and sensor communication
+     * Initializes the hardware manager
      * @return true if initialization successful
      */
     bool begin() {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in begin");
-            return false;
+        if (initialized) {
+            return true;
         }
-        
-        bool success = true;
-        
-        if (!initializeI2C()) {
-            Serial.println("I2C initialization failed");
-            success = false;
-        }
-        
-        if (success && !initializePins()) {
-            Serial.println("Pin initialization failed");
-            success = false;
-        }
-        
-        if (success) {
-            initialized = true;
-        }
-        
-        giveMutex();
-        return success;
+        return initialize();
     }
     
     /**
