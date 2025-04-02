@@ -288,12 +288,9 @@ public:
             return false;
         }
         
-        if (!createPath(pathBuffer, sizeof(pathBuffer), 
-                       SystemConfig::SYSTEM_PATH_FORMAT, 
-                       SystemConfig::SERIAL_NUMBER)) {
-            giveMutex();
-            return false;
-        }
+        // Create path buffer for Firebase
+        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+        snprintf(pathBuffer, sizeof(pathBuffer), "systems/%s", SystemConfig::SERIAL_NUMBER);
         
         documentJson.clear();
         for (const auto& pair : data) {
@@ -486,13 +483,19 @@ public:
         }
         
         if (success) {
-            char unitPath[50];
-            snprintf(unitPath, sizeof(unitPath), "units/%d/", unitIndex);
+            // Create field path buffers
+            char enabledPath[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+            char onIntervalPath[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+            char offIntervalPath[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+            
+            snprintf(enabledPath, sizeof(enabledPath), "units/%d/enabled", unitIndex);
+            snprintf(onIntervalPath, sizeof(onIntervalPath), "units/%d/atomizerOnInterval", unitIndex);
+            snprintf(offIntervalPath, sizeof(offIntervalPath), "units/%d/atomizerOffInterval", unitIndex);
             
             documentJson.clear();
-            documentJson.set(String(unitPath) + "enabled", enabled);
-            documentJson.set(String(unitPath) + "atomizerOnInterval", atomizerOnInterval);
-            documentJson.set(String(unitPath) + "atomizerOffInterval", atomizerOffInterval);
+            documentJson.set(enabledPath, enabled);
+            documentJson.set(onIntervalPath, atomizerOnInterval);
+            documentJson.set(offIntervalPath, atomizerOffInterval);
             
             if (!Firebase.Firestore.patchDocument(&fbdo, 
                                                 SystemConfig::FIREBASE_PROJECT_ID, 

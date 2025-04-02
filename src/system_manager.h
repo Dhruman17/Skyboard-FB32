@@ -179,21 +179,28 @@ private:
     }
     
     /**
-     * Sends heartbeat to Firebase to indicate system is online
+     * Sends heartbeat to Firebase
      * Thread-safe: Yes
      */
     void sendHeartbeat() {
-        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
-        snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, 
-                SystemConfig::SERIAL_NUMBER);
+        if (!takeMutex()) {
+            return;
+        }
         
-        if (!firebaseManager.updateField(pathBuffer, "lastSeen", formatTimestamp())) {
-            ErrorManager::systemError(
-                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+        // Create path buffer for Firebase
+        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+        snprintf(pathBuffer, sizeof(pathBuffer), "systems/%s", systemName.c_str());
+        
+        // Update heartbeat timestamp in Firebase
+        if (!firebaseManager.updateField(pathBuffer, "heartbeat", String(millis()))) {
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
                 "Failed to send heartbeat",
                 "SystemManager::sendHeartbeat"
             );
         }
+        
+        giveMutex();
     }
     
     /**
@@ -211,11 +218,17 @@ private:
         // Update system status
         systemStatus = networkManager.isConnected() ? "online" : "offline";
         
+        // Create path buffer for Firebase
+        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+        
         // Update unit data
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             if (!systemState.unitsEnabled[i]) {
                 continue;
             }
+            
+            // Create unit path
+            snprintf(pathBuffer, sizeof(pathBuffer), "units/%d", i);
             
             // Update unit status
             if (!firebaseManager.addToBatch(i, "status", 
@@ -482,12 +495,14 @@ public:
             // Log heap status
             Serial.printf("Heap Status - Free: %u, Min Ever: %u\n", currentHeap, minHeapEver);
             
+            // Create path buffer for Firebase
+            char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+            snprintf(pathBuffer, sizeof(pathBuffer), "systems/%s", systemName.c_str());
+            
             // Update in Firebase
-            firebaseManager.updateSystemHealth("heapStatus", {
-                {"free", String(currentHeap)},
-                {"minEver", String(minHeapEver)},
-                {"warning", String(currentHeap < SystemConfig::HEAP_WARNING_THRESHOLD)}
-            });
+            firebaseManager.updateField(pathBuffer, "heapStatus", String(currentHeap));
+            firebaseManager.updateField(pathBuffer, "minEver", String(minHeapEver));
+            firebaseManager.updateField(pathBuffer, "warning", String(currentHeap < SystemConfig::HEAP_WARNING_THRESHOLD));
             
             lastHeapCheck = currentMillis;
         }

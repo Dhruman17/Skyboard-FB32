@@ -2,6 +2,7 @@
 #define HARDWARE_MANAGER_H
 
 #include "config.h"
+#include "error_manager.h"
 #include "Wire.h"
 
 /**
@@ -126,18 +127,46 @@ private:
     /**
      * Initializes PWM for a specific unit
      * @param unitIndex Index of the unit
-     * @return true if initialization successful
+     * @return true if initialization was successful
      */
     bool initializePWM(int unitIndex) {
         if (unitIndex < 0 || unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            ::ErrorManager::hardwareError(
+                ::ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                "Invalid unit index for PWM initialization",
+                "HardwareManager::initializePWM"
+            );
             return false;
         }
         
-        // Initialize PWM pin
-        pinMode(SystemConfig::ATOMIZER_PINS[unitIndex], OUTPUT);
-        analogWrite(SystemConfig::ATOMIZER_PINS[unitIndex], 0);
+        // Get the correct pin based on unit index
+        int pin;
+        switch (unitIndex) {
+            case 0:
+                pin = SystemConfig::ATOMIZER_PIN_1;
+                break;
+            case 1:
+                pin = SystemConfig::ATOMIZER_PIN_2;
+                break;
+            case 2:
+                pin = SystemConfig::ATOMIZER_PIN_3;
+                break;
+            default:
+                ::ErrorManager::hardwareError(
+                    ::ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                    "Invalid unit index for PWM initialization",
+                    "HardwareManager::initializePWM"
+                );
+                return false;
+        }
         
+        // Initialize PWM
+        pinMode(pin, OUTPUT);
+        ledcSetup(unitIndex, SystemConfig::PWM_FREQUENCY_ATOMIZER, SystemConfig::PWM_RESOLUTION_ATOMIZER);
+        ledcAttachPin(pin, unitIndex);
+        ledcWrite(unitIndex, SystemConfig::PWM_ATOMIZER_OFF);  // Start with atomizer off
         pwmInitialized[unitIndex] = true;
+        
         return true;
     }
     

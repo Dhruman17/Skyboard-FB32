@@ -58,6 +58,12 @@ namespace SystemConfig {
     static constexpr const char* UNIT_PATH_FORMAT = "systems/%s/units/%d";
     static constexpr const char* SYSTEM_PATH_FORMAT = "systems/%s";
     static constexpr const char* SYSTEM_LAST_SEEN_PATH = "lastSeen";  // Path for last seen timestamp
+    static constexpr uint32_t FIREBASE_TIMEOUT = 10000;  // 10 seconds
+    static constexpr uint32_t FIREBASE_CHECK_INTERVAL = 300000;  // 5 minutes
+    static constexpr uint32_t FIREBASE_RETRY_DELAY = 5000;  // 5 seconds
+    static constexpr uint8_t FIREBASE_MAX_RETRIES = 3;
+    static constexpr uint32_t FIREBASE_RETRY_DELAY_MS = 5000;  // 5 seconds
+    static constexpr uint8_t MAX_FIREBASE_RETRIES = 3;  // Maximum number of Firebase operation retries
     
     // Sensor Configuration
     static constexpr const char* SENSOR_TYPE_WATER = "water";  // Water level sensor type
@@ -70,8 +76,11 @@ namespace SystemConfig {
     static constexpr int I2C_SDA = 21;  // I2C SDA pin
     static constexpr int I2C_SCL = 22;  // I2C SCL pin
     
-    // Firebase Timeouts
-    static constexpr uint32_t FIREBASE_TIMEOUT = 10000;  // 10 seconds timeout
+    // Atomizer Pin Configuration
+    static constexpr int ATOMIZER_PIN_1 = 25;  // Atomizer 1 PWM pin
+    static constexpr int ATOMIZER_PIN_2 = 26;  // Atomizer 2 PWM pin
+    static constexpr int ATOMIZER_PIN_3 = 27;  // Atomizer 3 PWM pin
+    static constexpr int ATOMIZER_PIN_4 = 14;  // Atomizer 4 PWM pin
     
     // Unit Configuration
     static constexpr const char* UNIT_NAME_PATH = "fields/unitName/stringValue";
@@ -92,7 +101,6 @@ namespace SystemConfig {
     // Error Handling Configuration
     static constexpr uint8_t MAX_I2C_RETRIES = 3;  // Maximum number of I2C operation retries
     static constexpr uint8_t MAX_SENSOR_RETRIES = 3;  // Maximum number of sensor reading retries
-    static constexpr uint8_t MAX_FIREBASE_RETRIES = 3;  // Maximum number of Firebase operation retries
     static constexpr uint8_t MAX_CONSECUTIVE_ERRORS = 5;  // Maximum number of consecutive errors before system reset
     static constexpr uint8_t MAX_PIN_ERRORS = 3;  // Maximum number of pin operation errors
     static constexpr uint8_t MAX_UPDATE_ERRORS = 3;  // Maximum number of update operation errors
@@ -100,7 +108,6 @@ namespace SystemConfig {
     // Timing Configuration
     static constexpr uint32_t I2C_RETRY_DELAY_MS = 100;  // Delay between I2C retries
     static constexpr uint32_t SENSOR_RETRY_DELAY_MS = 100;  // Delay between sensor retries
-    static constexpr uint32_t FIREBASE_RETRY_DELAY_MS = 5000;  // Delay between Firebase retries
     static constexpr uint32_t ERROR_RESET_DELAY_MS = 1000;  // Delay before system reset after max errors
     static constexpr uint32_t MUTEX_TIMEOUT_MS = 100;  // Standard mutex timeout
     static constexpr uint32_t SENSOR_READING_DELAY_MS = 100;  // Delay between sensor readings
@@ -121,7 +128,6 @@ namespace SystemConfig {
     static constexpr uint8_t PWM_ATOMIZER_ON = 255;  // PWM value for atomizer on
     
     // GPIO Configuration
-    static constexpr int ATOMIZER_PINS[] = {25, 26, 27};  // Atomizer PWM pins
     static constexpr int WATER_LEVEL_PINS[] = {32, 33, 34};  // Water level input pins
     static constexpr int SYSTEM_12V_POWER_PIN = 12;  // System power control pin
     static constexpr int SYSTEM_LIGHTS_PIN = 13;  // System lights control pin
@@ -141,6 +147,10 @@ namespace SystemConfig {
     // Heap Monitoring
     static constexpr uint32_t HEAP_WARNING_THRESHOLD = 15000;  // Warning threshold in bytes
     static constexpr uint32_t HEAP_MONITOR_INTERVAL = 3600000;  // 1 hour
+    
+    // WiFi Manager Configuration
+    static constexpr uint32_t CONFIG_PORTAL_TIMEOUT = 180;  // 3 minutes timeout for config portal
+    static constexpr int MIN_SIGNAL_QUALITY = 30;  // Minimum WiFi signal quality in dBm
 }
 
 namespace DefaultValues {
@@ -192,6 +202,14 @@ struct SystemState {
     unsigned long lastConnectionCheckMillis = 0;
     unsigned long lastFirmwareCheckMillis = 0;
     unsigned long lastReconnectAttempt = 0;
+    
+    // Time Validation
+    bool timeValid = false;  // Whether system time is valid
+    unsigned long lastSyncTime = 0;  // Last successful NTP sync time
+    
+    // Heap Monitoring
+    bool heapWarning = false;  // Whether heap is below warning threshold
+    unsigned long minHeapSeen = ESP.getFreeHeap();  // Minimum heap seen during operation
 };
 
 // External declarations

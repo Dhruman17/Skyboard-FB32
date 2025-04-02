@@ -5,6 +5,7 @@
 #include "error_manager.h"
 #include "firebase_manager.h"
 #include "sensor_coms.h"
+#include "atomizer_manager.h"
 #include <Firebase_ESP_Client.h>
 #include <time.h>
 
@@ -36,6 +37,7 @@ private:
     SystemState& systemState;
     FirebaseManager& firebaseManager;
     SensorManager& sensorManager;
+    AtomizerManager& atomizerManager;
     
     // Pre-allocate string space to prevent fragmentation
     static constexpr size_t UNIT_NAME_MAX_LENGTH = 50;
@@ -558,28 +560,56 @@ private:
      * Updates atomizer timing for a specific unit
      * Thread-safe: Yes
      * @param unitIndex Index of the unit to update
+     * @return true if update successful
      */
-    void updateAtomizerTiming(int unitIndex) {
+    bool updateAtomizerTiming(uint8_t unitIndex) {
         if (!takeMutex()) {
-            return;
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to update atomizer timing",
+                "UnitManager::updateAtomizerTiming"
+            );
+            return false;
         }
-
-        // Get current time
-        time_t now;
-        time(&now);
         
-        // Get stored interval from system state
-        uint32_t onInterval = systemState.atomizerOnIntervals[unitIndex];
+        if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_INVALID_STATE,
+                "Invalid unit index",
+                "UnitManager::updateAtomizerTiming"
+            );
+            giveMutex();
+            return false;
+        }
         
-        // Calculate next on/off times based on stored interval
-        time_t nextOnTime = now + onInterval;
-        time_t nextOffTime = nextOnTime + onInterval;
+        // Use stored intervals from systemState
+        unsigned long onInterval = systemState.atomizerOnIntervals[unitIndex];
+        unsigned long offInterval = systemState.atomizerOffIntervals[unitIndex];
         
-        // Update the timing
-        atomizerTimings[unitIndex].nextOnTime = nextOnTime;
-        atomizerTimings[unitIndex].nextOffTime = nextOffTime;
+        // Validate intervals
+        if (onInterval == 0 || offInterval == 0) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_INVALID_STATE,
+                "Invalid atomizer intervals",
+                "UnitManager::updateAtomizerTiming"
+            );
+            giveMutex();
+            return false;
+        }
+        
+        // Update atomizer timing
+        if (!atomizerManager.setTiming(unitIndex, onInterval, offInterval)) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_PWM_ERROR,
+                "Failed to set atomizer timing",
+                "UnitManager::updateAtomizerTiming"
+            );
+            giveMutex();
+            return false;
+        }
         
         giveMutex();
+        return true;
     }
     
     /**
@@ -622,9 +652,10 @@ public:
      * @param state Reference to system state
      * @param firebase Reference to Firebase manager
      * @param sensor Reference to sensor manager
+     * @param atomizer Reference to atomizer manager
      */
-    UnitManager(SystemState& state, FirebaseManager& firebase, SensorManager& sensor)
-        : systemState(state), firebaseManager(firebase), sensorManager(sensor) {
+    UnitManager(SystemState& state, FirebaseManager& firebase, SensorManager& sensor, AtomizerManager& atomizer)
+        : systemState(state), firebaseManager(firebase), sensorManager(sensor), atomizerManager(atomizer) {
         // Initialize atomizerTimings array
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             atomizerTimings[i].nextOnTime = 0;

@@ -43,6 +43,7 @@
  */
 class LightManager {
 private:
+    // Light state tracking
     bool lightState;
     bool masterSwitch;
     bool timeCycleEnabled;
@@ -208,17 +209,22 @@ public:
     /**
      * Constructor
      */
-    LightManager() : lightState(false), masterSwitch(false),
-                    timeCycleEnabled(false), onTime(0), offTime(0),
-                    initialized(false), pinErrorCount(0),
-                    lastLightStateChange(0), fallbackLightState(false),
-                    mutex(NULL), lastTimeValidation(0), consecutiveTimeFailures(0),
+    LightManager() : lightState(false),
+                    masterSwitch(false),
+                    timeCycleEnabled(false),
+                    onTime(0),
+                    offTime(0),
+                    initialized(false),
+                    mutex(xSemaphoreCreateMutex()),
+                    pinErrorCount(0),
+                    lastLightStateChange(0),
+                    fallbackLightState(false),
+                    lastTimeValidation(0),
+                    consecutiveTimeFailures(0),
                     timeValid(false) {
-        mutex = xSemaphoreCreateMutex();
-        if (mutex == NULL) {
-            Serial.println("CRITICAL ERROR: Failed to create mutex in LightManager");
-            // Consider implementing a fallback mechanism or system reset here
-        }
+        // Initialize light pin
+        pinMode(SystemConfig::SYSTEM_LIGHTS_PIN, OUTPUT);
+        digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
     }
     
     /**

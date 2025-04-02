@@ -24,6 +24,7 @@
 #include "unit_manager.h"
 #include "preferences_manager.h"
 #include "firebase_manager.h"
+#include "atomizer_manager.h"
 
 #define FIREBASEJSON_USE_PSRAM
 
@@ -45,13 +46,14 @@ SystemState systemState;  // System state tracking
 // Core hardware management
 // Handles both TCA9548APWR (system level) and PCA9546A (unit level) multiplexers
 HardwareManager hardwareManager;
-SensorManager sensorManager(hardwareManager);
+SensorManager sensorManager(hardwareManager);  // Pass hardwareManager to constructor
 
 // Initialize Firebase
-FirebaseManager firebaseManager(fbdo);
+FirebaseManager firebaseManager(fbdo);  // Only pass fbdo to constructor
 
 // Unit management (3 vertical farming units)
-UnitManager unitManager(systemState, firebaseManager, sensorManager);
+AtomizerManager atomizerManager;
+UnitManager unitManager(systemState, firebaseManager, sensorManager, atomizerManager);
 
 // System-wide control
 LightManager lightManager;  // Shared lighting system
@@ -61,7 +63,7 @@ OTAManager otaManager(fbdo, SystemConfig::systemPath, SystemConfig::SERIAL_NUMBE
                      SystemConfig::FIRMWARE_VERSION);
 
 // Main system coordinator
-SystemManager systemManager(networkManager, otaManager, lightManager, unitManager, firebaseManager, systemState);
+SystemManager systemManager(networkManager, otaManager, lightManager, unitManager, firebaseManager, systemState);  // Add otaManager to constructor
 
 // Non-volatile storage for settings
 PreferencesManager preferencesManager;

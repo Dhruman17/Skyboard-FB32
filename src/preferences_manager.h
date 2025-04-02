@@ -2,95 +2,194 @@
 #define PREFERENCES_MANAGER_H
 
 #include "config.h"
+#include "error_manager.h"
 #include <Preferences.h>
 
 /**
  * PreferencesManager Class
  * 
- * Handles all non-volatile storage operations using ESP32's Preferences library.
- * Manages system settings persistence across reboots.
+ * Manages non-volatile storage operations:
+ * 1. Firebase Credentials:
+ *    - Email and password storage
+ *    - Secure credential handling
+ * 
+ * 2. System Configuration:
+ *    - Light timing settings
+ *    - Unit configurations
+ *    - Network settings
+ * 
+ * 3. Error Handling:
+ *    - Storage validation
+ *    - Error recovery
  */
 class PreferencesManager {
 private:
     Preferences preferences;
-    static constexpr const char* NAMESPACE = "skyboard";
+    bool isOpen;
     
-    // Keys for storing settings
-    static constexpr const char* KEY_LIGHT_MASTER = "lightMaster";
-    static constexpr const char* KEY_TIME_CYCLE = "timeCycle";
-    static constexpr const char* KEY_LIGHT_ON = "lightOn";
-    static constexpr const char* KEY_LIGHT_OFF = "lightOff";
+    // Namespace constants
+    static constexpr const char* FIREBASE_NS = "firebase";
+    static constexpr const char* SYSTEM_NS = "system";
+    static constexpr const char* UNIT_NS = "units";
     
     /**
-     * Generates a key for a specific unit setting
-     * @param unitIndex Index of the unit
-     * @param setting Type of setting (Enabled, OnInt, OffInt)
-     * @return Formatted key string
+     * Opens a namespace with error handling
+     * @param ns Namespace to open
+     * @param readOnly Whether to open in read-only mode
+     * @return true if namespace was opened successfully
      */
-    String getUnitKey(int unitIndex, const char* setting) {
-        return String("unit") + String(unitIndex) + String(setting);
+    bool openNamespace(const char* ns, bool readOnly = true) {
+        if (isOpen) {
+            preferences.end();
+        }
+        
+        if (!preferences.begin(ns, readOnly)) {
+            ::ErrorManager::systemError(
+                ::ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
+                "Failed to open preferences namespace",
+                "PreferencesManager::openNamespace"
+            );
+            return false;
+        }
+        
+        isOpen = true;
+        return true;
     }
 
 public:
     /**
      * Constructor
      */
-    PreferencesManager() {
-        preferences.begin(NAMESPACE, false);
-    }
+    PreferencesManager() : isOpen(false) {}
     
     /**
-     * Loads all settings from storage
-     * @param state Reference to system state to update
+     * Destructor
+     * Ensures Preferences is properly closed
      */
-    void loadSettings(SystemState& state) {
-        // Load light settings
-        state.lightMasterSwitch = preferences.getBool(KEY_LIGHT_MASTER, DefaultValues::LIGHT_MASTER_SWITCH);
-        state.timeCycleEnabled = preferences.getBool(KEY_TIME_CYCLE, false);  // Default to false, will use fallback if time not set
-        state.lightOnTime = preferences.getULong(KEY_LIGHT_ON, 0);
-        state.lightOffTime = preferences.getULong(KEY_LIGHT_OFF, 0);
-        
-        // Load unit settings
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            state.unitsEnabled[i] = preferences.getBool(
-                getUnitKey(i, "Enabled").c_str(), 
-                DefaultValues::UNITS_ENABLED[i]
-            );
-            state.atomizerOnIntervals[i] = preferences.getLong(
-                getUnitKey(i, "OnInt").c_str(), 
-                DefaultValues::ATOMIZER_ON_INTERVAL
-            );
-            state.atomizerOffIntervals[i] = preferences.getLong(
-                getUnitKey(i, "OffInt").c_str(), 
-                DefaultValues::ATOMIZER_OFF_INTERVAL
-            );
+    ~PreferencesManager() {
+        if (isOpen) {
+            preferences.end();
         }
     }
     
     /**
-     * Saves all settings to storage
-     * @param state Reference to system state to save
+     * Loads Firebase credentials
+     * @param email Output parameter for email
+     * @param password Output parameter for password
+     * @return true if credentials were loaded successfully
      */
-    void saveSettings(const SystemState& state) {
-        // Save light settings
-        preferences.putBool(KEY_LIGHT_MASTER, state.lightMasterSwitch);
-        preferences.putBool(KEY_TIME_CYCLE, state.timeCycleEnabled);
-        preferences.putULong(KEY_LIGHT_ON, state.lightOnTime);
-        preferences.putULong(KEY_LIGHT_OFF, state.lightOffTime);
-        
-        // Save unit settings
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            preferences.putBool(getUnitKey(i, "Enabled").c_str(), state.unitsEnabled[i]);
-            preferences.putLong(getUnitKey(i, "OnInt").c_str(), state.atomizerOnIntervals[i]);
-            preferences.putLong(getUnitKey(i, "OffInt").c_str(), state.atomizerOffIntervals[i]);
+    bool loadFirebaseCredentials(String& email, String& password) {
+        if (!openNamespace(FIREBASE_NS, true)) {
+            return false;
         }
+        
+        email = preferences.getString("email", "");
+        password = preferences.getString("password", "");
+        
+        preferences.end();
+        isOpen = false;
+        
+        return !email.isEmpty() && !password.isEmpty();
     }
     
     /**
-     * Clears all stored settings
+     * Saves Firebase credentials
+     * @param email Email to save
+     * @param password Password to save
+     * @return true if credentials were saved successfully
      */
-    void clearSettings() {
-        preferences.clear();
+    bool saveFirebaseCredentials(const String& email, const String& password) {
+        if (!openNamespace(FIREBASE_NS, false)) {
+            return false;
+        }
+        
+        bool success = preferences.putString("email", email) &&
+                      preferences.putString("password", password);
+        
+        preferences.end();
+        isOpen = false;
+        
+        return success;
+    }
+    
+    /**
+     * Loads system configuration
+     * @return true if configuration was loaded successfully
+     */
+    bool loadSystemConfig() {
+        if (!openNamespace(SYSTEM_NS, true)) {
+            return false;
+        }
+        
+        // Load system configuration here
+        // TODO: Implement system configuration loading
+        
+        preferences.end();
+        isOpen = false;
+        
+        return true;
+    }
+    
+    /**
+     * Saves system configuration
+     * @return true if configuration was saved successfully
+     */
+    bool saveSystemConfig() {
+        if (!openNamespace(SYSTEM_NS, false)) {
+            return false;
+        }
+        
+        // Save system configuration here
+        // TODO: Implement system configuration saving
+        
+        preferences.end();
+        isOpen = false;
+        
+        return true;
+    }
+    
+    /**
+     * Loads system settings from preferences
+     * @param systemState Reference to the system state to load into
+     * @return true if settings were loaded successfully
+     */
+    bool loadSettings(SystemState& systemState) {
+        if (!openNamespace(SYSTEM_NS, true)) {
+            return false;
+        }
+        
+        // Load system settings
+        systemState.timeValid = preferences.getBool("timeValid", false);
+        systemState.lastSyncTime = preferences.getULong("lastSyncTime", 0);
+        systemState.heapWarning = preferences.getBool("heapWarning", false);
+        systemState.minHeapSeen = preferences.getULong("minHeapSeen", ESP.getFreeHeap());
+        
+        preferences.end();
+        isOpen = false;
+        
+        return true;
+    }
+    
+    /**
+     * Saves system settings to preferences
+     * @param systemState Reference to the system state to save
+     * @return true if settings were saved successfully
+     */
+    bool saveSettings(const SystemState& systemState) {
+        if (!openNamespace(SYSTEM_NS, false)) {
+            return false;
+        }
+        
+        // Save system settings
+        bool success = preferences.putBool("timeValid", systemState.timeValid) &&
+                      preferences.putULong("lastSyncTime", systemState.lastSyncTime) &&
+                      preferences.putBool("heapWarning", systemState.heapWarning) &&
+                      preferences.putULong("minHeapSeen", systemState.minHeapSeen);
+        
+        preferences.end();
+        isOpen = false;
+        
+        return success;
     }
 };
 

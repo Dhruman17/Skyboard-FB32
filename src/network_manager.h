@@ -2,6 +2,7 @@
 #define NETWORK_MANAGER_H
 
 #include "config.h"
+#include "error_manager.h"
 #include "firebase_config_page.h"
 #include <WiFi.h>
 #include <WiFiManager.h>
@@ -37,19 +38,7 @@
  */
 class NetworkManager {
 private:
-    FirebaseData& fbdo;
-    FirebaseAuth& auth;
-    FirebaseConfig& config;
-    WiFiManager wifiManager;
-    LightManager& lightManager;
-    bool initialized;
-    SemaphoreHandle_t mutex;
-    
-    // WiFiManager parameters (only email and password)
-    WiFiManagerParameter custom_email{"email", "Firebase Email", "", CREDENTIAL_MAX_LENGTH};
-    WiFiManagerParameter custom_password{"password", "Firebase Password", "", CREDENTIAL_MAX_LENGTH};
-    
-    // Connection management constants
+    // Constants
     static constexpr uint32_t WIFI_TIMEOUT = 20000;  // 20 seconds
     static constexpr uint32_t FIREBASE_TIMEOUT = SystemConfig::FIREBASE_TIMEOUT;
     static constexpr uint32_t RECONNECT_DELAY = 5000;  // 5 seconds
@@ -59,40 +48,77 @@ private:
     static constexpr int MIN_SIGNAL_QUALITY = 30;  // Minimum WiFi signal quality in dBm
     static constexpr float BACKOFF_MULTIPLIER = 1.5f;  // Exponential backoff multiplier
     static constexpr uint32_t MAX_BACKOFF_DELAY = 30000;  // Maximum 30 seconds between attempts
-    
-    // Connection state tracking
-    unsigned long lastConnectionCheck;
-    unsigned long lastReconnectAttempt;
-    uint8_t reconnectAttempts;
-    bool wasConnected;
-    uint32_t currentBackoffDelay;
-    
-    // Firebase credentials with pre-allocated space
+    static constexpr uint32_t MUTEX_TIMEOUT_MS = 500;  // 500ms timeout for mutex operations
     static constexpr size_t CREDENTIAL_MAX_LENGTH = 128;
-    String apiKey;  // Will be set from hardcoded value
-    String email;
-    String password;
+    static constexpr size_t SYSTEM_NAME_MAX_LENGTH = 64;  // Maximum length for system names
     
-    // OTA configuration
-    static constexpr const char* DEFAULT_OTA_PASSWORD = "admin";
-    String otaPassword;
-    
-    // Preferences for credential storage
-    Preferences preferences;
+    // Preferences constants
     static constexpr const char* PREF_NAMESPACE = "firebase";
     static constexpr const char* PREF_EMAIL_KEY = "email";
     static constexpr const char* PREF_PASSWORD_KEY = "password";
     
+    // OTA configuration
+    static constexpr const char* DEFAULT_OTA_PASSWORD = "admin";
+    
+    // Firebase objects
+    FirebaseData& fbdo;
+    FirebaseAuth& auth;
+    FirebaseConfig& config;
+    LightManager& lightManager;
+    
+    // WiFi Manager
+    WiFiManager wifiManager;
+    WiFiManagerParameter custom_email;
+    WiFiManagerParameter custom_password;
+    
+    // Connection state
+    uint8_t reconnectAttempts;
+    bool wasConnected;
+    uint32_t currentBackoffDelay;
+    unsigned long lastReconnectAttempt;
+    unsigned long lastConnectionCheckMillis;
+    unsigned long lastFirmwareCheckMillis;
+    unsigned long previousHeartbeatMillis;
+    unsigned long lastHeapCheckMillis;
+    unsigned long minHeapSeen;
+    unsigned long lastConnectionCheck;
+    unsigned long lastFirebaseCheck;
+    
+    // Credentials
+    String apiKey;
+    String email;
+    String password;
+    String otaPassword;
+    
+    // Preferences for credential storage
+    Preferences preferences;
+    
+    // Mutex for thread safety
+    SemaphoreHandle_t mutex;
+    
+    // System state
+    bool initialized;
+    
     /**
      * Safely takes the mutex with timeout
+     * Thread-safe: Yes
      * @return true if mutex was taken successfully
      */
     bool takeMutex() {
-        return xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE;
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "NetworkManager::takeMutex"
+            );
+            return false;
+        }
+        return true;
     }
     
     /**
      * Safely gives the mutex
+     * Thread-safe: Yes
      */
     void giveMutex() {
         xSemaphoreGive(mutex);
@@ -100,24 +126,41 @@ private:
     
     /**
      * Loads Firebase credentials from Preferences
+     * @return true if credentials were loaded successfully
      */
-    void loadFirebaseCredentials() {
+    bool loadFirebaseCredentials() {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in loadFirebaseCredentials");
-            return;
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to load Firebase credentials",
+                "NetworkManager::loadFirebaseCredentials"
+            );
+            return false;
         }
         
         // Initialize Preferences
-        preferences.begin(PREF_NAMESPACE, false);
+        preferences.begin(PREF_NAMESPACE, true);  // Read-only mode
         
-        // Set hardcoded API key
-        apiKey = SystemConfig::FIREBASE_API_KEY;
-        
-        // Read Email and Password from Preferences
+        // Read credentials from Preferences
         email = preferences.getString(PREF_EMAIL_KEY, "");
         password = preferences.getString(PREF_PASSWORD_KEY, "");
         
+        // Close Preferences
+        preferences.end();
+        
+        // Validate credentials
+        bool valid = !email.isEmpty() && !password.isEmpty();
+        
+        if (!valid) {
+            ErrorManager::networkError(
+                ErrorManager::ErrorCode::NETWORK_INVALID_CREDENTIALS,
+                "Firebase credentials not found in Preferences",
+                "NetworkManager::loadFirebaseCredentials"
+            );
+        }
+        
         giveMutex();
+        return valid;
     }
     
     /**
@@ -148,25 +191,43 @@ private:
     
     /**
      * Saves Firebase credentials to Preferences
+     * @param newEmail New email to save
+     * @param newPassword New password to save
+     * @return true if credentials were saved successfully
      */
-    void saveFirebaseCredentials() {
+    bool saveFirebaseCredentials(const String& newEmail, const String& newPassword) {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in saveFirebaseCredentials");
-            return;
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to save Firebase credentials",
+                "NetworkManager::saveFirebaseCredentials"
+            );
+            return false;
         }
         
-        // Validate credentials before saving
-        if (!validateCredentials()) {
-            Serial.println("Invalid credentials, not saving to Preferences");
-            giveMutex();
-            return;
-        }
+        // Initialize Preferences
+        preferences.begin(PREF_NAMESPACE, false);  // Read-write mode
         
-        // Save to Preferences
-        preferences.putString(PREF_EMAIL_KEY, email);
-        preferences.putString(PREF_PASSWORD_KEY, password);
+        // Save credentials
+        bool success = preferences.putString(PREF_EMAIL_KEY, newEmail) &&
+                      preferences.putString(PREF_PASSWORD_KEY, newPassword);
+        
+        // Close Preferences
+        preferences.end();
+        
+        if (success) {
+            email = newEmail;
+            password = newPassword;
+        } else {
+            ErrorManager::networkError(
+                ErrorManager::ErrorCode::NETWORK_INVALID_CREDENTIALS,
+                "Failed to save Firebase credentials",
+                "NetworkManager::saveFirebaseCredentials"
+            );
+        }
         
         giveMutex();
+        return success;
     }
     
     /**
@@ -183,35 +244,37 @@ private:
     }
     
     /**
-     * Sets up the WiFi Manager portal with Firebase configuration
+     * Sets up WiFi Manager with custom parameters
      */
     void setupWiFiManager() {
-        // Remove any existing parameters
-        wifiManager.resetSettings();
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to setup WiFi Manager",
+                "NetworkManager::setupWiFiManager"
+            );
+            return;
+        }
         
-        // Add parameters using references
+        // Add custom parameters for Firebase credentials
         wifiManager.addParameter(&custom_email);
         wifiManager.addParameter(&custom_password);
         
-        // Set custom HTML page
-        wifiManager.setCustomHeadElement("<style>body{font-family:Arial,sans-serif;margin:20px;background-color:#f0f0f0;}</style>");
-        wifiManager.setCustomHeadElement("<div style='text-align:center;margin-bottom:20px;'><h1>Skyboard Configuration</h1></div>");
-        
-        // Set custom menu items
-        wifiManager.setCustomMenuHTML("<a href='/firebase'>Firebase Settings</a>");
-        
-        // Set custom save callback
-        wifiManager.setSaveConfigCallback([this]() {
-            // Get values directly from our parameter objects
-            email = custom_email.getValue();
-            password = custom_password.getValue();
+        // Set callback for saving credentials
+        wifiManager.setSaveParamsCallback([this]() {
+            String newEmail = custom_email.getValue();
+            String newPassword = custom_password.getValue();
             
-            // Save to Preferences
-            saveFirebaseCredentials();
-            
-            // Reinitialize Firebase with new credentials
-            initializeFirebase();
+            if (!newEmail.isEmpty() && !newPassword.isEmpty()) {
+                saveFirebaseCredentials(newEmail, newPassword);
+            }
         });
+        
+        // Set portal timeout and signal quality
+        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
+        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
+        
+        giveMutex();
     }
     
     /**
@@ -224,42 +287,31 @@ private:
     }
     
     /**
-     * Connects to WiFi with timeout and retry mechanism
+     * Connects to WiFi using WiFiManager
      * @return true if connection successful
      */
     bool connectToWiFi() {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in connectToWiFi");
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to connect to WiFi",
+                "NetworkManager::connectToWiFi"
+            );
             return false;
         }
         
-        bool success = false;
-        uint8_t attempts = 0;
+        // Set up WiFi Manager before attempting connection
+        setupWiFiManager();
         
-        while (!success && attempts < MAX_RECONNECT_ATTEMPTS) {
-            Serial.println("Attempting to connect to WiFi...");
-            
-            // Set up WiFiManager with Firebase configuration first
-            setupWiFiManager();
-            
-            // Configure WiFiManager
-            wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
-            wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
-            
-            // Try to connect
-            if (wifiManager.autoConnect("Skyboard_AP")) {
-                Serial.println("WiFi connected successfully");
-                success = true;
-                reconnectAttempts = 0;  // Reset on successful connection
-                currentBackoffDelay = RECONNECT_DELAY;  // Reset backoff delay
-            } else {
-                Serial.println("Failed to connect to WiFi");
-                attempts++;
-                if (attempts < MAX_RECONNECT_ATTEMPTS) {
-                    currentBackoffDelay = calculateBackoffDelay();
-                    delay(currentBackoffDelay);
-                }
-            }
+        // Attempt to connect
+        bool success = wifiManager.autoConnect("Skyboard_AP");
+        
+        if (!success) {
+            ErrorManager::networkError(
+                ErrorManager::ErrorCode::NETWORK_CONNECTION_FAILED,
+                "Failed to connect to WiFi",
+                "NetworkManager::connectToWiFi"
+            );
         }
         
         giveMutex();
@@ -307,48 +359,43 @@ private:
     }
     
     /**
-     * Initializes Firebase with timeout and retry mechanism
+     * Initializes Firebase connection
      * @return true if initialization successful
      */
     bool initializeFirebase() {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in initializeFirebase");
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to initialize Firebase",
+                "NetworkManager::initializeFirebase"
+            );
             return false;
         }
         
-        bool success = false;
-        uint8_t attempts = 0;
-        
-        while (!success && attempts < MAX_RECONNECT_ATTEMPTS) {
-            Serial.println("Initializing Firebase...");
-            
-            config.api_key = apiKey.c_str();
-            auth.user.email = email.c_str();
-            auth.user.password = password.c_str();
-            
-            Firebase.begin(&config, &auth);
-            Firebase.reconnectWiFi(true);
-            
-            // Wait for Firebase to be ready
-            unsigned long startTime = millis();
-            while (!Firebase.ready() && millis() - startTime < FIREBASE_TIMEOUT) {
-                delay(100);
-            }
-            
-            if (Firebase.ready()) {
-                Serial.println("Firebase initialized successfully");
-                success = true;
-            } else {
-                Serial.println("Failed to initialize Firebase");
-                attempts++;
-                if (attempts < MAX_RECONNECT_ATTEMPTS) {
-                    delay(RECONNECT_DELAY);
-                }
-            }
+        // Load credentials from Preferences
+        if (!loadFirebaseCredentials()) {
+            giveMutex();
+            return false;
         }
         
+        // Configure Firebase
+        config.api_key = apiKey;
+        config.database_url = SystemConfig::FIREBASE_PROJECT_ID;
+        
+        // Sign in with email/password
+        auth.user.email = email.c_str();
+        auth.user.password = password.c_str();
+        
+        // Initialize Firebase
+        Firebase.begin(&config, &auth);
+        Firebase.reconnectWiFi(true);
+        
+        // Set timeouts and buffer sizes
+        fbdo.setResponseSize(SystemConfig::FIREBASE_PATH_BUFFER_SIZE);
+        fbdo.setBSSLBufferSize(512, 2048);
+        
         giveMutex();
-        return success;
+        return true;
     }
     
     /**
@@ -400,22 +447,74 @@ private:
         giveMutex();
         return success;
     }
+    
+    /**
+     * Checks Firebase connection and reauthenticates if needed
+     * @return true if Firebase is ready
+     */
+    bool checkFirebaseConnection() {
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to check Firebase connection",
+                "NetworkManager::checkFirebaseConnection"
+            );
+            return false;
+        }
+        
+        bool isReady = Firebase.ready();
+        
+        if (!isReady) {
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_CONNECTION_FAILED,
+                "Firebase connection lost or token expired",
+                "NetworkManager::checkFirebaseConnection"
+            );
+            
+            // Attempt to reinitialize Firebase
+            if (!initializeFirebase()) {
+                ErrorManager::firebaseError(
+                    ErrorManager::ErrorCode::FIREBASE_INIT_FAILED,
+                    "Failed to reinitialize Firebase",
+                    "NetworkManager::checkFirebaseConnection"
+                );
+                giveMutex();
+                return false;
+            }
+        }
+        
+        giveMutex();
+        return isReady;
+    }
 
 public:
     /**
      * Constructor
-     * @param fbdo Reference to Firebase data object
-     * @param auth Reference to Firebase auth object
-     * @param config Reference to Firebase config object
-     * @param light Reference to LightManager
      */
     NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config, LightManager& light)
-        : fbdo(fbdo), auth(auth), config(config), lightManager(light), initialized(false),
-          lastConnectionCheck(0), lastReconnectAttempt(0),
-          reconnectAttempts(0), wasConnected(false),
+        : fbdo(fbdo),
+          auth(auth),
+          config(config),
+          lightManager(light),
           custom_email("email", "Firebase Email", "", CREDENTIAL_MAX_LENGTH),
           custom_password("password", "Firebase Password", "", CREDENTIAL_MAX_LENGTH),
-          otaPassword(DEFAULT_OTA_PASSWORD) {
+          reconnectAttempts(0),
+          wasConnected(false),
+          currentBackoffDelay(RECONNECT_DELAY),
+          lastReconnectAttempt(0),
+          lastConnectionCheckMillis(0),
+          lastFirmwareCheckMillis(0),
+          previousHeartbeatMillis(0),
+          lastHeapCheckMillis(0),
+          minHeapSeen(ESP.getFreeHeap()),
+          lastConnectionCheck(0),
+          lastFirebaseCheck(0),
+          initialized(false) {
+        // Initialize WiFiManager
+        wifiManager.setDebugOutput(false);
+        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
+        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
+        
         // Pre-allocate space for credentials
         apiKey.reserve(CREDENTIAL_MAX_LENGTH);
         email.reserve(CREDENTIAL_MAX_LENGTH);
@@ -423,11 +522,12 @@ public:
         
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
-            Serial.println("Failed to create mutex in NetworkManager");
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
+                "Failed to create mutex",
+                "NetworkManager::NetworkManager"
+            );
         }
-        
-        // Load Firebase credentials from Preferences
-        loadFirebaseCredentials();
         
         // Set up WiFi Manager with Firebase configuration
         setupWiFiManager();
@@ -446,6 +546,9 @@ public:
         
         // Clean up credentials
         cleanupCredentials();
+        
+        // End Preferences
+        preferences.end();
     }
     
     /**
@@ -496,21 +599,33 @@ public:
         
         unsigned long currentMillis = millis();
         
-        // Check connection every CONNECTION_CHECK_INTERVAL
+        // Check WiFi connection every CONNECTION_CHECK_INTERVAL
         if (currentMillis - lastConnectionCheck >= CONNECTION_CHECK_INTERVAL) {
             if (!checkWiFiConnection()) {
                 attemptReconnect();
             }
             lastConnectionCheck = currentMillis;
         }
+        
+        // Check Firebase connection every FIREBASE_CHECK_INTERVAL
+        if (currentMillis - lastFirebaseCheck >= SystemConfig::FIREBASE_CHECK_INTERVAL) {
+            checkFirebaseConnection();
+            lastFirebaseCheck = currentMillis;
+        }
     }
     
     /**
      * Checks if WiFi is connected
+     * Thread-safe: Yes
      * @return true if connected
      */
     bool isConnected() {
         if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to check WiFi connection",
+                "NetworkManager::isConnected"
+            );
             return false;
         }
         
@@ -521,10 +636,16 @@ public:
     
     /**
      * Gets the current WiFi signal strength
+     * Thread-safe: Yes
      * @return Signal strength in dBm
      */
     int getSignalStrength() {
         if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to get signal strength",
+                "NetworkManager::getSignalStrength"
+            );
             return 0;
         }
         
@@ -535,18 +656,27 @@ public:
 
     /**
      * Sets the OTA password
+     * Thread-safe: Yes
      * @param password New OTA password
      */
     void setOTAPassword(const String& password) {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in setOTAPassword");
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to set OTA password",
+                "NetworkManager::setOTAPassword"
+            );
             return;
         }
         
         if (password.length() >= 6 && password.length() <= CREDENTIAL_MAX_LENGTH) {
             otaPassword = password;
         } else {
-            Serial.println("Invalid OTA password length");
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_INVALID_STATE,
+                "Invalid OTA password length",
+                "NetworkManager::setOTAPassword"
+            );
         }
         
         giveMutex();
@@ -554,16 +684,26 @@ public:
     
     /**
      * Handles OTA updates for the system
+     * Thread-safe: Yes
      * @param systemName Name of the system
      * @return true if OTA handling successful
      */
     bool handleOTA(String systemName) {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in handleOTA");
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to handle OTA",
+                "NetworkManager::handleOTA"
+            );
             return false;
         }
         
         bool success = true;
+        
+        // Ensure systemName doesn't exceed maximum length
+        if (systemName.length() > SYSTEM_NAME_MAX_LENGTH) {
+            systemName = systemName.substring(0, SYSTEM_NAME_MAX_LENGTH);
+        }
         
         // Configure ArduinoOTA
         ArduinoOTA.setHostname(systemName.c_str());

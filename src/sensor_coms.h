@@ -6,6 +6,7 @@
 #include "Wire.h"
 #include "MCP3X21.h"
 #include <Protocentral_FDC1004.h>
+#include "error_manager.h"
 
 /**
  * SensorManager Class
@@ -34,33 +35,19 @@
  */
 class SensorManager {
 private:
-    // RAII-style mutex lock helper
-    class ScopedLock {
-    private:
-        SemaphoreHandle_t& mutex;
-        bool locked;
-
-    public:
-        ScopedLock(SemaphoreHandle_t& m) : mutex(m), locked(false) {
-            if (xSemaphoreTake(mutex, pdMS_TO_TICKS(SystemConfig::MUTEX_TIMEOUT_MS)) == pdTRUE) {
-                locked = true;
-            }
-        }
-
-        ~ScopedLock() {
-            if (locked) {
-                xSemaphoreGive(mutex);
-            }
-        }
-
-        bool isLocked() const { return locked; }
-    };
-
+    // Mutex for thread safety
+    SemaphoreHandle_t mutex;
+    
+    // Hardware manager reference
     HardwareManager& hardwareManager;
+    
+    // Sensor instances
     FDC1004* fdc1004[SystemConfig::NUMBER_OF_UNITS];
     MCP3021* mcp3021[SystemConfig::NUMBER_OF_UNITS];
-    bool initialized;
-    SemaphoreHandle_t mutex;  // Add mutex for thread safety
+    
+    // Error tracking
+    uint8_t errorCount[SystemConfig::NUMBER_OF_UNITS];
+    static constexpr uint8_t MAX_ERRORS = 3;
     
     // Pre-allocated error message strings to prevent fragmentation
     static constexpr size_t ERROR_MSG_MAX_LENGTH = 128;
@@ -70,8 +57,108 @@ private:
     static constexpr uint8_t NUM_SAMPLES = 5;  // Number of samples to average
     static constexpr uint8_t READING_DELAY = 100;  // Delay between readings in ms
     static constexpr uint8_t MAX_RETRIES = 3;  // Maximum number of retries for sensor operations
-
-private:
+    
+    // Initialization state
+    bool initialized;
+    
+    /**
+     * Safely takes the mutex with timeout
+     * @return true if mutex was taken successfully
+     */
+    bool takeMutex() {
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "SensorManager::takeMutex"
+            );
+            return false;
+        }
+        return true;
+    }
+    
+    /**
+     * Safely gives the mutex
+     */
+    void giveMutex() {
+        xSemaphoreGive(mutex);
+    }
+    
+    /**
+     * Initializes FDC1004 sensor for a unit
+     * @param unitIndex Index of the unit
+     * @return true if initialization successful
+     */
+    bool initializeFDC1004(int unitIndex) {
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to initialize FDC1004",
+                "SensorManager::initializeFDC1004"
+            );
+            return false;
+        }
+        
+        // Initialize FDC1004
+        fdc1004[unitIndex] = new FDC1004(SystemConfig::FDC1004_ADDR);
+        
+        // Try to initialize with retries
+        for (int i = 0; i < SystemConfig::MAX_SENSOR_RETRIES; i++) {
+            if (fdc1004[unitIndex]->configureMeasurementSingle(0, SystemConfig::FDC1004_CHANNEL, 0)) {
+                giveMutex();
+                return true;
+            }
+            delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+        }
+        
+        ErrorManager::sensorError(
+            ErrorManager::ErrorCode::SENSOR_INIT_FAILED,
+            "Failed to initialize FDC1004 after " + String(SystemConfig::MAX_SENSOR_RETRIES) + " attempts",
+            "SensorManager::initializeFDC1004"
+        );
+        
+        giveMutex();
+        return false;
+    }
+    
+    /**
+     * Initializes MCP3021 sensor for a unit
+     * @param unitIndex Index of the unit
+     * @return true if initialization successful
+     */
+    bool initializeMCP3021(int unitIndex) {
+        if (!takeMutex()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to initialize MCP3021",
+                "SensorManager::initializeMCP3021"
+            );
+            return false;
+        }
+        
+        // Initialize MCP3021
+        mcp3021[unitIndex] = new MCP3021(SystemConfig::MCP3021_ADDR);
+        
+        // Try to initialize with retries
+        for (int i = 0; i < SystemConfig::MAX_SENSOR_RETRIES; i++) {
+            int reading = mcp3021[unitIndex]->read();
+            if (reading >= 0) {  // Valid reading
+                giveMutex();
+                return true;
+            }
+            delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+        }
+        
+        ErrorManager::sensorError(
+            ErrorManager::ErrorCode::SENSOR_INIT_FAILED,
+            "Failed to initialize MCP3021 after " + String(SystemConfig::MAX_SENSOR_RETRIES) + " attempts",
+            "SensorManager::initializeMCP3021"
+        );
+        
+        giveMutex();
+        return false;
+    }
+    
     /**
      * Safely deletes a sensor instance
      * @param sensor Pointer to sensor instance
@@ -82,129 +169,6 @@ private:
             delete sensor;
             sensor = nullptr;
         }
-    }
-    
-    /**
-     * Initializes FDC1004 sensor for a unit with retry mechanism
-     * @param unitIndex Index of the unit
-     * @return true if initialization successful
-     */
-    bool initializeFDC1004(int unitIndex) {
-        ScopedLock lock(mutex);
-        if (!lock.isLocked()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "initializeFDC1004");
-            return false;
-        }
-        
-        bool success = false;
-        uint8_t retries = 0;
-        
-        // Clean up existing instance first
-        safeDelete(fdc1004[unitIndex]);
-        
-        while (!success && retries < SystemConfig::MAX_SENSOR_RETRIES) {
-            hardwareManager.selectUnitAndSensor(unitIndex, SystemConfig::FDC1004_CHANNEL);
-            
-            // Create new instance with memory check
-            fdc1004[unitIndex] = new (std::nothrow) FDC1004(SystemConfig::FDC1004_ADDR);
-            if (fdc1004[unitIndex] == nullptr) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeFDC1004", unitIndex, "Failed to allocate memory");
-                retries++;
-                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
-                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
-                }
-                continue;
-            }
-            
-            // Configure FDC1004 with error checking - fixed parameter types
-            uint8_t measurement = 0;  // Use measurement 0
-            uint8_t channel = static_cast<uint8_t>(SystemConfig::FDC1004_CHANNEL);
-            uint8_t capdac = 0;  // Start with 0 capacitance offset
-            if (!fdc1004[unitIndex]->configureMeasurementSingle(measurement, channel, capdac)) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeFDC1004", unitIndex, "Failed to configure");
-                safeDelete(fdc1004[unitIndex]);
-                retries++;
-                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
-                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
-                }
-                continue;
-            }
-            
-            if (!fdc1004[unitIndex]->triggerSingleMeasurement(SystemConfig::FDC1004_CHANNEL, 0x00)) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeFDC1004", unitIndex, "Failed to trigger measurement");
-                safeDelete(fdc1004[unitIndex]);
-                retries++;
-                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
-                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
-                }
-                continue;
-            }
-            
-            success = true;
-        }
-        
-        if (!success) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeFDC1004", unitIndex, 
-                         "Failed to initialize after " + String(SystemConfig::MAX_SENSOR_RETRIES) + " attempts");
-            safeDelete(fdc1004[unitIndex]);
-        }
-        
-        return success;
-    }
-    
-    /**
-     * Initializes MCP3021 sensor for a unit with retry mechanism
-     * @param unitIndex Index of the unit
-     * @return true if initialization successful
-     */
-    bool initializeMCP3021(int unitIndex) {
-        ScopedLock lock(mutex);
-        if (!lock.isLocked()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "initializeMCP3021");
-            return false;
-        }
-        
-        bool success = false;
-        uint8_t retries = 0;
-        
-        // Clean up existing instance first
-        safeDelete(mcp3021[unitIndex]);
-        
-        while (!success && retries < SystemConfig::MAX_SENSOR_RETRIES) {
-            hardwareManager.selectUnitAndSensor(unitIndex, SystemConfig::MCP3021_CHANNEL);
-            
-            // Create new instance with memory check
-            mcp3021[unitIndex] = new (std::nothrow) MCP3021();
-            if (mcp3021[unitIndex] == nullptr) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeMCP3021", unitIndex, "Failed to allocate memory");
-                retries++;
-                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
-                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
-                }
-                continue;
-            }
-            
-            // Verify sensor is responding
-            if (mcp3021[unitIndex]->read() < 0) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeMCP3021", unitIndex, "Failed to read from sensor");
-                safeDelete(mcp3021[unitIndex]);
-                retries++;
-                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
-                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
-                }
-                continue;
-            }
-            
-            success = true;
-        }
-        
-        if (!success) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeMCP3021", unitIndex, 
-                         "Failed to initialize after " + String(SystemConfig::MAX_SENSOR_RETRIES) + " attempts");
-            safeDelete(mcp3021[unitIndex]);
-        }
-        
-        return success;
     }
     
     /**
@@ -286,7 +250,7 @@ private:
      * @return Average reading or -1 if error
      */
     float readFDC1004Averaged(int unitIndex) {
-        if (!initialized || fdc1004[unitIndex] == nullptr) {
+        if (fdc1004[unitIndex] == nullptr) {
             return -1.0f;
         }
         
@@ -334,7 +298,7 @@ private:
      * @return Average reading or -1 if error
      */
     float readMCP3021Averaged(int unitIndex) {
-        if (!initialized || mcp3021[unitIndex] == nullptr) {
+        if (mcp3021[unitIndex] == nullptr) {
             return -1.0f;
         }
         
@@ -402,6 +366,8 @@ public:
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             fdc1004[i] = nullptr;
             mcp3021[i] = nullptr;
+            errorCount[i] = 0;
+            errorMessages[i].reserve(ERROR_MSG_MAX_LENGTH);
         }
         
         // Create mutex for thread safety
@@ -479,27 +445,11 @@ public:
      * Initializes all sensors
      * @return true if initialization successful
      */
-    bool begin() {
-        ScopedLock lock(mutex);
-        if (!lock.isLocked()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "begin");
-            return false;
-        }
-        
-        // Clean up any existing instances
-        cleanup();
-        
-        // Initialize sensors for each unit
+    bool initialize() {
         bool success = true;
+        
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (!initializeMCP3021(i)) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "begin", i, "Failed to initialize MCP3021");
-                success = false;
-                break;
-            }
-            
-            if (!initializeFDC1004(i)) {
-                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "begin", i, "Failed to initialize FDC1004");
+            if (!initializeFDC1004(i) || !initializeMCP3021(i)) {
                 success = false;
                 break;
             }
@@ -564,7 +514,7 @@ public:
             }
             
             // Reinitialize sensors
-            if (!begin()) {
+            if (!initialize()) {
                 Serial.println("Failed to reinitialize sensors");
                 retries++;
                 delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
