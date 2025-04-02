@@ -361,19 +361,15 @@ public:
      * Should be called in the main loop
      */
     void update() {
-        if (!networkManager.isConnected()) {
-            return;  // Skip updates if not connected
-        }
-        
         if (!takeMutex()) {
             return;
         }
-        
+
         unsigned long currentMillis = millis();
         unsigned long adjustedMillis = currentMillis + connectionOffset;
-        
-        // Monitor heap usage every hour
-        if (currentMillis - lastHeapCheck >= HEAP_MONITOR_INTERVAL) {
+
+        // Monitor heap usage every hour (online only)
+        if (networkManager.isConnected() && currentMillis - lastHeapCheck >= HEAP_MONITOR_INTERVAL) {
             uint32_t currentHeap = ESP.getFreeHeap();
             if (currentHeap < minHeapEver) {
                 minHeapEver = currentHeap;
@@ -391,20 +387,18 @@ public:
             lastHeapCheck = currentMillis;
         }
         
-        // Handle OTA updates
-        ArduinoOTA.handle();
+        // Handle OTA updates (online only)
+        if (networkManager.isConnected()) {
+            ArduinoOTA.handle();
+        }
         
         // Handle all periodic updates
         if (adjustedMillis - systemState.previousHeartbeatMillis >= SystemConfig::INTERVAL_30_SECONDS) {
-            // Update system data and send heartbeat
-            updateSystemData();
-            sendHeartbeat();
-            
-            // Update sensors and units
+            // Update sensors and units (works offline)
             unitManager.readWaterLevel();
             unitManager.update();
             
-            // Update lighting
+            // Update lighting (works offline)
             lightManager.updateSettings(lightMasterSwitch, timeCycleEnabled, 
                                      parseTimeString(lightOnTime), 
                                      parseTimeString(lightOffTime));
@@ -413,10 +407,18 @@ public:
             // Update timestamps
             systemState.previousHeartbeatMillis = adjustedMillis;
             systemState.lastConnectionCheckMillis = adjustedMillis;
+
+            // Online-only updates
+            if (networkManager.isConnected()) {
+                // Update system data and send heartbeat
+                updateSystemData();
+                sendHeartbeat();
+            }
         }
         
-        // Check for firmware updates (using unadjusted time since it's independent of connection offset)
-        if (currentMillis - systemState.lastFirmwareCheckMillis >= SystemConfig::INTERVAL_5_MINUTES) {
+        // Check for firmware updates (online only)
+        if (networkManager.isConnected() && 
+            currentMillis - systemState.lastFirmwareCheckMillis >= SystemConfig::INTERVAL_5_MINUTES) {
             otaManager.checkForUpdates();
             systemState.lastFirmwareCheckMillis = currentMillis;
         }
