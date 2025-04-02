@@ -150,7 +150,7 @@ private:
                 systemJson.clear();
                 systemJson.setJsonData(fbdo.payload());
                 
-                if (systemJson.get(jsonData, "fields/systemName/stringValue")) {
+                if (systemJson.get(jsonData, "fields/systeName/stringValue")) {
                     systemName = jsonData.stringValue;
                 }
                 
