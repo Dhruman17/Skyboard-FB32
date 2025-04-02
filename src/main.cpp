@@ -207,5 +207,8 @@ void loop() {
             systemState.lastReconnectAttempt = millis();
         }
     }
+    
+    // Allow other tasks to run
+    yield();
 }
 

@@ -554,7 +554,8 @@ public:
           lastFirebaseCheck(0),
           initialized(false),
           custom_email(nullptr),
-          custom_password(nullptr) {
+          custom_password(nullptr),
+          mutex(NULL) {  // Initialize mutex to NULL
         // Create mutex first
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
@@ -566,6 +567,11 @@ public:
         apiKey.reserve(CREDENTIAL_MAX_LENGTH);
         email.reserve(CREDENTIAL_MAX_LENGTH);
         password.reserve(CREDENTIAL_MAX_LENGTH);
+        
+        // Initialize WiFiManager with safe defaults
+        wifiManager.setDebugOutput(false);
+        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
+        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
     }
     
     /**
@@ -603,11 +609,6 @@ public:
         }
         
         bool success = true;
-        
-        // Initialize WiFiManager first
-        wifiManager.setDebugOutput(false);
-        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
-        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
         
         // Load Firebase credentials first
         if (!loadFirebaseCredentials()) {
