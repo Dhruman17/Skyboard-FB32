@@ -643,7 +643,7 @@ public:
         // Release mutex before WiFi connection attempt
         giveMutex();
         
-        // Try to connect to WiFi with timeout
+        // Try to connect to WiFi with timeout and yield
         Serial.println("Attempting to connect to WiFi...");
         unsigned long startTime = millis();
         while (!connectToWiFi()) {
@@ -653,6 +653,7 @@ public:
                 break;
             }
             delay(1000);
+            yield();  // Allow other tasks to run
         }
         
         // Re-acquire mutex for remaining initialization
@@ -660,14 +661,26 @@ public:
             return false;
         }
         
-        if (success && !initializeTime()) {
-            Serial.println("Time initialization failed");
-            success = false;
-        }
-        
-        if (success && !initializeFirebase()) {
-            Serial.println("Firebase initialization failed");
-            success = false;
+        if (success) {
+            // Initialize time with timeout
+            Serial.println("Initializing time...");
+            if (!initializeTime()) {
+                Serial.println("Time initialization failed");
+                success = false;
+            } else {
+                Serial.println("Time initialized successfully");
+            }
+            
+            // Initialize Firebase with timeout
+            if (success) {
+                Serial.println("Initializing Firebase...");
+                if (!initializeFirebase()) {
+                    Serial.println("Firebase initialization failed");
+                    success = false;
+                } else {
+                    Serial.println("Firebase initialized successfully");
+                }
+            }
         }
         
         if (success) {

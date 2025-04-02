@@ -146,11 +146,13 @@ void setup() {
     Firebase.begin(&config, &auth);
     
     // Initialize hardware components (required for operation)
+    Serial.println("Initializing hardware...");
     if (!hardwareManager.begin()) {
         Serial.println("Failed to initialize hardware. Restarting...");
         delay(3000);
         ESP.restart();
     }
+    Serial.println("Hardware initialized successfully");
     
     // Initialize network first, as it's required for system initialization
     Serial.println("Initializing network...");
@@ -173,6 +175,7 @@ void setup() {
     enableCore1WDT();
     
     Serial.println("Initialization complete");
+    delay(1000);  // Give time for serial output to complete
 }
 
 /**
