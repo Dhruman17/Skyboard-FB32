@@ -7,7 +7,6 @@
 #include <Firebase_ESP_Client.h>
 #include <MCP3X21.h>
 #include <Wire.h>
-#include <FDC1004.h>
 #include <time.h>
 
 struct SystemConfig {
