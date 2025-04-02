@@ -547,7 +547,7 @@ public:
           custom_email(nullptr), custom_password(nullptr),
           initialized(false) {
         
-        // Create mutex
+        // Create mutex first, before any other operations
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
             ErrorManager::mutexError(
@@ -555,7 +555,19 @@ public:
                 "Failed to create NetworkManager mutex",
                 "NetworkManager::NetworkManager"
             );
+            // Don't proceed with initialization if mutex creation failed
+            return;
         }
+        
+        // Pre-allocate space for credentials
+        apiKey.reserve(CREDENTIAL_MAX_LENGTH);
+        email.reserve(CREDENTIAL_MAX_LENGTH);
+        password.reserve(CREDENTIAL_MAX_LENGTH);
+        
+        // Initialize WiFiManager with safe defaults
+        wifiManager.setDebugOutput(false);
+        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
+        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
     }
     
     /**
@@ -566,12 +578,20 @@ public:
         if (mutex != NULL) {
             vSemaphoreDelete(mutex);
         }
+        
+        // Clean up WiFi parameters
         if (custom_email != nullptr) {
             delete custom_email;
+            custom_email = nullptr;
         }
         if (custom_password != nullptr) {
             delete custom_password;
+            custom_password = nullptr;
         }
+        wifiManager.resetSettings();
+        
+        // Clean up credentials
+        cleanupCredentials();
     }
     
     /**

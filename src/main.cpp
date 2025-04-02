@@ -147,6 +147,7 @@ void setup() {
     
     // Initialize Preferences with explicit namespace
     Serial.println("Initializing Preferences...");
+    preferences.end();  // Ensure any existing preferences are closed
     if (!preferences.begin("skyboard", false)) {
         Serial.println("CRITICAL ERROR: Failed to initialize Preferences");
         delay(3000);
@@ -162,6 +163,9 @@ void setup() {
         delay(3000);
         ESP.restart();
     }
+    
+    // Ensure preferences are properly initialized before calling begin
+    delay(100);  // Give time for preferences to settle
     
     if (!preferencesManager->begin()) {
         Serial.println("CRITICAL ERROR: Failed to initialize PreferencesManager");
