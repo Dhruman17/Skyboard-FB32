@@ -34,17 +34,37 @@
  */
 class SensorManager {
 private:
+    /**
+     * Takes the mutex with a timeout
+     * @return true if mutex was taken successfully
+     */
+    inline bool takeMutex() const {
+        return xSemaphoreTake(mutex, pdMS_TO_TICKS(SystemConfig::MUTEX_TIMEOUT_MS)) == pdTRUE;
+    }
+    
+    /**
+     * Gives back the mutex
+     */
+    inline void giveMutex() const {
+        xSemaphoreGive(mutex);
+    }
+
     HardwareManager& hardwareManager;
     FDC1004* fdc1004[SystemConfig::NUMBER_OF_UNITS];
     MCP3021* mcp3021[SystemConfig::NUMBER_OF_UNITS];
     bool initialized;
     SemaphoreHandle_t mutex;  // Add mutex for thread safety
     
+    // Pre-allocated error message strings to prevent fragmentation
+    static constexpr size_t ERROR_MSG_MAX_LENGTH = 128;
+    String errorMessages[SystemConfig::NUMBER_OF_UNITS];
+    
     // Constants for sensor reading
     static constexpr uint8_t NUM_SAMPLES = 5;  // Number of samples to average
     static constexpr uint8_t READING_DELAY = 100;  // Delay between readings in ms
     static constexpr uint8_t MAX_RETRIES = 3;  // Maximum number of retries for sensor operations
-    
+
+private:
     /**
      * Safely deletes a sensor instance
      * @param sensor Pointer to sensor instance
@@ -63,50 +83,65 @@ private:
      * @return true if initialization successful
      */
     bool initializeFDC1004(int unitIndex) {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            Serial.println("Failed to take mutex in initializeFDC1004");
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "initializeFDC1004");
             return false;
         }
         
         bool success = false;
         uint8_t retries = 0;
         
-        while (!success && retries < MAX_RETRIES) {
+        // Clean up existing instance first
+        safeDelete(fdc1004[unitIndex]);
+        
+        while (!success && retries < SystemConfig::MAX_SENSOR_RETRIES) {
             hardwareManager.selectUnitAndSensor(unitIndex, SystemConfig::FDC1004_CHANNEL);
-            
-            // Clean up existing instance
-            safeDelete(fdc1004[unitIndex]);
             
             // Create new instance with memory check
             fdc1004[unitIndex] = new (std::nothrow) FDC1004(SystemConfig::FDC1004_ADDR);
             if (fdc1004[unitIndex] == nullptr) {
-                Serial.println("Failed to allocate memory for FDC1004");
+                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeFDC1004", unitIndex, "Failed to allocate memory");
                 retries++;
-                delay(100);
+                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
+                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+                }
                 continue;
             }
             
-            // Configure FDC1004 with error checking
-            if (!fdc1004[unitIndex]->configureMeasurementSingle(1, FDC1004_100HZ, 0)) {
-                Serial.println("Failed to configure FDC1004");
+            // Configure FDC1004 with error checking - fixed parameter types
+            uint8_t measurement = 0;  // Use measurement 0
+            uint8_t channel = static_cast<uint8_t>(SystemConfig::FDC1004_CHANNEL);
+            uint8_t capdac = 0;  // Start with 0 capacitance offset
+            if (!fdc1004[unitIndex]->configureMeasurementSingle(measurement, channel, capdac)) {
+                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeFDC1004", unitIndex, "Failed to configure");
                 safeDelete(fdc1004[unitIndex]);
                 retries++;
-                delay(100);
+                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
+                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+                }
                 continue;
             }
             
-            if (!fdc1004[unitIndex]->triggerSingleMeasurement(1, 0)) {
-                Serial.println("Failed to trigger FDC1004 measurement");
+            if (!fdc1004[unitIndex]->triggerSingleMeasurement(SystemConfig::FDC1004_CHANNEL, 0x00)) {
+                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeFDC1004", unitIndex, "Failed to trigger measurement");
                 safeDelete(fdc1004[unitIndex]);
                 retries++;
-                delay(100);
+                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
+                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+                }
                 continue;
             }
             
             success = true;
         }
         
-        xSemaphoreGive(mutex);
+        if (!success) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeFDC1004", unitIndex, 
+                         "Failed to initialize after " + String(SystemConfig::MAX_SENSOR_RETRIES) + " attempts");
+            safeDelete(fdc1004[unitIndex]);
+        }
+        
+        giveMutex();
         return success;
     }
     
@@ -116,47 +151,130 @@ private:
      * @return true if initialization successful
      */
     bool initializeMCP3021(int unitIndex) {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            Serial.println("Failed to take mutex in initializeMCP3021");
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "initializeMCP3021");
             return false;
         }
         
         bool success = false;
         uint8_t retries = 0;
         
-        while (!success && retries < MAX_RETRIES) {
+        // Clean up existing instance first
+        safeDelete(mcp3021[unitIndex]);
+        
+        while (!success && retries < SystemConfig::MAX_SENSOR_RETRIES) {
             hardwareManager.selectUnitAndSensor(unitIndex, SystemConfig::MCP3021_CHANNEL);
-            
-            // Clean up existing instance
-            safeDelete(mcp3021[unitIndex]);
             
             // Create new instance with memory check
             mcp3021[unitIndex] = new (std::nothrow) MCP3021();
             if (mcp3021[unitIndex] == nullptr) {
-                Serial.println("Failed to allocate memory for MCP3021");
+                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeMCP3021", unitIndex, "Failed to allocate memory");
                 retries++;
-                delay(100);
+                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
+                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+                }
                 continue;
             }
             
             // Verify sensor is responding
             if (mcp3021[unitIndex]->read() < 0) {
-                Serial.println("Failed to read from MCP3021");
+                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeMCP3021", unitIndex, "Failed to read from sensor");
                 safeDelete(mcp3021[unitIndex]);
                 retries++;
-                delay(100);
+                if (retries < SystemConfig::MAX_SENSOR_RETRIES) {
+                    delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+                }
                 continue;
             }
             
             success = true;
         }
         
-        xSemaphoreGive(mutex);
+        if (!success) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "initializeMCP3021", unitIndex, 
+                         "Failed to initialize after " + String(SystemConfig::MAX_SENSOR_RETRIES) + " attempts");
+            safeDelete(mcp3021[unitIndex]);
+        }
+        
+        giveMutex();
         return success;
     }
     
     /**
+     * Helper function to detect and remove outliers from sensor readings
+     * @param readings Array of readings
+     * @param count Number of valid readings
+     * @param mean Reference to store the mean
+     * @param stdDev Reference to store the standard deviation
+     * @param filteredSum Reference to store the sum of filtered readings
+     * @param filteredCount Reference to store the count of filtered readings
+     */
+    void detectOutliers(const float* readings, uint8_t count, float& mean, float& stdDev, 
+                       float& filteredSum, uint8_t& filteredCount) {
+        if (!readings || count == 0) {
+            mean = 0.0f;
+            stdDev = 0.0f;
+            filteredSum = 0.0f;
+            filteredCount = 0;
+            return;
+        }
+        
+        // Calculate mean
+        float sum = 0.0f;
+        for (uint8_t i = 0; i < count; i++) {
+            sum += readings[i];
+        }
+        mean = sum / count;
+        
+        // Calculate standard deviation
+        float sumSquaredDiff = 0.0f;
+        for (uint8_t i = 0; i < count; i++) {
+            float diff = readings[i] - mean;
+            sumSquaredDiff += diff * diff;
+        }
+        stdDev = sqrt(sumSquaredDiff / count);
+        
+        // Remove outliers (values more than 2 standard deviations from mean)
+        filteredSum = 0.0f;
+        filteredCount = 0;
+        for (uint8_t i = 0; i < count; i++) {
+            if (abs(readings[i] - mean) <= 2 * stdDev) {
+                filteredSum += readings[i];
+                filteredCount++;
+            }
+        }
+    }
+    
+    /**
+     * Validates sensor parameters
+     * @param unitIndex Index of the unit
+     * @param sensorType Type of sensor
+     * @return true if parameters are valid
+     */
+    bool validateSensorParams(int unitIndex, const char* sensorType) {
+        if (unitIndex < 0 || unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "validateSensorParams", unitIndex, "Invalid unit index");
+            return false;
+        }
+        
+        if (!sensorType) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "validateSensorParams", unitIndex, "Invalid sensor type");
+            return false;
+        }
+        
+        if (strcmp(sensorType, SystemConfig::SENSOR_TYPE_WATER) != 0 && 
+            strcmp(sensorType, SystemConfig::SENSOR_TYPE_EC) != 0) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "validateSensorParams", unitIndex, "Unknown sensor type");
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
      * Reads multiple samples from FDC1004 and averages them with outlier detection
+     * Thread-safe: Yes (uses mutex)
+     * Performance: Minimizes mutex locking time
      * @param unitIndex Index of the unit
      * @return Average reading or -1 if error
      */
@@ -165,58 +283,49 @@ private:
             return -1.0f;
         }
         
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            Serial.println("Failed to take mutex in readFDC1004Averaged");
+        // Use heap allocation for large arrays to prevent stack overflow
+        float* readings = new (std::nothrow) float[NUM_SAMPLES];
+        if (readings == nullptr) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "readFDC1004Averaged", unitIndex, "Failed to allocate memory for readings");
             return -1.0f;
         }
         
-        float readings[NUM_SAMPLES];
         uint8_t validReadings = 0;
+        
+        // Take mutex once for all readings to prevent race conditions
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "readFDC1004Averaged");
+            delete[] readings;
+            return -1.0f;
+        }
         
         // Collect readings
         for (uint8_t i = 0; i < NUM_SAMPLES; i++) {
-            float reading = fdc1004[unitIndex]->readMeasurement(1, 0);
+            float reading = fdc1004[unitIndex]->readMeasurement(SystemConfig::FDC1004_CHANNEL, 0);
             if (reading >= 0) {
                 readings[validReadings++] = reading;
             }
             delay(READING_DELAY);
         }
         
-        if (validReadings == 0) {
-            xSemaphoreGive(mutex);
-            return -1.0f;
+        giveMutex();
+        
+        float result = -1.0f;
+        if (validReadings > 0) {
+            float mean, stdDev, filteredSum;
+            uint8_t filteredCount;
+            detectOutliers(readings, validReadings, mean, stdDev, filteredSum, filteredCount);
+            result = filteredCount > 0 ? filteredSum / filteredCount : -1.0f;
         }
         
-        // Calculate mean and standard deviation
-        float sum = 0.0f;
-        for (uint8_t i = 0; i < validReadings; i++) {
-            sum += readings[i];
-        }
-        float mean = sum / validReadings;
-        
-        float sumSquaredDiff = 0.0f;
-        for (uint8_t i = 0; i < validReadings; i++) {
-            float diff = readings[i] - mean;
-            sumSquaredDiff += diff * diff;
-        }
-        float stdDev = sqrt(sumSquaredDiff / validReadings);
-        
-        // Remove outliers (values more than 2 standard deviations from mean)
-        float filteredSum = 0.0f;
-        uint8_t filteredCount = 0;
-        for (uint8_t i = 0; i < validReadings; i++) {
-            if (abs(readings[i] - mean) <= 2 * stdDev) {
-                filteredSum += readings[i];
-                filteredCount++;
-            }
-        }
-        
-        xSemaphoreGive(mutex);
-        return filteredCount > 0 ? filteredSum / filteredCount : -1.0f;
+        delete[] readings;
+        return result;
     }
     
     /**
      * Reads multiple samples from MCP3021 and averages them with outlier detection
+     * Thread-safe: Yes (uses mutex)
+     * Performance: Minimizes mutex locking time
      * @param unitIndex Index of the unit
      * @return Average reading or -1 if error
      */
@@ -225,13 +334,21 @@ private:
             return -1.0f;
         }
         
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            Serial.println("Failed to take mutex in readMCP3021Averaged");
+        // Use heap allocation for large arrays to prevent stack overflow
+        float* readings = new (std::nothrow) float[NUM_SAMPLES];
+        if (readings == nullptr) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "readMCP3021Averaged", unitIndex, "Failed to allocate memory for readings");
             return -1.0f;
         }
         
-        float readings[NUM_SAMPLES];
         uint8_t validReadings = 0;
+        
+        // Take mutex once for all readings to prevent race conditions
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "readMCP3021Averaged");
+            delete[] readings;
+            return -1.0f;
+        }
         
         // Collect readings
         for (uint8_t i = 0; i < NUM_SAMPLES; i++) {
@@ -242,37 +359,36 @@ private:
             delay(READING_DELAY);
         }
         
-        if (validReadings == 0) {
-            xSemaphoreGive(mutex);
-            return -1.0f;
+        giveMutex();
+        
+        float result = -1.0f;
+        if (validReadings > 0) {
+            float mean, stdDev, filteredSum;
+            uint8_t filteredCount;
+            detectOutliers(readings, validReadings, mean, stdDev, filteredSum, filteredCount);
+            result = filteredCount > 0 ? filteredSum / filteredCount : -1.0f;
         }
         
-        // Calculate mean and standard deviation
-        float sum = 0.0f;
-        for (uint8_t i = 0; i < validReadings; i++) {
-            sum += readings[i];
+        delete[] readings;
+        return result;
+    }
+
+    /**
+     * Initializes error message strings with pre-allocated space
+     */
+    void initializeErrorMessages() {
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            errorMessages[i].reserve(ERROR_MSG_MAX_LENGTH);
         }
-        float mean = sum / validReadings;
-        
-        float sumSquaredDiff = 0.0f;
-        for (uint8_t i = 0; i < validReadings; i++) {
-            float diff = readings[i] - mean;
-            sumSquaredDiff += diff * diff;
+    }
+    
+    /**
+     * Cleans up error message strings
+     */
+    void cleanupErrorMessages() {
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            errorMessages[i] = "";
         }
-        float stdDev = sqrt(sumSquaredDiff / validReadings);
-        
-        // Remove outliers (values more than 2 standard deviations from mean)
-        float filteredSum = 0.0f;
-        uint8_t filteredCount = 0;
-        for (uint8_t i = 0; i < validReadings; i++) {
-            if (abs(readings[i] - mean) <= 2 * stdDev) {
-                filteredSum += readings[i];
-                filteredCount++;
-            }
-        }
-        
-        xSemaphoreGive(mutex);
-        return filteredCount > 0 ? filteredSum / filteredCount : -1.0f;
     }
 
 public:
@@ -292,14 +408,18 @@ public:
         if (mutex == NULL) {
             Serial.println("Failed to create mutex in SensorManager");
         }
+        
+        // Initialize error message strings
+        initializeErrorMessages();
     }
     
     /**
      * Destructor
-     * Cleans up sensor objects
+     * Cleans up sensor objects and error messages
      */
     ~SensorManager() {
         cleanup();
+        cleanupErrorMessages();
         if (mutex != NULL) {
             vSemaphoreDelete(mutex);
         }
@@ -307,20 +427,51 @@ public:
     
     /**
      * Cleans up all sensor objects
+     * Thread-safe: Yes (uses mutex)
+     * Memory Management: Properly deletes all sensor instances
      */
     void cleanup() {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            Serial.println("Failed to take mutex in cleanup");
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "cleanup");
             return;
         }
         
+        // Clean up all sensor instances
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             safeDelete(fdc1004[i]);
             safeDelete(mcp3021[i]);
         }
-        initialized = false;
         
-        xSemaphoreGive(mutex);
+        initialized = false;
+        giveMutex();
+    }
+    
+    /**
+     * Cleans up a specific sensor for a unit
+     * @param unitIndex Index of the unit
+     * @param sensorType Type of sensor to clean up
+     * @return true if cleanup was successful
+     */
+    bool cleanupSensor(int unitIndex, const char* sensorType) {
+        if (!validateSensorParams(unitIndex, sensorType)) {
+            return false;
+        }
+        
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "cleanupSensor");
+            return false;
+        }
+        
+        bool success = false;
+        if (strcmp(sensorType, SystemConfig::SENSOR_TYPE_WATER) == 0) {
+            // Reset FDC1004
+            success = initializeFDC1004(unitIndex);
+        } else if (strcmp(sensorType, SystemConfig::SENSOR_TYPE_EC) == 0) {
+            success = initializeMCP3021(unitIndex);
+        }
+        
+        giveMutex();
+        return success;
     }
     
     /**
@@ -328,8 +479,8 @@ public:
      * @return true if initialization successful
      */
     bool begin() {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-            Serial.println("Failed to take mutex in begin");
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "begin");
             return false;
         }
         
@@ -340,13 +491,13 @@ public:
         bool success = true;
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             if (!initializeMCP3021(i)) {
-                Serial.println("Failed to initialize MCP3021 for unit " + String(i));
+                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "begin", i, "Failed to initialize MCP3021");
                 success = false;
                 break;
             }
             
             if (!initializeFDC1004(i)) {
-                Serial.println("Failed to initialize FDC1004 for unit " + String(i));
+                Serial.printf(SystemConfig::ERROR_FORMAT_SENSOR, "begin", i, "Failed to initialize FDC1004");
                 success = false;
                 break;
             }
@@ -358,7 +509,78 @@ public:
             cleanup();
         }
         
-        xSemaphoreGive(mutex);
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Sets an error message with length protection
+     * @param unitIndex Index of the unit
+     * @param message Error message to set
+     */
+    void setErrorMessage(int unitIndex, const char* message) {
+        if (unitIndex < 0 || unitIndex >= SystemConfig::NUMBER_OF_UNITS || !message || strlen(message) == 0) {
+            return;
+        }
+        
+        // Truncate message if it exceeds max length
+        String truncatedMessage = String(message);
+        if (truncatedMessage.length() > ERROR_MSG_MAX_LENGTH) {
+            truncatedMessage = truncatedMessage.substring(0, ERROR_MSG_MAX_LENGTH - 3) + "...";
+        }
+        errorMessages[unitIndex] = truncatedMessage;
+    }
+    
+    /**
+     * Handles critical system failures by attempting recovery
+     * @param errorType Type of error that occurred
+     * @return true if recovery was successful
+     */
+    bool handleCriticalFailure(const char* errorType) {
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "handleCriticalFailure");
+            return false;
+        }
+        
+        bool success = false;
+        uint8_t retries = 0;
+        
+        while (!success && retries < SystemConfig::MAX_SENSOR_RETRIES) {
+            Serial.printf("Attempting system recovery from %s failure (attempt %d/%d)\n", 
+                         errorType, retries + 1, SystemConfig::MAX_SENSOR_RETRIES);
+            
+            // Clean up all resources
+            cleanup();
+            cleanupErrorMessages();
+            
+            // Reinitialize hardware
+            if (!hardwareManager.begin()) {
+                Serial.println("Failed to reinitialize hardware");
+                retries++;
+                delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+                continue;
+            }
+            
+            // Reinitialize sensors
+            if (!begin()) {
+                Serial.println("Failed to reinitialize sensors");
+                retries++;
+                delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
+                continue;
+            }
+            
+            success = true;
+        }
+        
+        giveMutex();
+        
+        if (!success) {
+            Serial.printf("System recovery failed after %d attempts\n", SystemConfig::MAX_SENSOR_RETRIES);
+            // At this point, we might want to trigger a system restart
+            // Release mutex before restart to prevent deadlock
+            ESP.restart();
+        }
+        
         return success;
     }
     
@@ -370,6 +592,7 @@ public:
     float readWaterLevel(int unitIndex) {
         float rawValue = readFDC1004Averaged(unitIndex);
         if (rawValue < 0) {
+            setErrorMessage(unitIndex, "Failed to read water level");
             return -1.0f;
         }
         
@@ -387,6 +610,7 @@ public:
     float readECValue(int unitIndex) {
         float rawValue = readMCP3021Averaged(unitIndex);
         if (rawValue < 0) {
+            setErrorMessage(unitIndex, "Failed to read EC value");
             return -1.0f;
         }
         
@@ -401,12 +625,30 @@ public:
      * @return true if readings successful
      */
     bool readAllWaterLevels(float levels[SystemConfig::NUMBER_OF_UNITS]) {
+        if (!takeMutex()) {
+            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "readAllWaterLevels");
+            return false;
+        }
+        
         bool success = true;
+        uint8_t failureCount = 0;
         
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             levels[i] = readWaterLevel(i);
             if (levels[i] < 0) {
                 success = false;
+                failureCount++;
+            }
+        }
+        
+        giveMutex();
+        
+        // If too many failures, attempt system recovery
+        if (failureCount >= SystemConfig::NUMBER_OF_UNITS / 2) {
+            // Take mutex again for recovery
+            if (takeMutex()) {
+                handleCriticalFailure("sensor reading");
+                giveMutex();
             }
         }
         

@@ -68,9 +68,35 @@ private:
     bool timeCycleEnabled;
     
     /**
+     * Cleans up string resources
+     */
+    void cleanupStrings() {
+        systemName = "";
+        lightOnTime = "";
+        lightOffTime = "";
+        
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            unitNames[i] = "";
+        }
+    }
+    
+    /**
+     * Cleans up Firebase JSON objects
+     */
+    void cleanupJson() {
+        systemJson.clear();
+        unitJson.clear();
+        jsonData.clear();
+    }
+    
+    /**
      * Initializes string buffers with pre-allocated space
      */
     void initializeStrings() {
+        // Clear any existing strings first
+        cleanupStrings();
+        
+        // Reserve space for strings
         systemName.reserve(SYSTEM_NAME_MAX_LENGTH);
         lightOnTime.reserve(TIME_STRING_MAX_LENGTH);
         lightOffTime.reserve(TIME_STRING_MAX_LENGTH);
@@ -107,23 +133,16 @@ private:
      * Sends heartbeat to Firebase to indicate system is online
      */
     void sendHeartbeat() {
-        char pathBuffer[50];
-        int written = snprintf(pathBuffer, sizeof(pathBuffer), "%s", systemPath);
-        if (written >= sizeof(pathBuffer)) {
-            Serial.println("Error: Path buffer overflow in sendHeartbeat");
-            return;
-        }
+        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+        snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, SystemConfig::SERIAL_NUMBER);
         
-        // Clear previous data
-        systemJson.clear();
-        systemJson.set("fields/lastSeen/timestampValue", formatTimestamp());
+        FirebaseJson systemJson;
+        systemJson.set(SystemConfig::SYSTEM_LAST_SEEN_PATH, formatTimestamp());
         
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", pathBuffer, systemJson.raw(), "lastSeen")) {
-            Serial.println("Heartbeat sent.");
-            Serial.println(formatTimestamp());
+        if (Firebase.Firestore.patchDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", pathBuffer, systemJson.raw(), "lastSeen")) {
+            Serial.printf("Heartbeat sent successfully\n");
         } else {
-            Serial.println("Failed to send heartbeat.");
-            Serial.println(fbdo.errorReason());
+            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "sendHeartbeat", fbdo.errorReason().c_str());
         }
     }
     
@@ -132,66 +151,23 @@ private:
      * Reads system name, lighting settings, and unit names
      */
     void updateSystemData() {
-        unsigned long currentMillis = millis();
-        if (currentMillis - lastSystemDataUpdate >= SystemConfig::INTERVAL_30_SECONDS) {
-            lastSystemDataUpdate = currentMillis;
-            
-            char pathBuffer[50];
-            
-            // Get system document
-            int written = snprintf(pathBuffer, sizeof(pathBuffer), "%s", systemPath);
-            if (written >= sizeof(pathBuffer)) {
-                Serial.println("Error: Path buffer overflow in updateSystemData");
-                return;
-            }
-            
-            if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", pathBuffer)) {
-                // Clear previous data
+        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+        snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, SystemConfig::SERIAL_NUMBER);
+        
+        if (Firebase.Firestore.getDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", pathBuffer)) {
+            // Process system data
+            if (fbdo.payload().length() > 0) {
                 systemJson.clear();
                 systemJson.setJsonData(fbdo.payload());
                 
-                if (systemJson.get(jsonData, "fields/systeName/stringValue")) {
+                // Update system configuration
+                if (systemJson.get(jsonData, "fields/systemName/stringValue")) {
                     systemName = jsonData.stringValue;
                 }
-                
-                if (systemJson.get(jsonData, "fields/lightOnTime/stringValue")) {
-                    lightOnTime = jsonData.stringValue;
-                }
-                
-                if (systemJson.get(jsonData, "fields/lightOffTime/stringValue")) {
-                    lightOffTime = jsonData.stringValue;
-                }
-                
-                if (systemJson.get(jsonData, "fields/lightMasterSwitch/booleanValue")) {
-                    lightMasterSwitch = jsonData.boolValue;
-                }
-                
-                if (systemJson.get(jsonData, "fields/timeCycleEnabled/booleanValue")) {
-                    timeCycleEnabled = jsonData.boolValue;
-                }
-                
-                // Get unit names
-                for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-                    written = snprintf(pathBuffer, sizeof(pathBuffer), "%s/units/%d", systemPath, i);
-                    if (written >= sizeof(pathBuffer)) {
-                        Serial.println("Error: Path buffer overflow in updateSystemData unit path");
-                        continue;
-                    }
-                    
-                    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", pathBuffer)) {
-                        // Clear previous data
-                        unitJson.clear();
-                        unitJson.setJsonData(fbdo.payload());
-                        
-                        if (unitJson.get(jsonData, "fields/unitName/stringValue")) {
-                            unitNames[i] = jsonData.stringValue;
-                        }
-                    }
-                }
-                
-                unitManager.updateUnitNames(unitNames);
-                unitManager.updateUnitData();
+                // Add other system data processing as needed
             }
+        } else {
+            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "updateSystemData", fbdo.errorReason().c_str());
         }
     }
     
@@ -221,21 +197,21 @@ private:
      * @param ecValue EC value to update
      */
     void updateUnitECValue(int unitIndex, float ecValue) {
-        char pathBuffer[50];
-        if (!createFirebasePath(pathBuffer, sizeof(pathBuffer), "%s/units/%d", systemPath, unitIndex)) {
+        if (unitIndex < 0 || unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
             return;
         }
         
-        // Clear previous data
-        unitJson.clear();
-        unitJson.set("fields/ecValue/doubleValue", ecValue);
-        unitJson.set("fields/ecLastUpdated/timestampValue", formatTimestamp());
+        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+        snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, SystemConfig::SERIAL_NUMBER, unitIndex);
         
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", pathBuffer, unitJson.raw(), "ecValue,ecLastUpdated")) {
-            Serial.println("Updated EC value for unit " + String(unitIndex) + ": " + String(ecValue, 3));
+        FirebaseJson unitJson;
+        unitJson.set(SystemConfig::UNIT_EC_VALUE_PATH, ecValue);
+        unitJson.set(SystemConfig::UNIT_EC_LAST_UPDATED_PATH, formatTimestamp());
+        
+        if (Firebase.Firestore.patchDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", pathBuffer, unitJson.raw(), "ecValue,ecLastUpdated")) {
+            Serial.printf("Updated EC value for unit %d\n", unitIndex);
         } else {
-            Serial.println("Failed to update EC value for unit " + String(unitIndex));
-            Serial.println(fbdo.errorReason());
+            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "updateUnitECValue", fbdo.errorReason().c_str());
         }
     }
 
@@ -255,6 +231,15 @@ public:
           unitManager(unit), fbdo(fbdo), systemState(state), initialized(false) {
         connectionOffset = 1000 + random(100, 10000);
         initializeStrings();
+    }
+    
+    /**
+     * Destructor
+     * Cleans up system resources
+     */
+    ~SystemManager() {
+        cleanupStrings();
+        cleanupJson();
     }
     
     /**

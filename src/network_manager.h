@@ -51,7 +51,7 @@ private:
     // Connection management constants
     static constexpr uint32_t WIFI_TIMEOUT = 10000;  // 10 seconds timeout for WiFi connection
     static constexpr uint32_t FIREBASE_TIMEOUT = SystemConfig::FIREBASE_TIMEOUT;
-    static constexpr uint32_t RECONNECT_DELAY = SystemConfig::FIREBASE_RETRY_DELAY;
+    static constexpr uint32_t RECONNECT_DELAY = SystemConfig::FIREBASE_RETRY_DELAY_MS;  // Use Firebase retry delay for reconnection
     static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = SystemConfig::MAX_FIREBASE_RETRIES;
     static constexpr uint32_t CONNECTION_CHECK_INTERVAL = 30000;  // 30 seconds
     static constexpr uint32_t CONFIG_PORTAL_TIMEOUT = 60;  // 60 seconds
@@ -190,6 +190,23 @@ private:
     }
     
     /**
+     * Cleans up credential memory
+     */
+    void cleanupCredentials() {
+        apiKey = "";
+        email = "";
+        password = "";
+        otaPassword = "";
+        
+        // Clear EEPROM credential sections
+        for (int i = 0; i < CREDENTIAL_MAX_LENGTH; i++) {
+            EEPROM.write(SystemConfig::EEPROM_EMAIL_ADDR + i, 0);
+            EEPROM.write(SystemConfig::EEPROM_PASSWORD_ADDR + i, 0);
+        }
+        EEPROM.commit();
+    }
+    
+    /**
      * Sets up the WiFi Manager portal with Firebase configuration
      */
     void setupWiFiManager() {
@@ -197,8 +214,8 @@ private:
         wifiManager.resetSettings();
         
         // Add parameters with current values (only email and password)
-        wifiManager.addParameter(new WiFiManagerParameter("email", "Firebase Email", email.c_str(), 128));
-        wifiManager.addParameter(new WiFiManagerParameter("password", "Firebase Password", password.c_str(), 128));
+        wifiManager.addParameter(new WiFiManagerParameter("email", "Firebase Email", email.c_str(), CREDENTIAL_MAX_LENGTH));
+        wifiManager.addParameter(new WiFiManagerParameter("password", "Firebase Password", password.c_str(), CREDENTIAL_MAX_LENGTH));
         
         // Set custom HTML page
         wifiManager.setCustomHeadElement("<style>body{font-family:Arial,sans-serif;margin:20px;background-color:#f0f0f0;}</style>");
@@ -440,6 +457,12 @@ public:
         if (mutex != NULL) {
             vSemaphoreDelete(mutex);
         }
+        
+        // Clean up WiFi parameters
+        wifiManager.resetSettings();
+        
+        // Clean up credentials
+        cleanupCredentials();
     }
     
     /**

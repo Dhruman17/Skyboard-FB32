@@ -57,14 +57,13 @@ private:
     
     // Error tracking
     uint8_t updateErrorCount;
-    static constexpr uint8_t MAX_UPDATE_ERRORS = 3;
     
     /**
      * Safely takes the mutex with timeout
      * @return true if mutex was taken successfully
      */
     bool takeMutex() {
-        return xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE;
+        return xSemaphoreTake(mutex, pdMS_TO_TICKS(SystemConfig::MUTEX_TIMEOUT_MS)) == pdTRUE;
     }
     
     /**
@@ -82,7 +81,7 @@ private:
      */
     bool verifyFirmware(const uint8_t* firmwareData, size_t firmwareSize) {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in verifyFirmware");
+            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "verifyFirmware", "Failed to take mutex");
             return false;
         }
         
@@ -90,7 +89,7 @@ private:
         
         // Check firmware size
         if (firmwareSize == 0 || firmwareSize > UPDATE_SIZE_UNKNOWN) {
-            Serial.println("Invalid firmware size");
+            Serial.printf("Invalid firmware size: %d\n", firmwareSize);
             success = false;
         }
         
@@ -111,7 +110,7 @@ private:
      */
     bool prepareUpdate() {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in prepareUpdate");
+            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "prepareUpdate", "Failed to take mutex");
             return false;
         }
         
@@ -119,14 +118,15 @@ private:
         
         // Check if enough space is available
         if (ESP.getFreeSketchSpace() < updateSize) {
-            Serial.println("Not enough space for update");
+            Serial.printf("Not enough space for update: required %d, available %d\n", 
+                        updateSize, ESP.getFreeSketchSpace());
             success = false;
         }
         
         // Begin update
         if (success) {
             if (!Update.begin(updateSize)) {
-                Serial.println("Failed to begin update");
+                Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "prepareUpdate", "Failed to begin update");
                 success = false;
             }
         }
@@ -143,7 +143,7 @@ private:
      */
     bool processUpdate(const uint8_t* firmwareData, size_t firmwareSize) {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in processUpdate");
+            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "processUpdate", "Failed to take mutex");
             return false;
         }
         
@@ -152,14 +152,14 @@ private:
         // Create non-const copy of firmware data
         uint8_t* writeData = new uint8_t[firmwareSize];
         if (!writeData) {
-            Serial.println("Failed to allocate memory for firmware data");
+            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "processUpdate", "Failed to allocate memory");
             success = false;
         } else {
             memcpy(writeData, firmwareData, firmwareSize);
             
             // Write firmware data
             if (Update.write(writeData, firmwareSize) != firmwareSize) {
-                Serial.println("Failed to write firmware data");
+                Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "processUpdate", "Failed to write firmware");
                 success = false;
             }
             
@@ -169,7 +169,7 @@ private:
         // End update
         if (success) {
             if (!Update.end()) {
-                Serial.println("Failed to end update");
+                Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "processUpdate", "Failed to end update");
                 success = false;
             }
         }
@@ -183,7 +183,7 @@ private:
      */
     void performRollback() {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in performRollback");
+            Serial.printf(SystemConfig::ERROR_FORMAT_FIREBASE, "performRollback", "Failed to take mutex");
             return;
         }
         
@@ -209,11 +209,13 @@ private:
      * @return Formatted timestamp string
      */
     String formatTimestamp() {
-        time_t now;
-        time(&now);
-        struct tm *timeinfo = localtime(&now);
+        struct tm timeinfo;
+        if (!getLocalTime(&timeinfo)) {
+            Serial.println("Failed to obtain time");
+            return "";
+        }
         char timestamp[30];
-        strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", timeinfo);
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", &timeinfo);
         return String(timestamp);
     }
 
@@ -245,6 +247,11 @@ public:
     ~OTAManager() {
         if (mutex != NULL) {
             vSemaphoreDelete(mutex);
+        }
+        
+        // Clean up any pending update
+        if (updateInProgress) {
+            Update.abort();
         }
     }
     

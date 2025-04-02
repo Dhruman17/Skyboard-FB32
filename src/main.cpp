@@ -50,7 +50,7 @@ UnitManager unitManager(systemState, fbdo, sensorManager);
 // System-wide control
 LightManager lightManager;  // Shared lighting system
 NetworkManager networkManager(fbdo, auth, config);
-OTAManager otaManager(fbdo, systemPath, serialNumber, 
+OTAManager otaManager(fbdo, SystemConfig::systemPath, SystemConfig::SERIAL_NUMBER, 
                      "firmware.skyboard.com", "/firmware/latest.bin", 
                      SystemConfig::FIRMWARE_VERSION);
 

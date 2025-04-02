@@ -36,78 +36,100 @@
  * - ecValue: doubleValue - Current EC reading
  */
 
-// Firebase path constant
-const char* systemPath = "systems";
-
 /**
  * System Configuration
  * Contains all hardware and software configuration parameters
  */
 namespace SystemConfig {
-    // Firmware version
-    static constexpr const char* FIRMWARE_VERSION = "1.5";
+    // System Configuration
+    static constexpr int NUMBER_OF_UNITS = 4;  // Number of vertical farming units
+    static constexpr const char* systemPath = "systems";  // Base path for system data in Firebase
+    static constexpr const char* FIRMWARE_VERSION = "1.5";  // Current firmware version
+    static constexpr const char* SERIAL_NUMBER = "FB32";  // System serial number
     
-    // Firebase API Key
-    static constexpr const char* FIREBASE_API_KEY = "AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";  // Replace with your actual API key
+    // Buffer Sizes
+    static constexpr size_t FIREBASE_PATH_BUFFER_SIZE = 256;  // Standard size for Firebase paths
+    static constexpr size_t JSON_BUFFER_SIZE = 1024;  // Standard size for JSON buffers
+    static constexpr size_t ERROR_MESSAGE_BUFFER_SIZE = 128;  // Standard size for error messages
     
-    // Number of units in the system
-    static constexpr int NUMBER_OF_UNITS = 3;
+    // Error Handling Configuration
+    static constexpr uint8_t MAX_I2C_RETRIES = 3;  // Maximum number of I2C operation retries
+    static constexpr uint8_t MAX_SENSOR_RETRIES = 3;  // Maximum number of sensor reading retries
+    static constexpr uint8_t MAX_FIREBASE_RETRIES = 3;  // Maximum number of Firebase operation retries
+    static constexpr uint8_t MAX_CONSECUTIVE_ERRORS = 5;  // Maximum number of consecutive errors before system reset
+    static constexpr uint32_t I2C_RETRY_DELAY_MS = 100;  // Delay between I2C retries
+    static constexpr uint32_t SENSOR_RETRY_DELAY_MS = 100;  // Delay between sensor retries
+    static constexpr uint32_t FIREBASE_RETRY_DELAY_MS = 5000;  // Delay between Firebase retries
+    static constexpr uint32_t ERROR_RESET_DELAY_MS = 1000;  // Delay before system reset after max errors
     
-    // Pin arrays
-    static constexpr uint8_t WATER_LEVEL_PINS[NUMBER_OF_UNITS] = {14, 12, 13};
-    static constexpr uint8_t ATOMIZER_PINS[NUMBER_OF_UNITS] = {25, 26, 27};
-    static constexpr uint8_t PCA_ADDRS[NUMBER_OF_UNITS] = {0xE0, 0xE2, 0xE4};
+    // Mutex Configuration
+    static constexpr uint32_t MUTEX_TIMEOUT_MS = 100;  // Standard mutex timeout
     
-    // System pins
-    static constexpr uint8_t SYSTEM_12V_POWER_PIN = 32;  // Required for atomizer power
-    static constexpr uint8_t SYSTEM_LIGHTS_PIN = 33;     // Controls system lighting
+    // Error Message Format
+    static constexpr const char* ERROR_FORMAT_FIREBASE = "Firebase error in %s: %s\n";
+    static constexpr const char* ERROR_FORMAT_I2C = "I2C error in %s for unit %d: %d\n";
+    static constexpr const char* ERROR_FORMAT_SENSOR = "Sensor error in %s for unit %d: %s\n";
+    static constexpr const char* ERROR_FORMAT_MUTEX = "Failed to take mutex in %s\n";
+    static constexpr const char* ERROR_FORMAT_GENERIC = "%s: %s\n";
     
-    // PWM configuration
-    static constexpr int PWM_FREQUENCY_ATOMIZER = 108000;
-    static constexpr int PWM_RESOLUTION_ATOMIZER = 8;
-    static constexpr int PWM_ATOMIZER_ON = 9;
-    static constexpr int PWM_ATOMIZER_OFF = 0;
+    // Sensor Types
+    static constexpr const char* SENSOR_TYPE_WATER = "water";  // Water level sensor type
+    static constexpr const char* SENSOR_TYPE_EC = "ec";  // EC sensor type
     
-    // I2C configuration
-    static constexpr uint8_t I2C_SDA = 21;
-    static constexpr uint8_t I2C_SCL = 22;
-    static constexpr uint8_t TCAADDR = 0x70;
+    // Pin Configuration
+    static constexpr int I2C_SDA = 21;  // I2C data pin
+    static constexpr int I2C_SCL = 22;  // I2C clock pin
+    static constexpr int WATER_LEVEL_PINS[] = {32, 33, 34, 35};  // Water level sensor pins
+    static constexpr int ATOMIZER_PINS[] = {25, 26, 27, 14};  // Atomizer control pins
+    static constexpr int PWM_CHANNELS[] = {0, 1, 2, 3};  // PWM channels for atomizers
+    static constexpr int PWM_FREQ = 25000;  // PWM frequency in Hz
+    static constexpr int PWM_RESOLUTION = 8;  // PWM resolution in bits
+    static constexpr int PWM_ATOMIZER_ON = 255;  // PWM value for atomizer on
+    static constexpr int PWM_ATOMIZER_OFF = 0;  // PWM value for atomizer off
+    static constexpr int SYSTEM_12V_POWER_PIN = 32;  // Required for atomizer power
+    static constexpr int SYSTEM_LIGHTS_PIN = 33;  // Controls system lighting
     
-    // Sensor Channel Configuration
+    // I2C Configuration
+    static constexpr uint8_t TCAADDR = 0x70;  // Default I2C multiplexer address
+    static constexpr uint8_t PCA_ADDRS[] = {0x70, 0x71, 0x72, 0x73};  // I2C multiplexer addresses
+    static constexpr uint8_t FDC1004_ADDR = 0x50;  // FDC1004 water level sensor address
+    static constexpr uint8_t MCP3021_ADDR = 0x4D;  // MCP3021 EC sensor address
+    static constexpr uint32_t I2C_FREQ = 100000;  // I2C frequency in Hz
     static constexpr uint8_t FDC1004_CHANNEL = 2;  // Third channel for capacitive sensor
     static constexpr uint8_t MCP3021_CHANNEL = 3;  // Fourth channel for EC sensor
-    static constexpr uint8_t FDC1004_ADDR = 0x50;  // I2C address for FDC1004 sensor
     
-    // Timing Configuration (in milliseconds)
-    static constexpr unsigned long INTERVAL_30_SECONDS = 30000;
-    static constexpr unsigned long WIFI_RESET_INTERVAL = 300000;  // 5 minutes
-    static constexpr unsigned long FIRMWARE_CHECK_INTERVAL = 3600000;  // 1 hour
-    static constexpr unsigned long WATER_LEVEL_READ_INTERVAL = 100;  // 100ms
+    // PWM Configuration
+    static constexpr int PWM_FREQUENCY_ATOMIZER = 25000;  // PWM frequency for atomizers
+    static constexpr int PWM_RESOLUTION_ATOMIZER = 8;  // PWM resolution for atomizers
     
-    // Default Intervals (in seconds)
-    static constexpr int DEFAULT_ATOMIZER_ON_INTERVAL = 5;
-    static constexpr int DEFAULT_ATOMIZER_OFF_INTERVAL = 10;
+    // Timing Configuration
+    static constexpr uint32_t SENSOR_READ_INTERVAL = 30000;  // Sensor read interval in ms
+    static constexpr uint32_t FIREBASE_UPDATE_INTERVAL = 5000;  // Firebase update interval in ms
+    static constexpr uint32_t INTERVAL_30_SECONDS = 30000;  // 30 seconds interval
+    static constexpr uint32_t FIRMWARE_CHECK_INTERVAL = 3600000;  // 1 hour
     
-    // Sensor configuration
-    static constexpr float EC_CALIBRATION_FACTOR = 0.727;
-    static constexpr float EC_CALIBRATION_OFFSET = -0.365;
-    static constexpr float EC_CALIBRATION_SQUARE = 0.416;
-    static constexpr float EC_MAX = 5.0;  // Maximum EC value in mS/cm
-    
-    // Water level sensor configuration
-    static constexpr uint8_t MEASURMENT = 1;
-    static constexpr uint8_t CHANNEL = 1;
-    static constexpr float WATER_LEVEL_CALIBRATION_OFFSET = 0.0;
-    static constexpr float WATER_LEVEL_CALIBRATION_FACTOR = 1.0;
-    static constexpr float WATER_LEVEL_MIN = 0.0;  // Minimum capacitance value
-    static constexpr float WATER_LEVEL_MAX = 100.0;  // Maximum capacitance value
-    static constexpr float UPPER_BOUND = 100.0;
-    static constexpr float LOWER_BOUND = 0.0;
-
     // Firebase Configuration
     static constexpr int FIREBASE_TIMEOUT = 10000;  // 10 seconds timeout for Firebase operations
-    static constexpr int FIREBASE_RETRY_DELAY = 5000;  // 5 seconds between retry attempts
-    static constexpr int MAX_FIREBASE_RETRIES = 3;  // Maximum number of retry attempts
+    static constexpr uint32_t FIREBASE_BATCH_SIZE = 10;  // Number of operations to batch together
+    static constexpr uint32_t FIREBASE_BATCH_DELAY_MS = 100;  // Delay between batched operations
+    
+    // Firebase Paths
+    static constexpr const char* UNIT_PATH_FORMAT = "%s/units/%d";
+    static constexpr const char* SYSTEM_PATH_FORMAT = "%s/system";
+    static constexpr const char* UNIT_NAME_PATH = "fields/unitName/stringValue";
+    static constexpr const char* UNIT_ENABLED_PATH = "fields/enabled/booleanValue";
+    static constexpr const char* UNIT_ON_INTERVAL_PATH = "fields/onInterval/integerValue";
+    static constexpr const char* UNIT_OFF_INTERVAL_PATH = "fields/offInterval/integerValue";
+    static constexpr const char* UNIT_WATER_LEVEL_PATH = "fields/waterLevel/doubleValue";
+    static constexpr const char* UNIT_WATER_LEVEL_STATE_PATH = "fields/waterLevelState/booleanValue";
+    static constexpr const char* UNIT_EC_VALUE_PATH = "fields/ecValue/doubleValue";
+    static constexpr const char* UNIT_EC_LAST_UPDATED_PATH = "fields/ecLastUpdated/timestampValue";
+    static constexpr const char* SYSTEM_LAST_SEEN_PATH = "fields/lastSeen/timestampValue";
+    
+    // Sensor Configuration
+    static constexpr float WATER_LEVEL_MIN = 0.0f;  // Minimum water level value
+    static constexpr float WATER_LEVEL_MAX = 100.0f;  // Maximum water level value
+    static constexpr float EC_MAX = 5.0f;  // Maximum EC value in mS/cm
     
     // EEPROM Configuration
     static constexpr int EEPROM_SIZE = 512;
@@ -144,7 +166,6 @@ struct SystemState {
 };
 
 // External declarations
-extern String serialNumber;
 extern SystemState systemState;
 
 #endif // CONFIG_H
