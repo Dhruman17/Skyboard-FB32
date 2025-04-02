@@ -45,8 +45,8 @@ private:
     SemaphoreHandle_t mutex;
     
     // WiFiManager parameters (only email and password)
-    WiFiManagerParameter custom_email;
-    WiFiManagerParameter custom_password;
+    WiFiManagerParameter custom_email{"email", "Firebase Email", "", CREDENTIAL_MAX_LENGTH};
+    WiFiManagerParameter custom_password{"password", "Firebase Password", "", CREDENTIAL_MAX_LENGTH};
     
     // Connection management constants
     static constexpr uint32_t WIFI_TIMEOUT = 10000;  // 10 seconds timeout for WiFi connection
@@ -188,9 +188,9 @@ private:
         // Remove any existing parameters
         wifiManager.resetSettings();
         
-        // Add parameters with current values (only email and password)
-        wifiManager.addParameter(new WiFiManagerParameter("email", "Firebase Email", email.c_str(), CREDENTIAL_MAX_LENGTH));
-        wifiManager.addParameter(new WiFiManagerParameter("password", "Firebase Password", password.c_str(), CREDENTIAL_MAX_LENGTH));
+        // Add parameters using references
+        wifiManager.addParameter(&custom_email);
+        wifiManager.addParameter(&custom_password);
         
         // Set custom HTML page
         wifiManager.setCustomHeadElement("<style>body{font-family:Arial,sans-serif;margin:20px;background-color:#f0f0f0;}</style>");
@@ -201,19 +201,9 @@ private:
         
         // Set custom save callback
         wifiManager.setSaveConfigCallback([this]() {
-            // Get all parameters
-            WiFiManagerParameter** params = wifiManager.getParameters();
-            int paramCount = wifiManager.getParametersCount();
-            
-            // Find and update each parameter
-            for (int i = 0; i < paramCount; i++) {
-                WiFiManagerParameter* param = params[i];
-                if (strcmp(param->getID(), "email") == 0) {
-                    email = param->getValue();
-                } else if (strcmp(param->getID(), "password") == 0) {
-                    password = param->getValue();
-                }
-            }
+            // Get values directly from our parameter objects
+            email = custom_email.getValue();
+            password = custom_password.getValue();
             
             // Save to Preferences
             saveFirebaseCredentials();
@@ -408,8 +398,8 @@ public:
         : fbdo(fbdo), auth(auth), config(config), initialized(false),
           lastConnectionCheck(0), lastReconnectAttempt(0),
           reconnectAttempts(0), wasConnected(false),
-          custom_email("email", "Firebase Email", "", 128),
-          custom_password("password", "Firebase Password", "", 128),
+          custom_email("email", "Firebase Email", "", CREDENTIAL_MAX_LENGTH),
+          custom_password("password", "Firebase Password", "", CREDENTIAL_MAX_LENGTH),
           otaPassword(DEFAULT_OTA_PASSWORD) {
         // Pre-allocate space for credentials
         apiKey.reserve(CREDENTIAL_MAX_LENGTH);
@@ -423,6 +413,9 @@ public:
         
         // Load Firebase credentials from Preferences
         loadFirebaseCredentials();
+        
+        // Set up WiFi Manager with Firebase configuration
+        setupWiFiManager();
     }
     
     /**
@@ -452,9 +445,6 @@ public:
         }
         
         bool success = true;
-        
-        // Set up WiFi Manager with Firebase configuration
-        setupWiFiManager();
         
         if (!connectToWiFi()) {
             Serial.println("Wi-Fi setup failed");

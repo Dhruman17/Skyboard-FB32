@@ -128,7 +128,7 @@ void setup() {
  */
 void loop() {
     // Core functionality runs regardless of WiFi status
-    systemManager.update();
+    // systemManager.update();  // Removed redundant call
     
     // WiFi-dependent operations
     if (WiFi.status() == WL_CONNECTED) {

@@ -84,7 +84,7 @@ namespace SystemConfig {
     static constexpr unsigned long CONNECTION_CHECK_INTERVAL = 60000;  // 1 minute
     
     // Buffer Sizes
-    static constexpr size_t FIREBASE_PATH_BUFFER_SIZE = 256;  // Standard size for Firebase paths
+    static constexpr size_t FIREBASE_PATH_BUFFER_SIZE = 512;  // Increased from 256 to handle deeply nested Firestore paths
     static constexpr size_t JSON_BUFFER_SIZE = 1024;  // Standard size for JSON buffers
     static constexpr size_t ERROR_MESSAGE_BUFFER_SIZE = 128;  // Standard size for error messages
     
