@@ -3,9 +3,9 @@
 
 #include "config.h"
 #include "hardware_manager.h"
+#include "water_level_sensor.h"
 #include "Wire.h"
 #include "MCP3X21.h"
-#include <Protocentral_FDC1004.h>
 #include "error_manager.h"
 
 /**
@@ -13,7 +13,7 @@
  * 
  * Manages sensor communication and data collection:
  * 1. Sensor Initialization:
- *    - FDC1004 capacitive sensors
+ *    - Water level sensors (capacitive or float switch)
  *    - MCP3021 EC sensors
  *    - Sensor calibration
  * 
@@ -42,7 +42,7 @@ private:
     HardwareManager& hardwareManager;
     
     // Sensor instances
-    FDC1004* fdc1004[SystemConfig::NUMBER_OF_UNITS];
+    WaterLevelSensor* waterSensors[SystemConfig::NUMBER_OF_UNITS];
     MCP3021* mcp3021[SystemConfig::NUMBER_OF_UNITS];
     
     // Error tracking
@@ -85,26 +85,30 @@ private:
     }
     
     /**
-     * Initializes FDC1004 sensor for a unit
+     * Initializes water level sensor for a unit
      * @param unitIndex Index of the unit
      * @return true if initialization successful
      */
-    bool initializeFDC1004(int unitIndex) {
+    bool initializeWaterSensor(int unitIndex) {
         if (!takeMutex()) {
             ErrorManager::mutexError(
                 ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to initialize FDC1004",
-                "SensorManager::initializeFDC1004"
+                "Failed to initialize water sensor",
+                "SensorManager::initializeWaterSensor"
             );
             return false;
         }
         
-        // Initialize FDC1004
-        fdc1004[unitIndex] = new FDC1004(SystemConfig::FDC1004_ADDR);
+        // Create appropriate sensor type
+        if (SystemConfig::WATER_LEVEL_SENSOR_TYPE == SystemConfig::WaterLevelSensorType::CAPACITIVE) {
+            waterSensors[unitIndex] = new CapacitiveWaterSensor(hardwareManager);
+        } else {
+            waterSensors[unitIndex] = new FloatSwitchSensor(hardwareManager);
+        }
         
         // Try to initialize with retries
         for (int i = 0; i < SystemConfig::MAX_SENSOR_RETRIES; i++) {
-            if (fdc1004[unitIndex]->configureMeasurementSingle(0, SystemConfig::FDC1004_CHANNEL, 0)) {
+            if (waterSensors[unitIndex]->initialize()) {
                 giveMutex();
                 return true;
             }
@@ -113,8 +117,8 @@ private:
         
         ErrorManager::sensorError(
             ErrorManager::ErrorCode::SENSOR_INIT_FAILED,
-            "Failed to initialize FDC1004 after " + String(SystemConfig::MAX_SENSOR_RETRIES) + " attempts",
-            "SensorManager::initializeFDC1004"
+            "Failed to initialize water sensor after " + String(SystemConfig::MAX_SENSOR_RETRIES) + " attempts",
+            "SensorManager::initializeWaterSensor"
         );
         
         giveMutex();
@@ -250,7 +254,7 @@ private:
      * @return Average reading or -1 if error
      */
     float readFDC1004Averaged(int unitIndex) {
-        if (fdc1004[unitIndex] == nullptr) {
+        if (waterSensors[unitIndex] == nullptr) {
             return -1.0f;
         }
         
@@ -272,7 +276,7 @@ private:
         
         // Collect readings
         for (uint8_t i = 0; i < NUM_SAMPLES; i++) {
-            float reading = fdc1004[unitIndex]->readMeasurement(SystemConfig::FDC1004_CHANNEL, 0);
+            float reading = waterSensors[unitIndex]->readWaterLevel();
             if (reading >= 0) {
                 readings[validReadings++] = reading;
             }
@@ -364,7 +368,7 @@ public:
     SensorManager(HardwareManager& hardware) : hardwareManager(hardware), initialized(false) {
         // Initialize arrays to nullptr
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            fdc1004[i] = nullptr;
+            waterSensors[i] = nullptr;
             mcp3021[i] = nullptr;
             errorCount[i] = 0;
             errorMessages[i].reserve(ERROR_MSG_MAX_LENGTH);
@@ -406,7 +410,7 @@ public:
         
         // Clean up all sensor instances
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            safeDelete(fdc1004[i]);
+            safeDelete(waterSensors[i]);
             safeDelete(mcp3021[i]);
         }
         
@@ -432,8 +436,8 @@ public:
         
         bool success = false;
         if (strcmp(sensorType, SystemConfig::SENSOR_TYPE_WATER) == 0) {
-            // Reset FDC1004
-            success = initializeFDC1004(unitIndex);
+            // Reset water sensor
+            success = initializeWaterSensor(unitIndex);
         } else if (strcmp(sensorType, SystemConfig::SENSOR_TYPE_EC) == 0) {
             success = initializeMCP3021(unitIndex);
         }
@@ -449,7 +453,7 @@ public:
         bool success = true;
         
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (!initializeFDC1004(i) || !initializeMCP3021(i)) {
+            if (!initializeWaterSensor(i) || !initializeMCP3021(i)) {
                 success = false;
                 break;
             }
@@ -535,7 +539,7 @@ public:
     }
     
     /**
-     * Reads water level from FDC1004 sensor for a specific unit
+     * Reads water level from sensor for a specific unit
      * @param unitIndex Index of the unit to read from
      * @return Water level reading (0-1)
      */

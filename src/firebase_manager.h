@@ -238,6 +238,7 @@ public:
         }
         
         batchOperations.clear();
+        batchOperations.shrink_to_fit();  // Shrink capacity to fit current size (0)
         lastBatchFlushTime = millis();
         
         giveMutex();

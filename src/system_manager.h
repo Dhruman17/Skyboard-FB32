@@ -530,7 +530,7 @@ public:
 
             // Online-only updates
             if (networkManager.isConnected()) {
-                // Update system data and send heartbeat
+                // Only send updates to Firebase, don't fetch
                 updateSystemData();
                 sendHeartbeat();
             }
@@ -544,6 +544,55 @@ public:
         }
         
         giveMutex();
+    }
+    
+    /**
+     * Explicitly refreshes system data from Firebase
+     * Should be called only when needed (e.g., after settings changes)
+     * @return true if refresh was successful
+     */
+    bool refreshSystemData() {
+        if (!takeMutex()) {
+            return false;
+        }
+
+        bool success = true;
+        
+        // Fetch system data from Firebase
+        time_t lightOnTime = 0;
+        time_t lightOffTime = 0;
+        bool lightMasterSwitch = false;
+        bool timeCycleEnabled = false;
+        bool unitsEnabled[SystemConfig::NUMBER_OF_UNITS] = {false};
+        unsigned long atomizerOnIntervals[SystemConfig::NUMBER_OF_UNITS] = {0};
+        unsigned long atomizerOffIntervals[SystemConfig::NUMBER_OF_UNITS] = {0};
+        
+        if (!firebaseManager.fetchSystemData(&systemName, &lightOnTime, &lightOffTime, 
+                                          &lightMasterSwitch, &timeCycleEnabled, unitsEnabled,
+                                          atomizerOnIntervals, atomizerOffIntervals)) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                "Failed to refresh system data from Firebase",
+                "SystemManager::refreshSystemData"
+            );
+            success = false;
+        }
+        
+        if (success) {
+            // Apply light settings
+            lightManager.updateSettings(lightMasterSwitch, timeCycleEnabled, 
+                                     lightOnTime, lightOffTime);
+            
+            // Apply unit settings
+            for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+                systemState.unitsEnabled[i] = unitsEnabled[i];
+                systemState.atomizerOnIntervals[i] = atomizerOnIntervals[i];
+                systemState.atomizerOffIntervals[i] = atomizerOffIntervals[i];
+            }
+        }
+        
+        giveMutex();
+        return success;
     }
     
     /**

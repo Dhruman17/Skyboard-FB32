@@ -130,11 +130,12 @@ void setup() {
  */
 void loop() {
     // Core functionality runs regardless of WiFi status
-    // systemManager.update();  // Removed redundant call
+    systemManager.update();
     
     // WiFi-dependent operations
     if (WiFi.status() == WL_CONNECTED) {
-        systemManager.update();
+        // Only handle network-specific tasks here
+        networkManager.update();
     } else {
         // Try to reconnect WiFi periodically
         if (millis() - systemState.lastReconnectAttempt >= SystemConfig::WIFI_RECONNECT_INTERVAL) {

@@ -151,6 +151,17 @@ namespace SystemConfig {
     // WiFi Manager Configuration
     static constexpr uint32_t CONFIG_PORTAL_TIMEOUT = 180;  // 3 minutes timeout for config portal
     static constexpr int MIN_SIGNAL_QUALITY = 30;  // Minimum WiFi signal quality in dBm
+    
+    // Water Level Sensor Configuration
+    enum class WaterLevelSensorType {
+        CAPACITIVE,  // FDC1004 capacitive sensor
+        FLOAT_SWITCH // Float switch with MCP3021 ADC
+    };
+    static constexpr WaterLevelSensorType WATER_LEVEL_SENSOR_TYPE = WaterLevelSensorType::CAPACITIVE;
+    
+    // Float Switch Configuration (only used if WATER_LEVEL_SENSOR_TYPE is FLOAT_SWITCH)
+    static constexpr float FLOAT_SWITCH_HIGH_THRESHOLD = 800.0f;  // ADC value for high water level
+    static constexpr float FLOAT_SWITCH_LOW_THRESHOLD = 200.0f;   // ADC value for low water level
 }
 
 namespace DefaultValues {
