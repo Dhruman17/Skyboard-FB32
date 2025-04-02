@@ -639,14 +639,23 @@ public:
         // Try to connect to WiFi with timeout and yield
         Serial.println("Attempting to connect to WiFi...");
         unsigned long startTime = millis();
+        unsigned long lastYieldTime = startTime;
+        
         while (!connectToWiFi()) {
             if (millis() - startTime > WIFI_TIMEOUT) {
                 Serial.println("WiFi connection timeout");
                 success = false;
                 break;
             }
-            delay(1000);
-            yield();  // Allow other tasks to run
+            
+            // Yield and feed watchdog every 100ms
+            if (millis() - lastYieldTime >= 100) {
+                yield();
+                delay(1);  // Small delay to ensure watchdog is fed
+                lastYieldTime = millis();
+            }
+            
+            delay(10);  // Short delay between connection attempts
         }
         
         // Re-acquire mutex for remaining initialization

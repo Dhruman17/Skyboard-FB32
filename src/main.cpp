@@ -31,15 +31,21 @@
 
 // Forward declarations
 class WiFiManager;
+class NetworkManager;
+class SystemManager;
+class UnitManager;
+class FirebaseManager;
+class SensorManager;
+class HardwareManager;
+class LightManager;
+class OTAManager;
+class PreferencesManager;
 
 // ============= Global Objects =============
-// Firebase objects for cloud communication
+// Firebase objects for cloud communication (lightweight, can be global)
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
-
-// WiFi Manager for handling WiFi credentials
-WiFiManager wifiManager;
 
 // Hardware sensors (3 units, each with their own sensors)
 // Each unit has its own PCA9546A multiplexer connecting to:
@@ -51,37 +57,57 @@ SystemState systemState;  // System state tracking
 
 // ============= System Managers =============
 // Core hardware management
-// Handles both TCA9548APWR (system level) and PCA9546A (unit level) multiplexers
-HardwareManager hardwareManager;
-SensorManager sensorManager(hardwareManager);  // Pass hardwareManager to constructor
+HardwareManager* hardwareManager = nullptr;
+SensorManager* sensorManager = nullptr;
+FirebaseManager* firebaseManager = nullptr;
+UnitManager* unitManager = nullptr;
+AtomizerManager* atomizerManager = nullptr;
+LightManager* lightManager = nullptr;
+NetworkManager* networkManager = nullptr;
+OTAManager* otaManager = nullptr;
+SystemManager* systemManager = nullptr;
+WiFiManager* wifiManager = nullptr;
 
-// Initialize Firebase
-FirebaseManager firebaseManager(fbdo);  // Only pass fbdo to constructor
-
-// Unit management (3 vertical farming units)
-AtomizerManager atomizerManager;
-UnitManager unitManager(systemState, firebaseManager, sensorManager, atomizerManager);
-
-// System-wide control
-LightManager lightManager;  // Shared lighting system
-NetworkManager networkManager(fbdo, auth, config, lightManager, wifiManager);
-OTAManager otaManager(fbdo, SystemConfig::systemPath, SystemConfig::SERIAL_NUMBER, 
-                     "firmware.skyboard.com", "/firmware/latest.bin", 
-                     SystemConfig::FIRMWARE_VERSION);
-
-// Main system coordinator
-SystemManager systemManager(networkManager, otaManager, lightManager, unitManager, firebaseManager, systemState);  // Add otaManager to constructor
-
-// Non-volatile storage for settings
+// Non-volatile storage for settings (lightweight, can be global)
 Preferences preferences;
-PreferencesManager preferencesManager;
+PreferencesManager* preferencesManager = nullptr;
+
+// FreeRTOS task handle for network initialization
+TaskHandle_t networkInitTaskHandle = NULL;
+
+// Network initialization task
+void networkInitTask(void *parameter) {
+    NetworkManager* networkManager = (NetworkManager*)parameter;
+    
+    // Initialize network with timeout and yield
+    Serial.println("Starting network initialization...");
+    if (!networkManager->begin()) {
+        Serial.println("Failed to initialize network. Continuing with stored settings...");
+    } else {
+        Serial.println("Network initialized successfully");
+    }
+    
+    // Initialize Firebase configuration
+    Serial.println("Initializing Firebase configuration...");
+    config.api_key = SystemConfig::FIREBASE_API_KEY;
+    config.database_url = SystemConfig::FIREBASE_DATABASE_URL;
+    Firebase.begin(&config, &auth);
+    Serial.println("Firebase configuration initialized");
+    
+    // Delete the task when done
+    vTaskDelete(NULL);
+}
 
 void loadSettingsFromStorage() {
-    preferencesManager.loadSettings(systemState);
+    if (preferencesManager != nullptr) {
+        preferencesManager->loadSettings(systemState);
+    }
 }
 
 void saveSettingsToStorage() {
-    preferencesManager.saveSettings(systemState);
+    if (preferencesManager != nullptr) {
+        preferencesManager->saveSettings(systemState);
+    }
 }
 
 /**
@@ -92,7 +118,7 @@ void saveSettingsToStorage() {
  * 4. Initialize system (network, Firebase, etc.)
  */
 void setup() {
-    // Disable watchdog timer during initialization
+    // Disable all watchdog timers during initialization
     disableCore0WDT();
     disableCore1WDT();
     
@@ -130,7 +156,8 @@ void setup() {
     
     // Initialize PreferencesManager
     Serial.println("Initializing PreferencesManager...");
-    if (!preferencesManager.begin()) {
+    preferencesManager = new PreferencesManager();
+    if (preferencesManager == nullptr || !preferencesManager->begin()) {
         Serial.println("CRITICAL ERROR: Failed to initialize PreferencesManager");
         delay(3000);
         ESP.restart();
@@ -140,37 +167,134 @@ void setup() {
     // Load settings from storage first
     loadSettingsFromStorage();
     
-    // Initialize hardware components (required for operation)
+    // Initialize hardware components
     Serial.println("Initializing hardware...");
-    if (!hardwareManager.begin()) {
-        Serial.println("Failed to initialize hardware. Restarting...");
+    hardwareManager = new HardwareManager();
+    if (hardwareManager == nullptr || !hardwareManager->begin()) {
+        Serial.println("CRITICAL ERROR: Failed to initialize HardwareManager");
         delay(3000);
         ESP.restart();
     }
-    Serial.println("Hardware initialized successfully");
+    Serial.println("HardwareManager initialized successfully");
     
-    // Initialize Firebase configuration
-    Serial.println("Initializing Firebase configuration...");
-    config.api_key = SystemConfig::FIREBASE_API_KEY;
-    config.database_url = SystemConfig::FIREBASE_DATABASE_URL;
-    Firebase.begin(&config, &auth);
-    Serial.println("Firebase configuration initialized");
-    
-    // Initialize network first, as it's required for system initialization
-    Serial.println("Initializing network...");
-    if (!networkManager.begin()) {
-        Serial.println("Failed to initialize network. Continuing with stored settings...");
-    } else {
-        Serial.println("Network initialized successfully");
+    // Initialize SensorManager
+    Serial.println("Initializing SensorManager...");
+    sensorManager = new SensorManager(*hardwareManager);
+    if (sensorManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create SensorManager");
+        delay(3000);
+        ESP.restart();
     }
+    Serial.println("SensorManager created successfully");
+    
+    // Initialize FirebaseManager
+    Serial.println("Initializing FirebaseManager...");
+    firebaseManager = new FirebaseManager(fbdo);
+    if (firebaseManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create FirebaseManager");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("FirebaseManager created successfully");
+    
+    // Initialize AtomizerManager
+    Serial.println("Initializing AtomizerManager...");
+    atomizerManager = new AtomizerManager();
+    if (atomizerManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create AtomizerManager");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("AtomizerManager created successfully");
+    
+    // Initialize UnitManager
+    Serial.println("Initializing UnitManager...");
+    unitManager = new UnitManager(systemState, *firebaseManager, *sensorManager, *atomizerManager);
+    if (unitManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create UnitManager");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("UnitManager created successfully");
+    
+    // Initialize LightManager
+    Serial.println("Initializing LightManager...");
+    lightManager = new LightManager();
+    if (lightManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create LightManager");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("LightManager created successfully");
+    
+    // Initialize WiFiManager with shorter timeout
+    Serial.println("Initializing WiFiManager...");
+    wifiManager = new WiFiManager();
+    if (wifiManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create WiFiManager");
+        delay(3000);
+        ESP.restart();
+    }
+    // Set shorter timeout for WiFi portal
+    wifiManager->setConfigPortalTimeout(60);  // Reduce from 180 to 60 seconds
+    Serial.println("WiFiManager created successfully");
+    
+    // Initialize NetworkManager
+    Serial.println("Initializing NetworkManager...");
+    networkManager = new NetworkManager(fbdo, auth, config, *lightManager, *wifiManager);
+    if (networkManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create NetworkManager");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("NetworkManager created successfully");
+    
+    // Initialize OTAManager
+    Serial.println("Initializing OTAManager...");
+    otaManager = new OTAManager(fbdo, SystemConfig::systemPath, SystemConfig::SERIAL_NUMBER, 
+                               "firmware.skyboard.com", "/firmware/latest.bin", 
+                               SystemConfig::FIRMWARE_VERSION);
+    if (otaManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create OTAManager");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("OTAManager created successfully");
+    
+    // Initialize SystemManager
+    Serial.println("Initializing SystemManager...");
+    systemManager = new SystemManager(*networkManager, *otaManager, *lightManager, 
+                                    *unitManager, *firebaseManager, systemState);
+    if (systemManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create SystemManager");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("SystemManager created successfully");
     
     // Initialize system components
-    Serial.println("Initializing system...");
-    if (!systemManager.begin()) {
+    Serial.println("Starting system initialization...");
+    if (!systemManager->begin()) {
         Serial.println("Failed to initialize system. Continuing with stored settings...");
     } else {
         Serial.println("System initialized successfully");
     }
+    
+    // Create network initialization task
+    Serial.println("Creating network initialization task...");
+    if (xTaskCreate(
+        networkInitTask,          // Task function
+        "NetworkInit",           // Task name
+        4096,                    // Stack size
+        networkManager,          // Task parameter
+        1,                       // Priority
+        &networkInitTaskHandle   // Task handle
+    ) != pdPASS) {
+        Serial.println("CRITICAL ERROR: Failed to create network initialization task");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("Network initialization task created successfully");
     
     // Re-enable watchdog timer after initialization
     enableCore0WDT();
@@ -188,18 +312,24 @@ void setup() {
  * - System monitoring and updates
  */
 void loop() {
+    if (systemManager == nullptr || networkManager == nullptr) {
+        Serial.println("CRITICAL ERROR: System or Network manager not initialized");
+        delay(1000);
+        return;
+    }
+    
     // Core functionality runs regardless of WiFi status
-    systemManager.update();
+    systemManager->update();
     
     // WiFi-dependent operations
     if (WiFi.status() == WL_CONNECTED) {
         // Only handle network-specific tasks here
-        networkManager.update();
+        networkManager->update();
     } else {
         // Try to reconnect WiFi periodically
         if (millis() - systemState.lastReconnectAttempt >= SystemConfig::WIFI_RECONNECT_INTERVAL) {
             Serial.println("Wi-Fi disconnected. Attempting reconnect...");
-            if (networkManager.isConnected()) {
+            if (networkManager->isConnected()) {
                 Serial.println("Wi-Fi reconnected successfully");
             } else {
                 Serial.println("Failed to reconnect. Continuing with stored settings...");
@@ -208,7 +338,8 @@ void loop() {
         }
     }
     
-    // Allow other tasks to run
+    // Allow other tasks to run and feed watchdog
     yield();
+    delay(1);  // Small delay to ensure watchdog is fed
 }
 
