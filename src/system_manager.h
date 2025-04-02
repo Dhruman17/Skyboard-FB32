@@ -97,7 +97,19 @@ private:
      * @return true if mutex was taken
      */
     bool takeMutex() {
+        Serial.printf("[SystemManager] Attempting to take mutex (timeout: %dms)\n", MUTEX_TIMEOUT_MS);
+        if (mutex == NULL) {
+            Serial.println("[SystemManager] ERROR: Mutex is NULL");
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
+                "Mutex is NULL",
+                "SystemManager::takeMutex"
+            );
+            return false;
+        }
+        
         if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
+            Serial.println("[SystemManager] ERROR: Failed to take mutex");
             ErrorManager::mutexError(
                 ErrorManager::ErrorCode::MUTEX_TIMEOUT,
                 "Failed to take mutex",
@@ -105,6 +117,7 @@ private:
             );
             return false;
         }
+        Serial.println("[SystemManager] Successfully took mutex");
         return true;
     }
     
@@ -113,7 +126,12 @@ private:
      * Thread-safe: Yes
      */
     void giveMutex() {
+        if (mutex == NULL) {
+            Serial.println("[SystemManager] ERROR: Attempting to give NULL mutex");
+            return;
+        }
         xSemaphoreGive(mutex);
+        Serial.println("[SystemManager] Successfully gave mutex");
     }
     
     /**
@@ -313,21 +331,32 @@ private:
 public:
     /**
      * Constructor
-     * Initializes all managers and creates mutex
+     * @param networkManager Reference to NetworkManager
+     * @param otaManager Reference to OTAManager
+     * @param lightManager Reference to LightManager
+     * @param unitManager Reference to UnitManager
+     * @param firebaseManager Reference to FirebaseManager
+     * @param systemState Reference to SystemState
      */
-    SystemManager(NetworkManager& nm, OTAManager& om, LightManager& lm, 
-                 UnitManager& um, FirebaseManager& fm, SystemState& ss)
-        : networkManager(nm), otaManager(om), lightManager(lm), 
-          unitManager(um), firebaseManager(fm), systemState(ss),
-          initialized(false), wasConnected(false), reconnectAttempts(0),
-          currentBackoffDelay(1000), minHeapEver(UINT32_MAX),
-          lastConnectionCheck(0), lastReconnectAttempt(0),
-          lastHeapCheck(0), lightMasterSwitch(false),
-          timeCycleEnabled(false), connectionOffset(0) {
+    SystemManager(NetworkManager& networkManager, OTAManager& otaManager, 
+                 LightManager& lightManager, UnitManager& unitManager,
+                 FirebaseManager& firebaseManager, SystemState& systemState)
+        : networkManager(networkManager), otaManager(otaManager),
+          lightManager(lightManager), unitManager(unitManager),
+          firebaseManager(firebaseManager), systemState(systemState),
+          systemStatus("initializing"), systemName(""), connectionOffset(0),
+          initialized(false), lightMasterSwitch(false), timeCycleEnabled(false),
+          lastConnectionCheck(0), lastReconnectAttempt(0), reconnectAttempts(0),
+          wasConnected(false), currentBackoffDelay(1000), lastHeapCheck(0),
+          minHeapEver(UINT32_MAX) {
+        
+        Serial.println("[SystemManager] Starting constructor");
         
         // Create mutex first, before any other operations
+        Serial.println("[SystemManager] Creating mutex");
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
+            Serial.println("[SystemManager] ERROR: Failed to create mutex");
             ErrorManager::mutexError(
                 ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
                 "Failed to create SystemManager mutex",
@@ -336,9 +365,12 @@ public:
             // Don't proceed with initialization if mutex creation failed
             return;
         }
+        Serial.println("[SystemManager] Successfully created mutex");
         
         // Initialize string buffers
+        Serial.println("[SystemManager] Initializing string buffers");
         initializeStrings();
+        Serial.println("[SystemManager] Constructor completed successfully");
     }
     
     /**
@@ -346,10 +378,14 @@ public:
      * Cleans up resources
      */
     ~SystemManager() {
+        Serial.println("[SystemManager] Starting destructor");
         if (mutex != NULL) {
+            Serial.println("[SystemManager] Deleting mutex");
             vSemaphoreDelete(mutex);
         }
+        Serial.println("[SystemManager] Cleaning up strings");
         cleanupStrings();
+        Serial.println("[SystemManager] Destructor completed");
     }
     
     /**

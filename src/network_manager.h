@@ -166,12 +166,23 @@ private:
      * @return true if mutex was taken successfully
      */
     bool takeMutex() {
+        Serial.printf("[NetworkManager] Attempting to take mutex (timeout: %dms)\n", MUTEX_TIMEOUT_MS);
+        if (mutex == NULL) {
+            Serial.println("[NetworkManager] ERROR: Mutex is NULL");
+            snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Mutex is NULL");
+            snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::takeMutex");
+            logError(ErrorManager::ErrorCode::MUTEX_CREATE_FAILED, errorMsgBuffer, errorLocBuffer);
+            return false;
+        }
+        
         if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
+            Serial.println("[NetworkManager] ERROR: Failed to take mutex");
             snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Failed to take mutex");
             snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::takeMutex");
             logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, errorMsgBuffer, errorLocBuffer);
             return false;
         }
+        Serial.println("[NetworkManager] Successfully took mutex");
         return true;
     }
     
@@ -180,7 +191,12 @@ private:
      * Thread-safe: Yes
      */
     void giveMutex() {
+        if (mutex == NULL) {
+            Serial.println("[NetworkManager] ERROR: Attempting to give NULL mutex");
+            return;
+        }
         xSemaphoreGive(mutex);
+        Serial.println("[NetworkManager] Successfully gave mutex");
     }
     
     /**
@@ -534,11 +550,15 @@ private:
 public:
     /**
      * Constructor
-     * Initializes all components and creates mutex
+     * @param fbdo Reference to FirebaseData
+     * @param fa Reference to FirebaseAuth
+     * @param fc Reference to FirebaseConfig
+     * @param lm Reference to LightManager
+     * @param wm Reference to WiFiManager
      */
-    NetworkManager(FirebaseData& fb, FirebaseAuth& fa, FirebaseConfig& fc,
+    NetworkManager(FirebaseData& fbdo, FirebaseAuth& fa, FirebaseConfig& fc,
                   LightManager& lm, WiFiManager& wm)
-        : fbdo(fb), auth(fa), config(fc), lightManager(lm), wifiManager(wm),
+        : fbdo(fbdo), auth(fa), config(fc), lightManager(lm), wifiManager(wm),
           reconnectAttempts(0), wasConnected(false), currentBackoffDelay(1000),
           lastReconnectAttempt(0), lastConnectionCheckMillis(0),
           lastFirmwareCheckMillis(0), previousHeartbeatMillis(0),
@@ -547,9 +567,13 @@ public:
           custom_email(nullptr), custom_password(nullptr),
           initialized(false) {
         
+        Serial.println("[NetworkManager] Starting constructor");
+        
         // Create mutex first, before any other operations
+        Serial.println("[NetworkManager] Creating mutex");
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
+            Serial.println("[NetworkManager] ERROR: Failed to create mutex");
             ErrorManager::mutexError(
                 ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
                 "Failed to create NetworkManager mutex",
@@ -558,16 +582,21 @@ public:
             // Don't proceed with initialization if mutex creation failed
             return;
         }
+        Serial.println("[NetworkManager] Successfully created mutex");
         
         // Pre-allocate space for credentials
+        Serial.println("[NetworkManager] Pre-allocating credential strings");
         apiKey.reserve(CREDENTIAL_MAX_LENGTH);
         email.reserve(CREDENTIAL_MAX_LENGTH);
         password.reserve(CREDENTIAL_MAX_LENGTH);
         
         // Initialize WiFiManager with safe defaults
+        Serial.println("[NetworkManager] Initializing WiFiManager defaults");
         wifiManager.setDebugOutput(false);
         wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
         wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
+        
+        Serial.println("[NetworkManager] Constructor completed successfully");
     }
     
     /**
@@ -575,11 +604,14 @@ public:
      * Cleans up resources
      */
     ~NetworkManager() {
+        Serial.println("[NetworkManager] Starting destructor");
         if (mutex != NULL) {
+            Serial.println("[NetworkManager] Deleting mutex");
             vSemaphoreDelete(mutex);
         }
         
         // Clean up WiFi parameters
+        Serial.println("[NetworkManager] Cleaning up WiFi parameters");
         if (custom_email != nullptr) {
             delete custom_email;
             custom_email = nullptr;
@@ -591,7 +623,10 @@ public:
         wifiManager.resetSettings();
         
         // Clean up credentials
+        Serial.println("[NetworkManager] Cleaning up credentials");
         cleanupCredentials();
+        
+        Serial.println("[NetworkManager] Destructor completed");
     }
     
     /**

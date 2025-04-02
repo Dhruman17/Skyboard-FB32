@@ -127,7 +127,7 @@ void setup() {
     Serial.println("\n\n");  // Add some newlines to clear any garbage
     Serial.println("Starting initialization...");
     
-    // Initialize NVS first, before any other components
+    // Initialize NVS
     Serial.println("Initializing NVS...");
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -135,22 +135,21 @@ void setup() {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
-    if (ret != ESP_OK) {
-        Serial.printf("NVS initialization failed with error: %d\n", ret);
-        delay(3000);
-        ESP.restart();
-    }
+    ESP_ERROR_CHECK(ret);
     Serial.println("NVS initialized successfully");
     
     // Set up random seed for connection offset
     randomSeed(analogRead(0));
     
-    // Initialize Preferences with explicit namespace
+    // Initialize Preferences
     Serial.println("Initializing Preferences...");
-    preferences.end();  // Ensure any existing preferences are closed
-    if (!preferences.begin("skyboard", false)) {
-        Serial.println("CRITICAL ERROR: Failed to initialize Preferences");
-        delay(3000);
+    if (!preferences.begin("system", false)) {
+        Serial.println("ERROR: Failed to initialize preferences");
+        ErrorManager::systemError(
+            ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
+            "Failed to initialize preferences",
+            "setup"
+        );
         ESP.restart();
     }
     Serial.println("Preferences initialized successfully");

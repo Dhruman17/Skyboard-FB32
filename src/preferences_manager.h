@@ -39,11 +39,15 @@ private:
      * @return true if namespace was opened successfully
      */
     bool openNamespace(const char* ns, bool readOnly = true) {
+        Serial.printf("[PreferencesManager] Attempting to open namespace: %s (readOnly: %d)\n", ns, readOnly);
+        
         if (isOpen) {
+            Serial.println("[PreferencesManager] Closing currently open namespace");
             preferences.end();
         }
         
         if (!preferences.begin(ns, readOnly)) {
+            Serial.printf("[PreferencesManager] ERROR: Failed to open namespace: %s\n", ns);
             ::ErrorManager::systemError(
                 ::ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
                 "Failed to open preferences namespace",
@@ -52,6 +56,7 @@ private:
             return false;
         }
         
+        Serial.printf("[PreferencesManager] Successfully opened namespace: %s\n", ns);
         isOpen = true;
         return true;
     }
@@ -61,7 +66,7 @@ public:
      * Constructor
      */
     PreferencesManager() : isOpen(false) {
-        // Don't initialize preferences here, wait for begin()
+        Serial.println("[PreferencesManager] Constructor called");
     }
     
     /**
@@ -69,9 +74,93 @@ public:
      * @return true if initialization successful
      */
     bool begin() {
+        Serial.println("[PreferencesManager] Starting initialization...");
+        
         if (isOpen) {
+            Serial.println("[PreferencesManager] Closing currently open namespace");
             preferences.end();
         }
+        
+        // Initialize preferences with a default namespace
+        Serial.println("[PreferencesManager] Attempting to initialize with default namespace 'system'");
+        if (!preferences.begin("system", false)) {
+            Serial.println("[PreferencesManager] ERROR: Failed to initialize with default namespace");
+            ::ErrorManager::systemError(
+                ::ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
+                "Failed to initialize preferences",
+                "PreferencesManager::begin"
+            );
+            return false;
+        }
+        Serial.println("[PreferencesManager] Successfully initialized with default namespace");
+        preferences.end();
+        
+        // Create all required namespaces if they don't exist
+        Serial.printf("[PreferencesManager] Creating namespace: %s\n", FIREBASE_NS);
+        if (!preferences.begin(FIREBASE_NS, false)) {
+            Serial.printf("[PreferencesManager] ERROR: Failed to create namespace: %s\n", FIREBASE_NS);
+            ::ErrorManager::systemError(
+                ::ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
+                "Failed to create Firebase namespace",
+                "PreferencesManager::begin"
+            );
+            return false;
+        }
+        Serial.printf("[PreferencesManager] Successfully created namespace: %s\n", FIREBASE_NS);
+        preferences.end();
+        
+        Serial.printf("[PreferencesManager] Creating namespace: %s\n", SYSTEM_NS);
+        if (!preferences.begin(SYSTEM_NS, false)) {
+            Serial.printf("[PreferencesManager] ERROR: Failed to create namespace: %s\n", SYSTEM_NS);
+            ::ErrorManager::systemError(
+                ::ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
+                "Failed to create System namespace",
+                "PreferencesManager::begin"
+            );
+            return false;
+        }
+        Serial.printf("[PreferencesManager] Successfully created namespace: %s\n", SYSTEM_NS);
+        preferences.end();
+        
+        Serial.printf("[PreferencesManager] Creating namespace: %s\n", UNIT_NS);
+        if (!preferences.begin(UNIT_NS, false)) {
+            Serial.printf("[PreferencesManager] ERROR: Failed to create namespace: %s\n", UNIT_NS);
+            ::ErrorManager::systemError(
+                ::ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
+                "Failed to create Unit namespace",
+                "PreferencesManager::begin"
+            );
+            return false;
+        }
+        Serial.printf("[PreferencesManager] Successfully created namespace: %s\n", UNIT_NS);
+        preferences.end();
+        
+        // Initialize with system namespace
+        Serial.printf("[PreferencesManager] Opening final namespace: %s\n", SYSTEM_NS);
+        if (!preferences.begin(SYSTEM_NS, false)) {
+            Serial.printf("[PreferencesManager] ERROR: Failed to open final namespace: %s\n", SYSTEM_NS);
+            ::ErrorManager::systemError(
+                ::ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
+                "Failed to open System namespace",
+                "PreferencesManager::begin"
+            );
+            return false;
+        }
+        
+        // Verify we can read/write to the namespace
+        if (!preferences.putString("test", "test") || preferences.getString("test", "") != "test") {
+            Serial.println("[PreferencesManager] ERROR: Failed to verify namespace access");
+            ::ErrorManager::systemError(
+                ::ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
+                "Failed to verify namespace access",
+                "PreferencesManager::begin"
+            );
+            return false;
+        }
+        preferences.remove("test");
+        
+        Serial.println("[PreferencesManager] Successfully completed initialization");
+        isOpen = true;
         return true;
     }
     
@@ -80,7 +169,9 @@ public:
      * Ensures Preferences is properly closed
      */
     ~PreferencesManager() {
+        Serial.println("[PreferencesManager] Destructor called");
         if (isOpen) {
+            Serial.println("[PreferencesManager] Closing open namespace");
             preferences.end();
         }
     }
