@@ -534,67 +534,44 @@ private:
 public:
     /**
      * Constructor
+     * Initializes all components and creates mutex
      */
-    NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config, LightManager& light, WiFiManager& wifi)
-        : fbdo(fbdo),
-          auth(auth),
-          config(config),
-          lightManager(light),
-          wifiManager(wifi),
-          reconnectAttempts(0),
-          wasConnected(false),
-          currentBackoffDelay(RECONNECT_DELAY),
-          lastReconnectAttempt(0),
-          lastConnectionCheckMillis(0),
-          lastFirmwareCheckMillis(0),
-          previousHeartbeatMillis(0),
-          lastHeapCheckMillis(0),
-          minHeapSeen(ESP.getFreeHeap()),
-          lastConnectionCheck(0),
-          lastFirebaseCheck(0),
-          initialized(false),
-          custom_email(nullptr),
-          custom_password(nullptr),
-          mutex(NULL) {  // Initialize mutex to NULL
-        // Create mutex first
+    NetworkManager(FirebaseData& fb, FirebaseAuth& fa, FirebaseConfig& fc,
+                  LightManager& lm, WiFiManager& wm)
+        : fbdo(fb), auth(fa), config(fc), lightManager(lm), wifiManager(wm),
+          reconnectAttempts(0), wasConnected(false), currentBackoffDelay(1000),
+          lastReconnectAttempt(0), lastConnectionCheckMillis(0),
+          lastFirmwareCheckMillis(0), previousHeartbeatMillis(0),
+          lastHeapCheckMillis(0), minHeapSeen(UINT32_MAX),
+          lastConnectionCheck(0), lastFirebaseCheck(0),
+          custom_email(nullptr), custom_password(nullptr),
+          initialized(false) {
+        
+        // Create mutex
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
-            Serial.println("CRITICAL ERROR: Failed to create mutex in NetworkManager");
-            return;
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
+                "Failed to create NetworkManager mutex",
+                "NetworkManager::NetworkManager"
+            );
         }
-        
-        // Pre-allocate space for credentials
-        apiKey.reserve(CREDENTIAL_MAX_LENGTH);
-        email.reserve(CREDENTIAL_MAX_LENGTH);
-        password.reserve(CREDENTIAL_MAX_LENGTH);
-        
-        // Initialize WiFiManager with safe defaults
-        wifiManager.setDebugOutput(false);
-        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
-        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
     }
     
     /**
      * Destructor
+     * Cleans up resources
      */
     ~NetworkManager() {
         if (mutex != NULL) {
             vSemaphoreDelete(mutex);
         }
-        
-        // Clean up WiFi parameters
         if (custom_email != nullptr) {
             delete custom_email;
-            custom_email = nullptr;
         }
         if (custom_password != nullptr) {
             delete custom_password;
-            custom_password = nullptr;
         }
-        wifiManager.resetSettings();
-        
-        // Clean up credentials
-        cleanupCredentials();
     }
     
     /**

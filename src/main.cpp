@@ -123,7 +123,7 @@ void setup() {
     disableCore1WDT();
     
     // Start serial communication for debugging
-    Serial.begin(9600);
+    Serial.begin(115200);
     delay(1000);  // Give serial time to initialize
     Serial.println("Starting initialization...");
     

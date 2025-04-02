@@ -313,39 +313,38 @@ private:
 public:
     /**
      * Constructor
-     * Thread-safe: Yes
-     * @param network Reference to network manager
-     * @param ota Reference to OTA manager
-     * @param light Reference to light manager
-     * @param unit Reference to unit manager
-     * @param firebase Reference to Firebase manager
-     * @param state Reference to system state
+     * Initializes all managers and creates mutex
      */
-    SystemManager(NetworkManager& network, OTAManager& ota, LightManager& light, 
-                 UnitManager& unit, FirebaseManager& firebase, SystemState& state)
-        : networkManager(network), otaManager(ota), lightManager(light), 
-          unitManager(unit), firebaseManager(firebase), systemState(state), 
-          initialized(false), mutex(NULL),
-          lastHeapCheck(0), minHeapEver(ESP.getFreeHeap()) {
-        // Create mutex first
+    SystemManager(NetworkManager& nm, OTAManager& om, LightManager& lm, 
+                 UnitManager& um, FirebaseManager& fm, SystemState& ss)
+        : networkManager(nm), otaManager(om), lightManager(lm), 
+          unitManager(um), firebaseManager(fm), systemState(ss),
+          initialized(false), wasConnected(false), reconnectAttempts(0),
+          currentBackoffDelay(1000), minHeapEver(UINT32_MAX) {
+        
+        // Create mutex
         mutex = xSemaphoreCreateMutex();
-        if (!mutex) {
-            Serial.println("CRITICAL ERROR: Failed to create mutex in SystemManager");
-            return;
+        if (mutex == NULL) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
+                "Failed to create SystemManager mutex",
+                "SystemManager::SystemManager"
+            );
         }
         
-        connectionOffset = 1000 + random(100, 10000);
+        // Initialize string buffers
         initializeStrings();
     }
     
     /**
      * Destructor
+     * Cleans up resources
      */
     ~SystemManager() {
-        cleanupStrings();
-        if (mutex) {
+        if (mutex != NULL) {
             vSemaphoreDelete(mutex);
         }
+        cleanupStrings();
     }
     
     /**
