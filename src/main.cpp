@@ -89,6 +89,10 @@ WiFiManager wifiManager;
  * 4. Initialize system (network, Firebase, etc.)
  */
 void setup() {
+    // Disable watchdog timer during initialization
+    disableCore0WDT();
+    disableCore1WDT();
+    
     // Start serial communication for debugging
     Serial.begin(9600);
     delay(1000);  // Give serial time to initialize
@@ -156,6 +160,10 @@ void setup() {
     if (!systemSuccess) {
         Serial.println("Failed to initialize system. Continuing with stored settings...");
     }
+    
+    // Re-enable watchdog timer after initialization
+    enableCore0WDT();
+    enableCore1WDT();
     
     Serial.println("Initialization complete");
 }

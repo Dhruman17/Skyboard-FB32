@@ -644,9 +644,18 @@ public:
         wifiManager.addParameter(custom_email);
         wifiManager.addParameter(custom_password);
         
+        // Release mutex before WiFi connection attempt
+        giveMutex();
+        
+        // Try to connect to WiFi
         if (!connectToWiFi()) {
             Serial.println("Wi-Fi setup failed");
             success = false;
+        }
+        
+        // Re-acquire mutex for remaining initialization
+        if (!takeMutex()) {
+            return false;
         }
         
         if (success && !initializeTime()) {
