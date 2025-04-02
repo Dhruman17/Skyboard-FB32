@@ -34,7 +34,7 @@ String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes
 
 // Generate the random delays
 int randomDelay;
-int connectionOffset = 1000 + randomDelay;
+int connectionOffset;
 bool wifiConnected = false; // Track Wi-Fi connection status
 bool configPortalRunning = false;
 
@@ -174,7 +174,6 @@ void readWaterLevel()
 
     // wait for completion
     delay(100);
-    value[2];
     if (!FDC.readMeasurement(MEASURMENT, value))
     {
         int16_t msb = (int16_t)value[0];
@@ -211,7 +210,6 @@ void readWaterLevel()
 
     // wait for completion
     delay(100);
-    value[2];
     if (!FDC.readMeasurement(MEASURMENT, value))
     {
         int16_t msb = (int16_t)value[0];
@@ -548,6 +546,7 @@ void setup()
     Serial.begin(9600);
     randomSeed(analogRead(0));
     randomDelay = random(100, 10000);
+    connectionOffset = 1000 + randomDelay;
     delay(connectionOffset);
 
     // Attempt to connect to known Wi-Fi networks
