@@ -16,7 +16,7 @@
  * 
  * System-level fields:
  * - lastSeen: timestampValue - Last system heartbeat timestamp
- * - systemName: stringValue - Name of the system
+ * - systeName: stringValue - Name of the system (TODO: Update backend to use systemName)
  * - firmwareVersion: stringValue - Current firmware version
  * 
  * Lighting control fields:
