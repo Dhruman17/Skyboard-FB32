@@ -102,7 +102,11 @@ void setup() {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ret = nvs_flash_init();
     }
-    ESP_ERROR_CHECK(ret);
+    if (ret != ESP_OK) {
+        Serial.printf("NVS initialization failed with error: %d\n", ret);
+        delay(3000);
+        ESP.restart();
+    }
     Serial.println("NVS initialized successfully");
     
     // Set up random seed for connection offset
