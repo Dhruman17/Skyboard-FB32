@@ -175,6 +175,9 @@ private:
             return false;
         }
         
+        // Add a small delay before taking mutex to prevent race conditions
+        delay(1);
+        
         if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
             Serial.println("[NetworkManager] ERROR: Failed to take mutex");
             snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Failed to take mutex");
@@ -197,6 +200,8 @@ private:
         }
         xSemaphoreGive(mutex);
         Serial.println("[NetworkManager] Successfully gave mutex");
+        // Add a small delay after giving mutex to prevent race conditions
+        delay(1);
     }
     
     /**
