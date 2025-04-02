@@ -140,11 +140,6 @@ void setup() {
     // Load settings from storage first
     loadSettingsFromStorage();
     
-    // Initialize Firebase
-    config.api_key = SystemConfig::FIREBASE_API_KEY;
-    config.database_url = SystemConfig::FIREBASE_DATABASE_URL;
-    Firebase.begin(&config, &auth);
-    
     // Initialize hardware components (required for operation)
     Serial.println("Initializing hardware...");
     if (!hardwareManager.begin()) {
@@ -153,6 +148,13 @@ void setup() {
         ESP.restart();
     }
     Serial.println("Hardware initialized successfully");
+    
+    // Initialize Firebase configuration
+    Serial.println("Initializing Firebase configuration...");
+    config.api_key = SystemConfig::FIREBASE_API_KEY;
+    config.database_url = SystemConfig::FIREBASE_DATABASE_URL;
+    Firebase.begin(&config, &auth);
+    Serial.println("Firebase configuration initialized");
     
     // Initialize network first, as it's required for system initialization
     Serial.println("Initializing network...");

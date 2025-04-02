@@ -562,23 +562,10 @@ public:
             return;
         }
         
-        // Initialize WiFiManager
-        wifiManager.setDebugOutput(false);
-        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
-        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
-        
         // Pre-allocate space for credentials
         apiKey.reserve(CREDENTIAL_MAX_LENGTH);
         email.reserve(CREDENTIAL_MAX_LENGTH);
         password.reserve(CREDENTIAL_MAX_LENGTH);
-        
-        // Create parameters with empty values
-        custom_email = new WiFiManagerParameter("email", "Firebase Email", "", CREDENTIAL_MAX_LENGTH);
-        custom_password = new WiFiManagerParameter("password", "Firebase Password", "", CREDENTIAL_MAX_LENGTH);
-        
-        // Add parameters to WiFiManager
-        wifiManager.addParameter(custom_email);
-        wifiManager.addParameter(custom_password);
     }
     
     /**
@@ -616,6 +603,11 @@ public:
         }
         
         bool success = true;
+        
+        // Initialize WiFiManager first
+        wifiManager.setDebugOutput(false);
+        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
+        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
         
         // Load Firebase credentials first
         if (!loadFirebaseCredentials()) {
