@@ -42,6 +42,10 @@ private:
     uint8_t pinErrorCount;
     static constexpr uint8_t MAX_PIN_ERRORS = 3;
     
+    // Fallback cycle tracking
+    unsigned long lastLightStateChange;
+    bool fallbackLightState;
+    
     /**
      * Safely takes the mutex with timeout
      * @return true if mutex was taken successfully
@@ -66,13 +70,13 @@ private:
         time_t now;
         time(&now);
         if (now < 1000000000) { // If time is not set (before year 2000)
-            Serial.println("Time not set, using default time");
+            Serial.println("Time not set, using fallback cycle");
             return 0;
         }
         
         struct tm *currentTime = localtime(&now);
         if (!currentTime) {
-            Serial.println("Failed to get local time");
+            Serial.println("Failed to get local time, using fallback cycle");
             return 0;
         }
         
@@ -131,6 +135,40 @@ private:
         
         giveMutex();
     }
+    
+    /**
+     * Handles the fallback light cycle when offline
+     * @return true if light should be on
+     */
+    bool handleFallbackCycle() {
+        unsigned long currentMillis = millis();
+        unsigned long elapsedTime;
+        
+        // Handle millis() overflow
+        if (currentMillis < lastLightStateChange) {
+            elapsedTime = (0xFFFFFFFF - lastLightStateChange) + currentMillis + 1;
+        } else {
+            elapsedTime = currentMillis - lastLightStateChange;
+        }
+        
+        if (fallbackLightState) {
+            // Check if we need to turn off
+            if (elapsedTime >= DefaultValues::FALLBACK_LIGHT_ON_DURATION) {
+                fallbackLightState = false;
+                lastLightStateChange = currentMillis;
+                return false;
+            }
+        } else {
+            // Check if we need to turn on
+            if (elapsedTime >= DefaultValues::FALLBACK_LIGHT_OFF_DURATION) {
+                fallbackLightState = true;
+                lastLightStateChange = currentMillis;
+                return true;
+            }
+        }
+        
+        return fallbackLightState;
+    }
 
 public:
     /**
@@ -138,7 +176,8 @@ public:
      */
     LightManager() : lightState(false), masterSwitch(false),
                     timeCycleEnabled(false), onTime(0), offTime(0),
-                    initialized(false), pinErrorCount(0) {
+                    initialized(false), pinErrorCount(0),
+                    lastLightStateChange(0), fallbackLightState(false) {
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
             Serial.println("Failed to create mutex in LightManager");
@@ -169,6 +208,8 @@ public:
             pinMode(SystemConfig::SYSTEM_LIGHTS_PIN, OUTPUT);
             digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
             lightState = false;
+            fallbackLightState = false;
+            lastLightStateChange = millis();
         } else {
             Serial.println("Light pin not configured");
             success = false;
@@ -200,6 +241,12 @@ public:
         onTime = on;
         offTime = off;
         
+        // If switching to time cycle mode, reset fallback timing
+        if (cycle) {
+            lastLightStateChange = millis();
+            fallbackLightState = false;
+        }
+        
         giveMutex();
     }
     
@@ -222,15 +269,20 @@ public:
         if (masterSwitch) {
             // Manual control mode
             newState = true;
-        } else if (timeCycleEnabled) {
-            // Time-based control mode
+        } else {
+            // Check if we have valid time
             time_t currentTime = getCurrentTimeOfDay();
             
-            // Handle time wrap-around (e.g., 23:00 to 06:00)
-            if (offTime < onTime) {
-                newState = currentTime >= onTime || currentTime < offTime;
-            } else {
-                newState = currentTime >= onTime && currentTime < offTime;
+            if (currentTime == 0) {
+                // Time not set or invalid, use fallback cycle
+                newState = handleFallbackCycle();
+            } else if (timeCycleEnabled) {
+                // Time-based control mode with valid time
+                if (offTime < onTime) {
+                    newState = currentTime >= onTime || currentTime < offTime;
+                } else {
+                    newState = currentTime >= onTime && currentTime < offTime;
+                }
             }
         }
         

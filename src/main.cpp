@@ -1,5 +1,6 @@
 #include <Arduino.h>
 #include <Wire.h>
+#include <Preferences.h>
 
 // Hardware Libraries
 #include "MCP3X21.h"
@@ -21,6 +22,7 @@
 #include "sensor_coms.h"
 #include "system_manager.h"
 #include "unit_manager.h"
+#include "preferences_manager.h"
 
 #define FIREBASEJSON_USE_PSRAM
 
@@ -57,6 +59,20 @@ OTAManager otaManager(fbdo, SystemConfig::systemPath, SystemConfig::SERIAL_NUMBE
 // Main system coordinator
 SystemManager systemManager(networkManager, otaManager, lightManager, unitManager, fbdo, systemState);
 
+// Non-volatile storage for settings
+PreferencesManager preferencesManager;
+
+void loadSettingsFromStorage() {
+    preferencesManager.loadSettings(systemState);
+}
+
+void saveSettingsToStorage() {
+    preferencesManager.saveSettings(systemState);
+}
+
+// WiFi Manager for handling WiFi credentials
+WiFiManager wifiManager;
+
 /**
  * System initialization
  * 1. Initialize serial communication
@@ -66,21 +82,29 @@ SystemManager systemManager(networkManager, otaManager, lightManager, unitManage
  */
 void setup() {
     // Start serial communication for debugging
-    Serial.begin(9600);
+    Serial.begin(115200);
     randomSeed(analogRead(0));
     
-    // Initialize hardware components
+    // Load settings from storage first
+    loadSettingsFromStorage();
+    
+    // Initialize hardware components (required for operation)
     if (!hardwareManager.begin()) {
         Serial.println("Failed to initialize hardware. Restarting...");
         delay(3000);
         ESP.restart();
     }
     
-    // Initialize system components
-    if (!systemManager.begin()) {
-        Serial.println("Failed to initialize system. Restarting...");
-        delay(3000);
-        ESP.restart();
+    // Try to initialize network and system components
+    bool networkSuccess = networkManager.begin();
+    bool systemSuccess = systemManager.begin();
+    
+    if (!networkSuccess) {
+        Serial.println("Failed to initialize network. Continuing with stored settings...");
+    }
+    
+    if (!systemSuccess) {
+        Serial.println("Failed to initialize system. Continuing with stored settings...");
     }
     
     Serial.println("Initialization complete");
@@ -94,6 +118,23 @@ void setup() {
  * - System monitoring and updates
  */
 void loop() {
+    // Core functionality runs regardless of WiFi status
     systemManager.update();
+    
+    // WiFi-dependent operations
+    if (WiFi.status() == WL_CONNECTED) {
+        systemManager.update();
+    } else {
+        // Try to reconnect WiFi periodically
+        if (millis() - systemState.lastReconnectAttempt >= SystemConfig::WIFI_RECONNECT_INTERVAL) {
+            Serial.println("Wi-Fi disconnected. Attempting reconnect...");
+            if (networkManager.isConnected()) {
+                Serial.println("Wi-Fi reconnected successfully");
+            } else {
+                Serial.println("Failed to reconnect. Continuing with stored settings...");
+            }
+            systemState.lastReconnectAttempt = millis();
+        }
+    }
 }
 

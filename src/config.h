@@ -42,10 +42,11 @@
  */
 namespace SystemConfig {
     // System Configuration
-    static constexpr int NUMBER_OF_UNITS = 4;  // Number of vertical farming units
+    static constexpr int NUMBER_OF_UNITS = 3;  // Number of vertical farming units
     static constexpr const char* systemPath = "systems";  // Base path for system data in Firebase
     static constexpr const char* FIRMWARE_VERSION = "1.5";  // Current firmware version
     static constexpr const char* SERIAL_NUMBER = "FB32";  // System serial number
+    static constexpr unsigned long WIFI_RECONNECT_INTERVAL = 30000;  // 30 seconds
     
     // Buffer Sizes
     static constexpr size_t FIREBASE_PATH_BUFFER_SIZE = 256;  // Standard size for Firebase paths
@@ -133,9 +134,20 @@ namespace SystemConfig {
     
     // EEPROM Configuration
     static constexpr int EEPROM_SIZE = 512;
-    static constexpr int EEPROM_API_KEY_ADDR = 0;
     static constexpr int EEPROM_EMAIL_ADDR = 128;
     static constexpr int EEPROM_PASSWORD_ADDR = 256;
+}
+
+namespace DefaultValues {
+    // Light Control
+    constexpr bool LIGHT_MASTER_SWITCH = false;
+    constexpr unsigned long FALLBACK_LIGHT_ON_DURATION = 21600000;  // 6 hours in milliseconds
+    constexpr unsigned long FALLBACK_LIGHT_OFF_DURATION = 64800000;  // 18 hours in milliseconds
+    
+    // Unit Settings
+    constexpr bool UNITS_ENABLED[SystemConfig::NUMBER_OF_UNITS] = {true, true, true};
+    constexpr unsigned long ATOMIZER_ON_INTERVAL = 300;  // 5 minutes
+    constexpr unsigned long ATOMIZER_OFF_INTERVAL = 1800;  // 30 minutes
 }
 
 /**
@@ -155,14 +167,26 @@ namespace SystemConfig {
  * - lastFirmwareCheckMillis: Timestamp of last firmware update check
  */
 struct SystemState {
+    // Unit States
     bool unitsEnabled[SystemConfig::NUMBER_OF_UNITS] = {false};
     bool waterLevelStates[SystemConfig::NUMBER_OF_UNITS] = {false};
     bool previousWaterLevelStates[SystemConfig::NUMBER_OF_UNITS] = {false};
     unsigned long atomizerOnIntervals[SystemConfig::NUMBER_OF_UNITS] = {0};
     unsigned long atomizerOffIntervals[SystemConfig::NUMBER_OF_UNITS] = {0};
+    
+    // Light Control
+    bool lightMasterSwitch = false;
+    bool timeCycleEnabled = false;
+    unsigned long lightOnTime = 0;
+    unsigned long lightOffTime = 0;
+    unsigned long lastLightStateChange = 0;  // Track when light state last changed
+    bool isLightOn = false;  // Current light state
+    
+    // System Timing
     unsigned long previousHeartbeatMillis = 0;
     unsigned long lastConnectionCheckMillis = 0;
     unsigned long lastFirmwareCheckMillis = 0;
+    unsigned long lastReconnectAttempt = 0;
 };
 
 // External declarations
