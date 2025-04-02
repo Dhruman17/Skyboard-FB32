@@ -507,8 +507,13 @@ void checkForFirmwareUpdate()
         {
             Serial.println("New firmware available. Proceeding with update...");
 
-            String firmwareUrl = "https://firebasestorage.googleapis.com/v0/b/" + String(FIREBASE_PROJECT_ID) +
-                                 ".appspot.com/o/firmware_" + serialNumber + ".bin?alt=media";
+            String firmwareUrl;
+            firmwareUrl.reserve(200);
+            firmwareUrl = "https://firebasestorage.googleapis.com/v0/b/";
+            firmwareUrl += FIREBASE_PROJECT_ID;
+            firmwareUrl += ".appspot.com/o/firmware_";
+            firmwareUrl += serialNumber;
+            firmwareUrl += ".bin?alt=media";
 
             performOTAUpdate(firmwareUrl, storageVersion);
         }
@@ -611,9 +616,6 @@ void setup()
         else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
         else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
         else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
-#ifdef ENABLE_ARDUINO_OTA
-    ArduinoOTA.begin();
-#endif
     Wire.begin(SDA, SCL);
     mcp3021.init(&Wire);
 }

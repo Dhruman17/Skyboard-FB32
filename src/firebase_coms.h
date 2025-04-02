@@ -93,6 +93,8 @@ void fetchFirebaseSystemData(FirebaseData *pFBDO, String *pSystemName, time_t *p
         {
             Serial.println("Light_Time_Cycle_Switch not found or not a boolean");
         }
+        json.clear();
+        jsonData.clear();
     }
     else
     {
@@ -105,7 +107,11 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
 {
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
-        String documentPath = systemPath + "/units/" + (unitNames[i]);
+        String documentPath;
+        documentPath.reserve(100);  // Prevent fragmentation
+        documentPath = systemPath + "/units/";
+        documentPath += unitNames[i];
+
         if (Firebase.Firestore.getDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
         {
             FirebaseJson json;
@@ -132,6 +138,9 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
             {
                 atomizerOffIntervals[i] = jsonData.intValue * 1000;
             }
+            // 🧼 Free memory to prevent leaks
+            json.clear();
+            jsonData.clear();
         }
         else
         {
@@ -142,7 +151,11 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
 }
 void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, float ecValue)
 {
-    String documentPath = systemPath + "/units/" + unitName;
+    String documentPath;
+    documentPath.reserve(100);
+    documentPath = systemPath + "/units/";
+    documentPath += unitName;
+
     FirebaseJson content;
     content.set("fields/EC_Sensor_Value/doubleValue", ecValue);
     content.set("fields/EC_Updated/timestampValue", formatTimestamp());
@@ -155,10 +168,15 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
     {
         Serial.println("Failed to update EC value for " + unitName + ": " + pFBDO->errorReason());
     }
+    content.clear();
 }
 void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, float waterLevel)
 {
-    String documentPath = systemPath + "/units/" + unitName;
+    String documentPath;
+    documentPath.reserve(100);
+    documentPath = systemPath + "/units/";
+    documentPath += unitName;
+
     FirebaseJson content;
     content.set("fields/Cap_Water_Level/doubleValue", waterLevel);
     content.set("fields/Cap_Water_Updated/timestampValue", formatTimestamp());
@@ -171,6 +189,7 @@ void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, flo
     {
         Serial.println("Failed to update water level for " + unitName + ": " + pFBDO->errorReason());
     }
+    content.clear();
 }
 
 #endif //
