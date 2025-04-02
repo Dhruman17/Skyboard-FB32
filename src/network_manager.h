@@ -626,14 +626,14 @@ public:
             Serial.println("No Firebase credentials found. Will use default configuration.");
         }
         
-        // Remove old parameters if they exist
+        // Clean up old parameters
         if (custom_email != nullptr) {
-            wifiManager.removeParameter(custom_email);
             delete custom_email;
+            custom_email = nullptr;
         }
         if (custom_password != nullptr) {
-            wifiManager.removeParameter(custom_password);
             delete custom_password;
+            custom_password = nullptr;
         }
         
         // Create new parameters with current values
