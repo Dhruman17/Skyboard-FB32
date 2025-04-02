@@ -41,6 +41,7 @@ private:
     FirebaseAuth& auth;
     FirebaseConfig& config;
     WiFiManager wifiManager;
+    LightManager& lightManager;
     bool initialized;
     SemaphoreHandle_t mutex;
     
@@ -49,13 +50,13 @@ private:
     WiFiManagerParameter custom_password{"password", "Firebase Password", "", CREDENTIAL_MAX_LENGTH};
     
     // Connection management constants
-    static constexpr uint32_t WIFI_TIMEOUT = 10000;  // 10 seconds timeout for WiFi connection
+    static constexpr uint32_t WIFI_TIMEOUT = 20000;  // 20 seconds
     static constexpr uint32_t FIREBASE_TIMEOUT = SystemConfig::FIREBASE_TIMEOUT;
-    static constexpr uint32_t RECONNECT_DELAY = SystemConfig::FIREBASE_RETRY_DELAY_MS;  // Use Firebase retry delay for reconnection
-    static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = SystemConfig::MAX_FIREBASE_RETRIES;
+    static constexpr uint32_t RECONNECT_DELAY = 5000;  // 5 seconds
+    static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = 3;
     static constexpr uint32_t CONNECTION_CHECK_INTERVAL = 30000;  // 30 seconds
-    static constexpr uint32_t CONFIG_PORTAL_TIMEOUT = 60;  // 60 seconds
-    static constexpr uint8_t MIN_SIGNAL_QUALITY = 30;  // 30%
+    static constexpr uint32_t CONFIG_PORTAL_TIMEOUT = 180;  // 3 minutes
+    static constexpr int MIN_SIGNAL_QUALITY = 30;  // Minimum WiFi signal quality in dBm
     static constexpr float BACKOFF_MULTIPLIER = 1.5f;  // Exponential backoff multiplier
     static constexpr uint32_t MAX_BACKOFF_DELAY = 30000;  // Maximum 30 seconds between attempts
     
@@ -238,6 +239,9 @@ private:
         while (!success && attempts < MAX_RECONNECT_ATTEMPTS) {
             Serial.println("Attempting to connect to WiFi...");
             
+            // Set up WiFiManager with Firebase configuration first
+            setupWiFiManager();
+            
             // Configure WiFiManager
             wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
             wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
@@ -286,6 +290,16 @@ private:
         bool success = (now >= 1000000000);
         if (!success) {
             Serial.println("Failed to initialize time");
+        } else {
+            // Set timeValid to true only after successful NTP sync
+            struct tm timeinfo;
+            if (getLocalTime(&timeinfo)) {
+                lightManager.setTimeValid(true);
+                Serial.println("Time synchronized successfully");
+            } else {
+                Serial.println("Failed to get local time after NTP sync");
+                success = false;
+            }
         }
         
         giveMutex();
@@ -393,9 +407,10 @@ public:
      * @param fbdo Reference to Firebase data object
      * @param auth Reference to Firebase auth object
      * @param config Reference to Firebase config object
+     * @param light Reference to LightManager
      */
-    NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config)
-        : fbdo(fbdo), auth(auth), config(config), initialized(false),
+    NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config, LightManager& light)
+        : fbdo(fbdo), auth(auth), config(config), lightManager(light), initialized(false),
           lastConnectionCheck(0), lastReconnectAttempt(0),
           reconnectAttempts(0), wasConnected(false),
           custom_email("email", "Firebase Email", "", CREDENTIAL_MAX_LENGTH),

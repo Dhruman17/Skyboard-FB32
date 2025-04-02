@@ -21,6 +21,7 @@ namespace ErrorManager {
         SYSTEM_INIT_FAILED = 1000,
         SYSTEM_UPDATE_FAILED = 1001,
         SYSTEM_INVALID_STATE = 1002,
+        HEAP_WARNING = 1003,  // Low heap memory warning
 
         // Network Errors (2000-2999)
         NETWORK_CONNECTION_FAILED = 2000,

@@ -316,6 +316,236 @@ public:
         giveMutex();
         return success;
     }
+    
+    /**
+     * Fetches system data from Firebase
+     * Thread-safe: Yes
+     * @param systemName Output parameter for system name
+     * @param lightOnTime Output parameter for light on time
+     * @param lightOffTime Output parameter for light off time
+     * @param lightMasterSwitch Output parameter for light master switch
+     * @param timeCycleEnabled Output parameter for time cycle enabled
+     * @param unitsEnabled Output parameter for units enabled array
+     * @param atomizerOnIntervals Output parameter for atomizer on intervals
+     * @param atomizerOffIntervals Output parameter for atomizer off intervals
+     * @return true if fetch was successful
+     */
+    bool fetchSystemData(String* systemName, time_t* lightOnTime, time_t* lightOffTime,
+                        bool* lightMasterSwitch, bool* timeCycleEnabled, bool* unitsEnabled,
+                        unsigned long* atomizerOnIntervals, unsigned long* atomizerOffIntervals) {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool success = true;
+        
+        // Get system document
+        if (!createPath(pathBuffer, sizeof(pathBuffer), 
+                       SystemConfig::SYSTEM_PATH_FORMAT, 
+                       SystemConfig::SERIAL_NUMBER)) {
+            success = false;
+        }
+        
+        if (success) {
+            if (!Firebase.Firestore.getDocument(&fbdo, 
+                                              SystemConfig::FIREBASE_PROJECT_ID, 
+                                              "", pathBuffer)) {
+                ErrorManager::firebaseError(
+                    ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
+                    String("Failed to get system document: ") + fbdo.errorReason().c_str(),
+                    "FirebaseManager::fetchSystemData"
+                );
+                success = false;
+            }
+            
+            if (success) {
+                documentJson.setJsonData(fbdo.payload());
+                FirebaseJsonData jsonData;
+                
+                // Get system name
+                if (documentJson.get(jsonData, "fields/systemName/stringValue")) {
+                    *systemName = jsonData.stringValue;
+                }
+                
+                // Get light settings
+                if (documentJson.get(jsonData, "fields/lightOnTime/stringValue")) {
+                    String timeStr = jsonData.stringValue;
+                    struct tm tm = {};
+                    strptime(timeStr.c_str(), "%H:%M", &tm);
+                    *lightOnTime = mktime(&tm);
+                }
+                
+                if (documentJson.get(jsonData, "fields/lightOffTime/stringValue")) {
+                    String timeStr = jsonData.stringValue;
+                    struct tm tm = {};
+                    strptime(timeStr.c_str(), "%H:%M", &tm);
+                    *lightOffTime = mktime(&tm);
+                }
+                
+                if (documentJson.get(jsonData, "fields/lightMasterSwitch/booleanValue")) {
+                    *lightMasterSwitch = jsonData.boolValue;
+                }
+                
+                if (documentJson.get(jsonData, "fields/timeCycleEnabled/booleanValue")) {
+                    *timeCycleEnabled = jsonData.boolValue;
+                }
+                
+                // Get unit settings
+                for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+                    char unitPath[50];
+                    snprintf(unitPath, sizeof(unitPath), "fields/units/%d/", i);
+                    
+                    if (documentJson.get(jsonData, String(unitPath) + "enabled/booleanValue")) {
+                        unitsEnabled[i] = jsonData.boolValue;
+                    }
+                    
+                    if (documentJson.get(jsonData, String(unitPath) + "atomizerOnInterval/integerValue")) {
+                        atomizerOnIntervals[i] = jsonData.intValue;
+                    }
+                    
+                    if (documentJson.get(jsonData, String(unitPath) + "atomizerOffInterval/integerValue")) {
+                        atomizerOffIntervals[i] = jsonData.intValue;
+                    }
+                }
+            }
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Saves light settings to Firebase
+     * Thread-safe: Yes
+     * @param lightMasterSwitch Light master switch state
+     * @param timeCycleEnabled Time cycle enabled state
+     * @param lightOnTime Light on time
+     * @param lightOffTime Light off time
+     * @return true if save was successful
+     */
+    bool saveLightSettings(bool lightMasterSwitch, bool timeCycleEnabled,
+                         const String& lightOnTime, const String& lightOffTime) {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool success = true;
+        
+        if (!createPath(pathBuffer, sizeof(pathBuffer), 
+                       SystemConfig::SYSTEM_PATH_FORMAT, 
+                       SystemConfig::SERIAL_NUMBER)) {
+            success = false;
+        }
+        
+        if (success) {
+            documentJson.clear();
+            documentJson.set("lightMasterSwitch", lightMasterSwitch);
+            documentJson.set("timeCycleEnabled", timeCycleEnabled);
+            documentJson.set("lightOnTime", lightOnTime);
+            documentJson.set("lightOffTime", lightOffTime);
+            
+            if (!Firebase.Firestore.patchDocument(&fbdo, 
+                                                SystemConfig::FIREBASE_PROJECT_ID, 
+                                                "", pathBuffer, 
+                                                documentJson.raw(), "fields")) {
+                ErrorManager::firebaseError(
+                    ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
+                    String("Failed to save light settings: ") + fbdo.errorReason().c_str(),
+                    "FirebaseManager::saveLightSettings"
+                );
+                success = false;
+            }
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Saves unit settings to Firebase
+     * Thread-safe: Yes
+     * @param unitIndex Index of the unit
+     * @param enabled Whether the unit is enabled
+     * @param atomizerOnInterval Atomizer on interval
+     * @param atomizerOffInterval Atomizer off interval
+     * @return true if save was successful
+     */
+    bool saveUnitSettings(int unitIndex, bool enabled,
+                         unsigned long atomizerOnInterval,
+                         unsigned long atomizerOffInterval) {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool success = true;
+        
+        if (!createPath(pathBuffer, sizeof(pathBuffer), 
+                       SystemConfig::SYSTEM_PATH_FORMAT, 
+                       SystemConfig::SERIAL_NUMBER)) {
+            success = false;
+        }
+        
+        if (success) {
+            char unitPath[50];
+            snprintf(unitPath, sizeof(unitPath), "units/%d/", unitIndex);
+            
+            documentJson.clear();
+            documentJson.set(String(unitPath) + "enabled", enabled);
+            documentJson.set(String(unitPath) + "atomizerOnInterval", atomizerOnInterval);
+            documentJson.set(String(unitPath) + "atomizerOffInterval", atomizerOffInterval);
+            
+            if (!Firebase.Firestore.patchDocument(&fbdo, 
+                                                SystemConfig::FIREBASE_PROJECT_ID, 
+                                                "", pathBuffer, 
+                                                documentJson.raw(), "fields")) {
+                ErrorManager::firebaseError(
+                    ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
+                    String("Failed to save unit settings: ") + fbdo.errorReason().c_str(),
+                    "FirebaseManager::saveUnitSettings"
+                );
+                success = false;
+            }
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Updates system version in Firebase
+     * @return true if update was successful
+     */
+    bool updateSystemVersion(const char* version) {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        if (!createPath(pathBuffer, sizeof(pathBuffer), 
+                       SystemConfig::SYSTEM_PATH_FORMAT, 
+                       SystemConfig::SERIAL_NUMBER)) {
+            giveMutex();
+            return false;
+        }
+        
+        documentJson.clear();
+        documentJson.set("fields/firmwareVersion/stringValue", version);
+        
+        bool success = Firebase.Firestore.patchDocument(&fbdo, 
+                                                      SystemConfig::FIREBASE_PROJECT_ID, 
+                                                      "", pathBuffer, 
+                                                      documentJson.raw(), "fields");
+        
+        if (!success) {
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
+                String("Failed to update system version: ") + fbdo.errorReason().c_str(),
+                "FirebaseManager::updateSystemVersion"
+            );
+        }
+        
+        giveMutex();
+        return success;
+    }
 };
 
 #endif // FIREBASE_MANAGER_H 

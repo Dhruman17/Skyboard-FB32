@@ -255,6 +255,47 @@ private:
         
         return success;
     }
+    
+    /**
+     * Saves current system settings to storage
+     * Thread-safe: Yes
+     * @return true if save was successful
+     */
+    bool saveSettingsToStorage() {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool success = true;
+        
+        // Save light settings
+        if (!firebaseManager.saveLightSettings(lightMasterSwitch, timeCycleEnabled, 
+                                            lightOnTime, lightOffTime)) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                "Failed to save light settings",
+                "SystemManager::saveSettingsToStorage"
+            );
+            success = false;
+        }
+        
+        // Save unit settings
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            if (!firebaseManager.saveUnitSettings(i, systemState.unitsEnabled[i],
+                                               systemState.atomizerOnIntervals[i],
+                                               systemState.atomizerOffIntervals[i])) {
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                    "Failed to save unit settings",
+                    "SystemManager::saveSettingsToStorage"
+                );
+                success = false;
+            }
+        }
+        
+        giveMutex();
+        return success;
+    }
 
 public:
     /**
@@ -315,6 +356,9 @@ public:
         
         bool success = true;
         
+        // Log firmware version
+        Serial.printf("Firmware version: %s\n", SystemConfig::FIRMWARE_VERSION);
+        
         if (!networkManager.begin()) {
             ErrorManager::systemError(
                 ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
@@ -325,7 +369,59 @@ public:
         }
         
         if (success) {
-            // First update system data to get the system name
+            // Update firmware version in Firebase
+            if (!firebaseManager.updateSystemVersion(SystemConfig::FIRMWARE_VERSION)) {
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                    "Failed to update firmware version in Firebase",
+                    "SystemManager::begin"
+                );
+                success = false;
+            }
+            
+            // Fetch system data from Firebase
+            time_t lightOnTime = 0;
+            time_t lightOffTime = 0;
+            bool lightMasterSwitch = false;
+            bool timeCycleEnabled = false;
+            bool unitsEnabled[SystemConfig::NUMBER_OF_UNITS] = {false};
+            unsigned long atomizerOnIntervals[SystemConfig::NUMBER_OF_UNITS] = {0};
+            unsigned long atomizerOffIntervals[SystemConfig::NUMBER_OF_UNITS] = {0};
+            
+            // Use FirebaseManager to fetch system data
+            if (!firebaseManager.fetchSystemData(&systemName, &lightOnTime, &lightOffTime, 
+                                              &lightMasterSwitch, &timeCycleEnabled, unitsEnabled,
+                                              atomizerOnIntervals, atomizerOffIntervals)) {
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                    "Failed to fetch system data from Firebase",
+                    "SystemManager::begin"
+                );
+                success = false;
+            }
+            
+            // Apply light settings
+            lightManager.updateSettings(lightMasterSwitch, timeCycleEnabled, 
+                                     lightOnTime, lightOffTime);
+            
+            // Apply unit settings
+            for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+                systemState.unitsEnabled[i] = unitsEnabled[i];
+                systemState.atomizerOnIntervals[i] = atomizerOnIntervals[i];
+                systemState.atomizerOffIntervals[i] = atomizerOffIntervals[i];
+            }
+            
+            // Save settings to storage
+            if (!saveSettingsToStorage()) {
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                    "Failed to save settings to storage",
+                    "SystemManager::begin"
+                );
+                success = false;
+            }
+            
+            // Update system data and send heartbeat
             if (!updateSystemData()) {
                 ErrorManager::systemError(
                     ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
@@ -348,7 +444,6 @@ public:
         }
         
         if (success) {
-            otaManager.updateSystemVersion();
             initialized = true;
         }
         
@@ -375,13 +470,23 @@ public:
                 minHeapEver = currentHeap;
             }
             
+            // Check for low heap condition
+            if (currentHeap < SystemConfig::HEAP_WARNING_THRESHOLD) {
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::HEAP_WARNING,
+                    String("Low heap memory: ") + String(currentHeap) + " bytes",
+                    "SystemManager::update"
+                );
+            }
+            
             // Log heap status
             Serial.printf("Heap Status - Free: %u, Min Ever: %u\n", currentHeap, minHeapEver);
             
             // Update in Firebase
             firebaseManager.updateSystemHealth("heapStatus", {
                 {"free", String(currentHeap)},
-                {"minEver", String(minHeapEver)}
+                {"minEver", String(minHeapEver)},
+                {"warning", String(currentHeap < SystemConfig::HEAP_WARNING_THRESHOLD)}
             });
             
             lastHeapCheck = currentMillis;

@@ -16,10 +16,22 @@
  *    - Lights turn on/off based on configured schedule
  *    - Schedule is set via lightOnTime and lightOffTime
  *    - Can handle overnight cycles (e.g., 5pm off, 2am on)
+ *    - Requires valid time synchronization
  * 
  * 2. Manual control mode:
  *    - Lights controlled directly by masterSwitch
  *    - Overrides time-based schedule when timeCycleEnabled is false
+ * 
+ * 3. Fallback cycle mode:
+ *    - Activated when time is invalid or not synchronized
+ *    - Uses fixed intervals (6h ON, 18h OFF)
+ *    - Prevents incorrect lighting cycles on first boot
+ * 
+ * Time Validation:
+ * - Initializes with timeValid = false at boot
+ * - Validates time every hour
+ * - Maximum 3 consecutive time failures before alert
+ * - Uses fallback cycles when time is invalid
  * 
  * Firebase Integration:
  * - Reads lightOnTime, lightOffTime, lightMasterSwitch, and timeCycleEnabled
@@ -201,7 +213,7 @@ public:
                     initialized(false), pinErrorCount(0),
                     lastLightStateChange(0), fallbackLightState(false),
                     mutex(NULL), lastTimeValidation(0), consecutiveTimeFailures(0),
-                    timeValid(true) {
+                    timeValid(false) {
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
             Serial.println("CRITICAL ERROR: Failed to create mutex in LightManager");
@@ -370,6 +382,24 @@ public:
         
         giveMutex();
         return enabled;
+    }
+
+    /**
+     * Sets the time validity state
+     * @param valid Whether time is valid
+     */
+    void setTimeValid(bool valid) {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in setTimeValid");
+            return;
+        }
+        
+        timeValid = valid;
+        if (valid) {
+            consecutiveTimeFailures = 0;
+        }
+        
+        giveMutex();
     }
 };
 

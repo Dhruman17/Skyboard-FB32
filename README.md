@@ -130,17 +130,73 @@ A sophisticated vertical farming control system built for ESP32, featuring multi
 6. Set up lighting schedule
 
 ### Operation
-- System automatically manages:
-  - Irrigation cycles
-  - Water level monitoring
-  - EC measurements
-  - Lighting schedule
-  - System health monitoring
-  - Firmware updates
-  - Sensor calibration
-  - Error recovery
-  - Power management
-  - Data validation
+
+The system operates in the following modes:
+
+1. Time-based cycle mode (default):
+   - Requires valid time synchronization
+   - Uses configured light on/off times
+   - Automatically adjusts for daylight savings
+
+2. Manual control mode:
+   - Activated when timeCycleEnabled is false
+   - Uses lightMasterSwitch for direct control
+   - Ignores time-based scheduling
+
+3. Fallback cycle mode:
+   - Activated when time is invalid or not synchronized
+   - Uses fixed intervals (6h ON, 18h OFF)
+   - Ensures basic lighting functionality
+
+### Time Management
+
+The system implements a robust time validation system:
+
+1. Initial State:
+   - Starts with timeValid = false at boot
+   - Prevents incorrect lighting cycles on first boot
+   - Uses fallback lighting cycles until time is validated
+
+2. Time Synchronization:
+   - Attempts NTP synchronization on startup
+   - Sets timeValid = true only after successful sync
+   - Validates time is after year 2000
+
+3. Ongoing Validation:
+   - Validates time every hour
+   - Uses fallback lighting cycles if time is invalid
+   - Maximum 3 consecutive time failures before alert
+
+4. Fallback Behavior:
+   - Uses fixed 6h ON, 18h OFF cycle when time is invalid
+   - Prevents incorrect lighting cycles
+   - Maintains basic plant growth requirements
+
+### Memory Management
+
+The system includes comprehensive heap memory monitoring:
+
+1. Monitoring Configuration:
+   - Checks heap usage every hour when online
+   - Warning threshold: 15,000 bytes
+   - Tracks minimum heap seen over time
+
+2. Warning System:
+   - Logs warning when free heap < 15,000 bytes
+   - Reports to Firebase with detailed status
+   - Uses centralized error management system
+
+3. Status Reporting:
+   - Current free heap memory
+   - Minimum heap ever seen
+   - Warning state (true/false)
+   - Updates in Firebase system health
+
+4. Error Handling:
+   - Uses ErrorCode::HEAP_WARNING (1003)
+   - Severity level: WARNING
+   - Includes timestamp and location
+   - Thread-safe implementation
 
 ### Monitoring
 - Access real-time data through Firebase console
@@ -184,9 +240,37 @@ A sophisticated vertical farming control system built for ESP32, featuring multi
    - System will restart with new credentials
    - Verify connection in Firebase console
 
-## Firebase Data Structure
+### Firebase Data Structure
 
-### System Document
+The system uses the following Firebase data structure:
+
+1. System Document:
+   - lastSeen: timestampValue
+   - systemName: stringValue
+   - firmwareVersion: stringValue
+   - timeValid: booleanValue
+   - timeStatus: {
+       lastValidation: timestampValue,
+       consecutiveFailures: integerValue,
+       isSynchronized: booleanValue
+     }
+   - heapStatus: {
+       free: integerValue,
+       minEver: integerValue,
+       warning: booleanValue
+     }
+
+2. Unit Documents:
+   - unitName: stringValue
+   - unitState: booleanValue
+   - Interval_On: integerValue
+   - Interval_Off: integerValue
+   - waterLevel: doubleValue
+   - waterLevelState: booleanValue
+   - ecValue: doubleValue
+
+### Detailed Database Structure
+
 ```
 systems/{systemId}/
 ├── lastSeen: timestamp
@@ -197,11 +281,36 @@ systems/{systemId}/
 ├── lightOffTime: string (HH:MM)
 ├── lightMasterSwitch: boolean
 ├── timeCycleEnabled: boolean
+├── timeValid: boolean
 ├── systemHealth: object
 │   ├── lastCalibration: timestamp
 │   ├── sensorStatus: object
 │   ├── powerStatus: object
+│   ├── timeStatus: object
+│   │   ├── lastValidation: timestamp
+│   │   ├── consecutiveFailures: integer
+│   │   └── isSynchronized: boolean
+│   ├── heapStatus: object
+│   │   ├── free: integer
+│   │   ├── minEver: integer
+│   │   └── warning: boolean
 │   └── errorLog: array
+└── units/
+    └── {unitId}/
+        ├── unitName: string
+        ├── unitState: boolean
+        ├── Interval_On: integer
+        ├── Interval_Off: integer
+        ├── waterLevel: double
+        ├── waterLevelState: boolean
+        ├── ecValue: double
+        ├── calibrationData: object
+        └── errorHistory: array
+```
+
+### Unit Document
+```
+systems/{systemId}/
 └── units/
     └── {unitId}/
         ├── unitName: string

@@ -50,7 +50,7 @@ namespace SystemConfig {
     // 1. Firebase document paths
     // 2. OTA update identification
     // 3. System identification in logs
-    static constexpr const char* SERIAL_NUMBER = "FB32";  // System serial number
+    static constexpr const char* SERIAL_NUMBER = "TEST123456789";  // System serial number
     
     // Firebase Configuration
     static constexpr const char* FIREBASE_PROJECT_ID = "skyboard-fb32";  // Firebase project ID
@@ -137,6 +137,10 @@ namespace SystemConfig {
     static constexpr unsigned long INTERVAL_30_SECONDS = 30000;  // 30 seconds in milliseconds
     static constexpr unsigned long INTERVAL_1_MINUTE = 60000;  // 1 minute in milliseconds
     static constexpr unsigned long INTERVAL_5_MINUTES = 300000;  // 5 minutes in milliseconds
+    
+    // Heap Monitoring
+    static constexpr uint32_t HEAP_WARNING_THRESHOLD = 15000;  // Warning threshold in bytes
+    static constexpr uint32_t HEAP_MONITOR_INTERVAL = 3600000;  // 1 hour
 }
 
 namespace DefaultValues {
