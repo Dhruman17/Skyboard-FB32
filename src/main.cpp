@@ -94,14 +94,20 @@ void setup() {
     randomSeed(analogRead(0));
     
     // Initialize NVS first
-    if (!nvs_flash_init()) {
-        Serial.println("CRITICAL ERROR: Failed to initialize NVS");
+    esp_err_t ret = nvs_flash_init_partition("nvs");
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        ESP_ERROR_CHECK(nvs_flash_erase_partition("nvs"));
+        ret = nvs_flash_init_partition("nvs");
+    }
+    ESP_ERROR_CHECK(ret);
+    
+    // Initialize Preferences
+    if (!preferences.begin("skyboard", false)) {
+        Serial.println("CRITICAL ERROR: Failed to initialize Preferences");
         delay(3000);
         ESP.restart();
     }
-    
-    // Initialize Preferences
-    preferences.begin("skyboard", false);
     
     // Load settings from storage first
     loadSettingsFromStorage();
