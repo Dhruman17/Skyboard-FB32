@@ -9,6 +9,8 @@
 #include <esp_ota_ops.h>
 #include <esp_partition.h>
 #include <ArduinoOTA.h>
+#include <freertos/semphr.h>
+#include <time.h>
 
 /**
  * OTAManager Class
@@ -38,277 +40,368 @@
 class OTAManager {
 private:
     FirebaseData& fbdo;
-    String systemPath;
+    const char* systemPath;
     String serialNumber;
-    HTTPClient httpClient;
-    const char* updateServer;
-    const char* updatePath;
+    const char* firmwareUrl;
+    const char* firmwarePath;
     const char* currentVersion;
-    bool updateAvailable = false;
-    bool updateInProgress = false;
-    unsigned long lastCheck = 0;
-    const unsigned long CHECK_INTERVAL = 3600000; // Check every hour
+    bool initialized;
+    SemaphoreHandle_t mutex;
     
-    void printPartitionInfo() {
-        const esp_partition_t* running = esp_ota_get_running_partition();
-        Serial.printf("Running partition: %s\n", running->label);
-        
-        const esp_partition_t* next = esp_ota_get_next_update_partition(NULL);
-        Serial.printf("Next update partition: %s\n", next->label);
-    }
+    // Update state tracking
+    bool updateInProgress;
+    bool updateVerified;
+    uint32_t updateSize;
+    uint32_t updateProgress;
+    unsigned long lastUpdateCheck;
     
-    bool updateFirmwareVersionInFirestore() {
-        if (systemPath == "") {
-            Serial.println("System path is not defined. Cannot update version.");
-            return false;
-        }
-        
-        String documentPath = systemPath;
-        FirebaseJson content;
-        content.set("fields/version/stringValue", SystemConfig::FIRMWARE_VERSION);
-        
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version")) {
-            Serial.println("System version updated successfully in Firestore.");
-            return true;
-        } else {
-            Serial.println("Failed to update system version.");
-            Serial.println(fbdo.errorReason());
-            return false;
-        }
-    }
+    // Error tracking
+    uint8_t updateErrorCount;
+    static constexpr uint8_t MAX_UPDATE_ERRORS = 3;
     
-    String fetchLatestVersion() {
-        String documentPath = systemPath;
-        if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
-            FirebaseJson json;
-            json.setJsonData(fbdo.payload());
-            FirebaseJsonData jsonData;
-            
-            if (json.get(jsonData, "fields/version/stringValue")) {
-                return jsonData.stringValue;
-            }
-        }
-        return "";
-    }
-    
-    bool performOTAUpdate() {
-        String documentPath = systemPath;
-        if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
-            FirebaseJson json;
-            json.setJsonData(fbdo.payload());
-            FirebaseJsonData jsonData;
-            
-            if (json.get(jsonData, "fields/firmwareUrl/stringValue")) {
-                String firmwareUrl = jsonData.stringValue;
-                Serial.println("Firmware URL: " + firmwareUrl);
-                
-                ScopedHttpClient http(httpClient);
-                if (!http.begin(firmwareUrl)) {
-                    Serial.println("Failed to begin HTTP request");
-                    return false;
-                }
-                
-                int httpCode = http.get().GET();
-                if (httpCode != HTTP_CODE_OK) {
-                    Serial.printf("HTTP GET failed, error: %s\n", http.get().errorToString(httpCode).c_str());
-                    return false;
-                }
-                
-                int contentLength = http.get().getSize();
-                Serial.printf("Content length: %d\n", contentLength);
-                
-                if (!Update.begin(contentLength)) {
-                    Serial.println("Failed to begin update");
-                    return false;
-                }
-                
-                WiFiClient* stream = http.get().getStreamPtr();
-                size_t written = Update.writeStream(*stream);
-                Serial.printf("Written: %d\n", written);
-                
-                if (written != contentLength) {
-                    Serial.println("Written size mismatch");
-                    return false;
-                }
-                
-                if (!Update.end()) {
-                    Serial.println("Error occurred: " + String(Update.errorString()));
-                    return false;
-                }
-                
-                if (Update.isRunning()) {
-                    Serial.println("Update completed successfully");
-                    return true;
-                } else {
-                    Serial.println("Update failed");
-                    return false;
-                }
-            }
-        }
-        return false;
-    }
-
     /**
-     * Compares version strings
-     * @param v1 First version string
-     * @param v2 Second version string
-     * @return true if v1 is newer than v2
+     * Safely takes the mutex with timeout
+     * @return true if mutex was taken successfully
      */
-    bool isNewerVersion(const char* v1, const char* v2) {
-        return strcmp(v1, v2) > 0;
+    bool takeMutex() {
+        return xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE;
     }
     
     /**
-     * Performs the firmware update process
-     * Downloads and applies the update in chunks
+     * Safely gives the mutex
+     */
+    void giveMutex() {
+        xSemaphoreGive(mutex);
+    }
+    
+    /**
+     * Verifies firmware before applying update
+     * @param firmwareData Pointer to firmware data
+     * @param firmwareSize Size of firmware data
+     * @return true if verification successful
+     */
+    bool verifyFirmware(const uint8_t* firmwareData, size_t firmwareSize) {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in verifyFirmware");
+            return false;
+        }
+        
+        bool success = true;
+        
+        // Check firmware size
+        if (firmwareSize == 0 || firmwareSize > UPDATE_SIZE_UNKNOWN) {
+            Serial.println("Invalid firmware size");
+            success = false;
+        }
+        
+        // Verify firmware checksum (implement your checksum verification here)
+        // This is a placeholder for actual checksum verification
+        if (success) {
+            // TODO: Implement actual checksum verification
+            updateVerified = true;
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Prepares for firmware update
+     * @return true if preparation successful
+     */
+    bool prepareUpdate() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in prepareUpdate");
+            return false;
+        }
+        
+        bool success = true;
+        
+        // Check if enough space is available
+        if (ESP.getFreeSketchSpace() < updateSize) {
+            Serial.println("Not enough space for update");
+            success = false;
+        }
+        
+        // Begin update
+        if (success) {
+            if (!Update.begin(updateSize)) {
+                Serial.println("Failed to begin update");
+                success = false;
+            }
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Handles update process
+     * @param firmwareData Pointer to firmware data
+     * @param firmwareSize Size of firmware data
      * @return true if update successful
      */
-    bool performUpdate() {
-        HTTPClient http;
-        http.begin(updateServer, 80, updatePath);
-        int httpCode = http.GET();
-        
-        if (httpCode != HTTP_CODE_OK) {
-            Serial.println("Failed to connect to update server");
-            http.end();
+    bool processUpdate(const uint8_t* firmwareData, size_t firmwareSize) {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in processUpdate");
             return false;
         }
         
-        int contentLength = http.getSize();
-        if (contentLength <= 0) {
-            Serial.println("Invalid content length");
-            http.end();
-            return false;
-        }
+        bool success = true;
         
-        if (!Update.begin(contentLength)) {
-            Serial.println("Failed to begin update");
-            http.end();
-            return false;
-        }
-        
-        Serial.println("Update started");
-        Serial.println("Downloading update...");
-        
-        WiFiClient* stream = http.getStreamPtr();
-        size_t written = Update.writeStream(*stream);
-        
-        if (written != contentLength) {
-            Serial.println("Written size mismatch");
-            http.end();
-            return false;
-        }
-        
-        if (Update.end()) {
-            Serial.println("Update completed successfully");
-            http.end();
-            return true;
+        // Create non-const copy of firmware data
+        uint8_t* writeData = new uint8_t[firmwareSize];
+        if (!writeData) {
+            Serial.println("Failed to allocate memory for firmware data");
+            success = false;
         } else {
-            Serial.println("Update failed");
-            http.end();
-            return false;
+            memcpy(writeData, firmwareData, firmwareSize);
+            
+            // Write firmware data
+            if (Update.write(writeData, firmwareSize) != firmwareSize) {
+                Serial.println("Failed to write firmware data");
+                success = false;
+            }
+            
+            delete[] writeData;
         }
+        
+        // End update
+        if (success) {
+            if (!Update.end()) {
+                Serial.println("Failed to end update");
+                success = false;
+            }
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Performs rollback if update fails
+     */
+    void performRollback() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in performRollback");
+            return;
+        }
+        
+        Serial.println("Performing rollback...");
+        
+        // Abort update
+        Update.abort();
+        
+        // Reset error count
+        updateErrorCount = 0;
+        
+        // Reset state
+        updateInProgress = false;
+        updateVerified = false;
+        updateSize = 0;
+        updateProgress = 0;
+        
+        giveMutex();
+    }
+    
+    /**
+     * Formats current timestamp for Firebase
+     * @return Formatted timestamp string
+     */
+    String formatTimestamp() {
+        time_t now;
+        time(&now);
+        struct tm *timeinfo = localtime(&now);
+        char timestamp[30];
+        strftime(timestamp, sizeof(timestamp), "%Y-%m-%dT%H:%M:%SZ", timeinfo);
+        return String(timestamp);
     }
 
 public:
     /**
      * Constructor
-     * @param server Update server URL
-     * @param path Path to firmware file
-     * @param version Current firmware version
+     * @param fbdo Reference to Firebase data object
+     * @param systemPath Path to system document in Firebase
+     * @param serialNumber System serial number
+     * @param firmwareUrl URL for firmware updates
+     * @param firmwarePath Path to firmware file
+     * @param currentVersion Current firmware version
      */
-    OTAManager(FirebaseData& fbdo, String systemPath, String serialNumber, const char* server, const char* path, const char* version)
-        : fbdo(fbdo), systemPath(systemPath), serialNumber(serialNumber), updateServer(server), updatePath(path), currentVersion(version) {}
-    
-    void begin(const String& hostname) {
-        ArduinoOTA.setHostname(hostname.c_str());
-        ArduinoOTA.onStart([]() {
-            String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
-            Serial.printf("Start updating %s\n", type.c_str());
-        });
-        ArduinoOTA.onEnd([]() { Serial.println("\nUpdate Complete!"); });
-        ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-            Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-        });
-        ArduinoOTA.onError([](ota_error_t error) {
-            Serial.printf("Error[%u]: ", error);
-            if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
-            else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
-            else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
-            else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-            else if (error == OTA_END_ERROR) Serial.println("End Failed");
-        });
-        ArduinoOTA.begin();
+    OTAManager(FirebaseData& fbdo, const char* systemPath, String serialNumber,
+               const char* firmwareUrl, const char* firmwarePath, const char* currentVersion)
+        : fbdo(fbdo), systemPath(systemPath), serialNumber(serialNumber),
+          firmwareUrl(firmwareUrl), firmwarePath(firmwarePath), currentVersion(currentVersion),
+          initialized(false), updateInProgress(false), updateVerified(false),
+          updateSize(0), updateProgress(0), lastUpdateCheck(0), updateErrorCount(0) {
+        mutex = xSemaphoreCreateMutex();
+        if (mutex == NULL) {
+            Serial.println("Failed to create mutex in OTAManager");
+        }
     }
     
     /**
-     * Checks for available updates
-     * @return true if update is available
+     * Destructor
+     */
+    ~OTAManager() {
+        if (mutex != NULL) {
+            vSemaphoreDelete(mutex);
+        }
+    }
+    
+    /**
+     * Initializes the OTA manager
+     * @return true if initialization successful
+     */
+    bool begin() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in begin");
+            return false;
+        }
+        
+        bool success = true;
+        
+        // Initialize update state
+        updateInProgress = false;
+        updateVerified = false;
+        updateSize = 0;
+        updateProgress = 0;
+        updateErrorCount = 0;
+        
+        if (success) {
+            initialized = true;
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Checks for firmware updates
+     * @return true if update available
      */
     bool checkForUpdates() {
-        unsigned long currentMillis = millis();
-        if (currentMillis - lastCheck < CHECK_INTERVAL) {
-            return updateAvailable;
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in checkForUpdates");
+            return false;
         }
         
-        lastCheck = currentMillis;
-        Serial.println("Checking for updates...");
+        bool success = true;
+        FirebaseJson json;
+        FirebaseJsonData jsonData;
         
-        HTTPClient http;
-        http.begin(updateServer, 80, updatePath);
-        int httpCode = http.GET();
-        
-        if (httpCode == HTTP_CODE_OK) {
-            String newVersion = http.getString();
-            updateAvailable = isNewerVersion(newVersion.c_str(), currentVersion);
-            
-            if (updateAvailable) {
-                Serial.println("New version available: " + newVersion);
-            } else {
-                Serial.println("No update available");
+        // Get latest version from Firebase
+        if (Firebase.RTDB.getJSON(&fbdo, firmwarePath)) {
+            if (json.get(jsonData, "fields/version/stringValue")) {
+                String latestVersion = jsonData.stringValue;
+                if (latestVersion != currentVersion) {
+                    // New version available
+                    updateInProgress = true;
+                    updateSize = UPDATE_SIZE_UNKNOWN;
+                    updateProgress = 0;
+                }
             }
         } else {
-            Serial.println("Failed to check for updates");
-            updateAvailable = false;
+            Serial.println("Failed to get latest version");
+            success = false;
         }
         
-        http.end();
-        return updateAvailable;
+        giveMutex();
+        return success;
     }
     
     /**
-     * Handles OTA update process
-     * Checks for updates and performs update if available
+     * Handles firmware update process
+     * @return true if update successful
      */
-    void handle() {
-        if (!updateInProgress && checkForUpdates()) {
-            updateInProgress = true;
-            if (performUpdate()) {
-                Serial.println("Update completed successfully");
-            } else {
-                Serial.println("Update failed");
-                updateInProgress = false;
-            }
+    bool handle() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in handle");
+            return false;
         }
+        
+        bool success = true;
+        
+        if (updateInProgress) {
+            HTTPClient http;
+            http.begin(firmwareUrl);
+            int httpCode = http.GET();
+            
+            if (httpCode == HTTP_CODE_OK) {
+                uint8_t buffer[1024];
+                WiFiClient* stream = http.getStreamPtr();
+                int len = stream->read(buffer, sizeof(buffer));
+                if (len > 0) {
+                    if (!processUpdate(buffer, len)) {
+                        Serial.println("Failed to process update");
+                        success = false;
+                    }
+                    updateProgress += len;
+                }
+            } else {
+                Serial.println("Failed to download firmware");
+                success = false;
+            }
+            
+            http.end();
+        }
+        
+        giveMutex();
+        return success;
     }
     
+    /**
+     * Gets the current update progress
+     * @return Update progress percentage (0-100)
+     */
+    uint32_t getUpdateProgress() {
+        if (!takeMutex()) {
+            return 0;
+        }
+        
+        uint32_t progress = updateProgress;
+        giveMutex();
+        return progress;
+    }
+    
+    /**
+     * Gets the current update state
+     * @return true if update is in progress
+     */
+    bool isUpdateInProgress() {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool inProgress = updateInProgress;
+        giveMutex();
+        return inProgress;
+    }
+
     /**
      * Updates system version in Firebase
-     * @param fbdo Reference to Firebase data object
+     * @return true if update successful
      */
-    void updateSystemVersion() {
-        updateFirmwareVersionInFirestore();
-    }
-    
-    void checkForUpdatesFromFirebase() {
-        String latestVersion = fetchLatestVersion();
-        if (latestVersion != "" && latestVersion != SystemConfig::FIRMWARE_VERSION) {
-            Serial.println("New firmware version available: " + latestVersion);
-            if (performOTAUpdate()) {
-                Serial.println("Update successful, restarting...");
-                ESP.restart();
-            }
+    bool updateSystemVersion() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in updateSystemVersion");
+            return false;
         }
+        
+        bool success = true;
+        FirebaseJson json;
+        
+        // Set version and timestamp
+        json.set("fields/version/stringValue", currentVersion);
+        json.set("fields/lastUpdated/timestampValue", formatTimestamp());
+        
+        // Update Firebase
+        if (!Firebase.RTDB.setJSON(&fbdo, systemPath, &json)) {
+            Serial.println("Failed to update system version");
+            success = false;
+        }
+        
+        giveMutex();
+        return success;
     }
 };
 

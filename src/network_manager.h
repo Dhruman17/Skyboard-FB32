@@ -6,6 +6,7 @@
 #include <WiFiManager.h>
 #include <Firebase_ESP_Client.h>
 #include <ArduinoOTA.h>
+#include <time.h>
 
 /**
  * NetworkManager Class
@@ -36,94 +37,196 @@ private:
     FirebaseData& fbdo;
     FirebaseAuth& auth;
     FirebaseConfig& config;
-    String setupWifiName;
-    bool wifiConnected = false;
-    bool configPortalRunning = false;
-    unsigned long lastReconnectAttempt = 0;
-    unsigned long lastWiFiCheck = 0;
-    const unsigned long WIFI_CHECK_INTERVAL = 30000; // Check WiFi every 30 seconds
-    const unsigned long RECONNECT_INTERVAL = 5000;   // Try to reconnect every 5 seconds
+    WiFiManager wifiManager;
+    bool initialized;
+    SemaphoreHandle_t mutex;
+    
+    // Connection management constants
+    static constexpr uint32_t WIFI_TIMEOUT = 10000;  // 10 seconds timeout for WiFi connection
+    static constexpr uint32_t FIREBASE_TIMEOUT = 10000;  // 10 seconds timeout for Firebase
+    static constexpr uint32_t RECONNECT_DELAY = 5000;  // 5 seconds between reconnection attempts
+    static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = 3;  // Maximum number of reconnection attempts
+    
+    // Connection state tracking
+    unsigned long lastConnectionCheck;
+    unsigned long lastReconnectAttempt;
+    uint8_t reconnectAttempts;
+    bool wasConnected;
     
     /**
-     * Initializes system time using NTP
-     * Required for Firebase timestamps and scheduling
+     * Safely takes the mutex with timeout
+     * @return true if mutex was taken successfully
      */
-    void initializeTime() {
-        configTime(0, 0, "pool.ntp.org", "time.nist.gov");
-        // Wait for time to be set
-        int retries = 0;
-        while (time(nullptr) < 1000 && retries < 10) {
-            delay(100);
-            retries++;
-        }
+    bool takeMutex() {
+        return xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE;
     }
     
     /**
-     * Attempts to connect to WiFi
-     * Tries known networks first, then falls back to AP mode
+     * Safely gives the mutex
+     */
+    void giveMutex() {
+        xSemaphoreGive(mutex);
+    }
+    
+    /**
+     * Connects to WiFi with timeout and retry mechanism
      * @return true if connection successful
      */
     bool connectToWiFi() {
-        String hostname = "SA" + serialNumber;
-        WiFi.setHostname(hostname.c_str());
-        WiFi.mode(WIFI_AP_STA);
-        WiFi.setAutoReconnect(true);  // Enable auto reconnect
-        WiFi.persistent(true);        // Save WiFi settings to flash
-        
-        WiFiManager wm;
-        wm.setConfigPortalTimeout(180);
-        wm.startWebPortal();
-        
-        Serial.println("Starting Wi-Fi connection process...");
-        
-        // Try connecting to known networks
-        for (int i = 0; i < knownWiFiCount; i++) {
-            Serial.print("Attempting to connect to ");
-            Serial.println(knownWiFi[i].ssid);
-            
-            WiFi.begin(knownWiFi[i].ssid, knownWiFi[i].password);
-            
-            unsigned long startAttemptTime = millis();
-            while (WiFi.status() != WL_CONNECTED && millis() - startAttemptTime < 15000) {
-                wm.process();
-                delay(100);
-            }
-            
-            if (WiFi.status() == WL_CONNECTED) {
-                Serial.println("\nConnected to Wi-Fi: " + String(knownWiFi[i].ssid));
-                Serial.print("IP Address: ");
-                Serial.println(WiFi.localIP());
-                wm.stopWebPortal();
-                return true;
-            }
-        }
-        
-        // If no connection, allow manual configuration via AP
-        Serial.println("Switching to AP mode for manual configuration...");
-        String wifi_SSID = "SkyAcres WiFi Setup " + serialNumber;
-        if (!wm.startConfigPortal(wifi_SSID.c_str(), "password")) {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in connectToWiFi");
             return false;
         }
         
-        return WiFi.status() == WL_CONNECTED;
+        bool success = false;
+        uint8_t attempts = 0;
+        
+        while (!success && attempts < MAX_RECONNECT_ATTEMPTS) {
+            Serial.println("Attempting to connect to WiFi...");
+            
+            // Configure WiFiManager
+            wifiManager.setConfigPortalTimeout(60);  // 60 second timeout for config portal
+            wifiManager.setMinimumSignalQuality(30);  // Minimum signal quality (30%)
+            
+            // Try to connect
+            if (wifiManager.autoConnect("Skyboard_AP")) {
+                Serial.println("WiFi connected successfully");
+                success = true;
+            } else {
+                Serial.println("Failed to connect to WiFi");
+                attempts++;
+                if (attempts < MAX_RECONNECT_ATTEMPTS) {
+                    delay(RECONNECT_DELAY);
+                }
+            }
+        }
+        
+        giveMutex();
+        return success;
     }
     
-    void initializeFirebase() {
-        config.api_key = API_KEY;
-        auth.user.email = USER_EMAIL;
-        auth.user.password = USER_PASSWORD;
-        Firebase.begin(&config, &auth);
-        Firebase.reconnectWiFi(true);
+    /**
+     * Initializes time synchronization
+     * @return true if initialization successful
+     */
+    bool initializeTime() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in initializeTime");
+            return false;
+        }
         
-        // Wait for Firebase to be ready
+        configTime(0, 0, "pool.ntp.org", "time.nist.gov");
+        
+        // Wait for time to be set
         unsigned long startTime = millis();
-        while (!Firebase.ready() && millis() - startTime < 10000) {
+        time_t now;
+        time(&now);
+        while (now < 1000000000 && millis() - startTime < WIFI_TIMEOUT) { // Check if time is set (after year 2000)
             delay(100);
+            time(&now);
         }
         
-        if (!Firebase.ready()) {
-            Serial.println("Failed to initialize Firebase");
+        bool success = (now >= 1000000000);
+        if (!success) {
+            Serial.println("Failed to initialize time");
         }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Initializes Firebase with timeout and retry mechanism
+     * @return true if initialization successful
+     */
+    bool initializeFirebase() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in initializeFirebase");
+            return false;
+        }
+        
+        bool success = false;
+        uint8_t attempts = 0;
+        
+        while (!success && attempts < MAX_RECONNECT_ATTEMPTS) {
+            Serial.println("Initializing Firebase...");
+            
+            config.api_key = API_KEY;
+            auth.user.email = USER_EMAIL;
+            auth.user.password = USER_PASSWORD;
+            
+            Firebase.begin(&config, &auth);
+            Firebase.reconnectWiFi(true);
+            
+            // Wait for Firebase to be ready
+            unsigned long startTime = millis();
+            while (!Firebase.ready() && millis() - startTime < FIREBASE_TIMEOUT) {
+                delay(100);
+            }
+            
+            if (Firebase.ready()) {
+                Serial.println("Firebase initialized successfully");
+                success = true;
+            } else {
+                Serial.println("Failed to initialize Firebase");
+                attempts++;
+                if (attempts < MAX_RECONNECT_ATTEMPTS) {
+                    delay(RECONNECT_DELAY);
+                }
+            }
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Checks if WiFi connection is stable
+     * @return true if connection is stable
+     */
+    bool checkWiFiConnection() {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool isConnected = WiFi.status() == WL_CONNECTED;
+        
+        // If connection state changed
+        if (isConnected != wasConnected) {
+            wasConnected = isConnected;
+            if (isConnected) {
+                Serial.println("WiFi reconnected");
+                reconnectAttempts = 0;  // Reset reconnect attempts on successful connection
+            } else {
+                Serial.println("WiFi disconnected");
+            }
+        }
+        
+        giveMutex();
+        return isConnected;
+    }
+    
+    /**
+     * Attempts to reconnect to WiFi if disconnected
+     * @return true if reconnection successful
+     */
+    bool attemptReconnect() {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool success = false;
+        if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
+            if (millis() - lastReconnectAttempt >= RECONNECT_DELAY) {
+                Serial.println("Attempting to reconnect to WiFi...");
+                success = connectToWiFi();
+                lastReconnectAttempt = millis();
+                reconnectAttempts++;
+            }
+        }
+        
+        giveMutex();
+        return success;
     }
 
 public:
@@ -134,7 +237,23 @@ public:
      * @param config Reference to Firebase config object
      */
     NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config)
-        : fbdo(fbdo), auth(auth), config(config) {}
+        : fbdo(fbdo), auth(auth), config(config), initialized(false),
+          lastConnectionCheck(0), lastReconnectAttempt(0),
+          reconnectAttempts(0), wasConnected(false) {
+        mutex = xSemaphoreCreateMutex();
+        if (mutex == NULL) {
+            Serial.println("Failed to create mutex in NetworkManager");
+        }
+    }
+    
+    /**
+     * Destructor
+     */
+    ~NetworkManager() {
+        if (mutex != NULL) {
+            vSemaphoreDelete(mutex);
+        }
+    }
     
     /**
      * Initializes network components
@@ -142,14 +261,55 @@ public:
      * @return true if initialization successful
      */
     bool begin() {
-        if (!connectToWiFi()) {
-            Serial.println("Wi-Fi setup failed.");
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in begin");
             return false;
         }
         
-        initializeTime();
-        initializeFirebase();
-        return true;
+        bool success = true;
+        
+        if (!connectToWiFi()) {
+            Serial.println("Wi-Fi setup failed");
+            success = false;
+        }
+        
+        if (success && !initializeTime()) {
+            Serial.println("Time initialization failed");
+            success = false;
+        }
+        
+        if (success && !initializeFirebase()) {
+            Serial.println("Firebase initialization failed");
+            success = false;
+        }
+        
+        if (success) {
+            initialized = true;
+            wasConnected = true;
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Updates network state and handles reconnection
+     * Should be called periodically in the main loop
+     */
+    void update() {
+        if (!initialized) {
+            return;
+        }
+        
+        unsigned long currentMillis = millis();
+        
+        // Check connection every 30 seconds
+        if (currentMillis - lastConnectionCheck >= 30000) {
+            if (!checkWiFiConnection()) {
+                attemptReconnect();
+            }
+            lastConnectionCheck = currentMillis;
+        }
     }
     
     /**
@@ -157,63 +317,52 @@ public:
      * @return true if connected
      */
     bool isConnected() {
-        unsigned long currentMillis = millis();
-        
-        // Check WiFi status periodically
-        if (currentMillis - lastWiFiCheck >= WIFI_CHECK_INTERVAL) {
-            lastWiFiCheck = currentMillis;
-            wifiConnected = WiFi.status() == WL_CONNECTED;
-            
-            if (!wifiConnected) {
-                Serial.println("WiFi disconnected, attempting to reconnect...");
-                if (!reconnect()) {
-                    Serial.println("Failed to reconnect to WiFi");
-                    return false;
-                }
-            }
-        }
-        
-        return wifiConnected && Firebase.ready();
-    }
-    
-    /**
-     * Attempts to reconnect to WiFi
-     * @return true if reconnection successful
-     */
-    bool reconnect() {
-        unsigned long currentMillis = millis();
-        
-        // Only attempt reconnection after the reconnect interval
-        if (currentMillis - lastReconnectAttempt < RECONNECT_INTERVAL) {
+        if (!takeMutex()) {
             return false;
         }
         
-        lastReconnectAttempt = currentMillis;
-        Serial.println("Wi-Fi disconnected. Retrying...");
-        
-        // Disconnect WiFi to force a clean reconnection
-        WiFi.disconnect();
-        delay(1000);
-        
-        // Try to reconnect
-        if (!connectToWiFi()) {
-            return false;
-        }
-        
-        // Reinitialize Firebase
-        initializeFirebase();
-        initializeTime();
-        
-        return true;
+        bool connected = WiFi.status() == WL_CONNECTED;
+        giveMutex();
+        return connected;
     }
     
     /**
-     * Sets up OTA updates
-     * @param hostname System hostname for OTA
+     * Gets the current WiFi signal strength
+     * @return Signal strength in dBm
      */
-    void handleOTA(const String& hostname) {
-        ArduinoOTA.setHostname(hostname.c_str());
+    int getSignalStrength() {
+        if (!takeMutex()) {
+            return 0;
+        }
+        
+        int strength = WiFi.RSSI();
+        giveMutex();
+        return strength;
+    }
+
+    /**
+     * Handles OTA updates for the system
+     * @param systemName Name of the system
+     * @return true if OTA handling successful
+     */
+    bool handleOTA(String systemName) {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in handleOTA");
+            return false;
+        }
+        
+        bool success = true;
+        
+        // Configure ArduinoOTA
+        ArduinoOTA.setHostname(systemName.c_str());
+        ArduinoOTA.setPassword("admin");
+        
+        // Start OTA server
         ArduinoOTA.begin();
+        Serial.println("OTA server started");
+        
+        giveMutex();
+        return success;
     }
 };
 

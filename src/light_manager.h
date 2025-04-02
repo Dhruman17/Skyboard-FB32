@@ -3,6 +3,9 @@
 
 #include "config.h"
 #include <time.h>
+#include <Arduino.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 /**
  * LightManager Class
@@ -27,37 +30,156 @@
  */
 class LightManager {
 private:
-    bool lightState = false;      // Current state of the light
-    bool masterSwitch = false;    // Manual control state
-    bool timeCycleEnabled = false; // Whether time-based control is active
-    time_t onTime = 0;           // Time to turn lights on (seconds since midnight)
-    time_t offTime = 0;          // Time to turn lights off (seconds since midnight)
+    bool lightState;
+    bool masterSwitch;
+    bool timeCycleEnabled;
+    time_t onTime;
+    time_t offTime;
+    bool initialized;
+    SemaphoreHandle_t mutex;
+    
+    // Error tracking
+    uint8_t pinErrorCount;
+    static constexpr uint8_t MAX_PIN_ERRORS = 3;
+    
+    /**
+     * Safely takes the mutex with timeout
+     * @return true if mutex was taken successfully
+     */
+    bool takeMutex() {
+        return xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE;
+    }
+    
+    /**
+     * Safely gives the mutex
+     */
+    void giveMutex() {
+        xSemaphoreGive(mutex);
+    }
     
     /**
      * Gets the current time of day in seconds since midnight
      * Used for comparing against on/off times
+     * @return Current time of day in seconds since midnight
      */
     time_t getCurrentTimeOfDay() {
         time_t now;
-        struct tm *currentTime;
         time(&now);
-        currentTime = localtime(&now);
+        if (now < 1000000000) { // If time is not set (before year 2000)
+            Serial.println("Time not set, using default time");
+            return 0;
+        }
+        
+        struct tm *currentTime = localtime(&now);
+        if (!currentTime) {
+            Serial.println("Failed to get local time");
+            return 0;
+        }
         
         struct tm currentTimeOfDay = *currentTime;
-        currentTimeOfDay.tm_year = 70; // Epoch year
-        currentTimeOfDay.tm_mon = 0;   // January
-        currentTimeOfDay.tm_mday = 1;  // 1st of the month
+        currentTimeOfDay.tm_year = 0;
+        currentTimeOfDay.tm_mon = 0;
+        currentTimeOfDay.tm_mday = 0;
+        currentTimeOfDay.tm_hour = currentTime->tm_hour;
+        currentTimeOfDay.tm_min = currentTime->tm_min;
+        currentTimeOfDay.tm_sec = currentTime->tm_sec;
+        
         return mktime(&currentTimeOfDay);
+    }
+    
+    /**
+     * Safely writes to the light pin with error handling
+     * @param state Whether to turn the light on or off
+     * @return true if write successful
+     */
+    bool writeLightPin(bool state) {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in writeLightPin");
+            return false;
+        }
+        
+        bool success = true;
+        if (SystemConfig::SYSTEM_LIGHTS_PIN != -1) {
+            digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, state ? HIGH : LOW);
+            lightState = state;
+        } else {
+            Serial.println("Light pin not configured");
+            pinErrorCount++;
+            success = false;
+        }
+        
+        giveMutex();
+        return success;
+    }
+    
+    /**
+     * Resets pin if too many errors occur
+     */
+    void resetPinIfNeeded() {
+        if (!takeMutex()) {
+            return;
+        }
+        
+        if (pinErrorCount >= MAX_PIN_ERRORS) {
+            Serial.println("Too many pin errors, resetting light pin...");
+            if (SystemConfig::SYSTEM_LIGHTS_PIN != -1) {
+                pinMode(SystemConfig::SYSTEM_LIGHTS_PIN, OUTPUT);
+                digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
+            }
+            pinErrorCount = 0;
+        }
+        
+        giveMutex();
     }
 
 public:
     /**
      * Constructor
-     * Initializes the light pin and sets it to OFF state
      */
-    LightManager() {
-        pinMode(SystemConfig::SYSTEM_LIGHTS_PIN, OUTPUT);
-        digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
+    LightManager() : lightState(false), masterSwitch(false),
+                    timeCycleEnabled(false), onTime(0), offTime(0),
+                    initialized(false), pinErrorCount(0) {
+        mutex = xSemaphoreCreateMutex();
+        if (mutex == NULL) {
+            Serial.println("Failed to create mutex in LightManager");
+        }
+    }
+    
+    /**
+     * Destructor
+     */
+    ~LightManager() {
+        if (mutex != NULL) {
+            vSemaphoreDelete(mutex);
+        }
+    }
+    
+    /**
+     * Initializes the light manager
+     * @return true if initialization successful
+     */
+    bool begin() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in begin");
+            return false;
+        }
+        
+        bool success = true;
+        if (SystemConfig::SYSTEM_LIGHTS_PIN != -1) {
+            pinMode(SystemConfig::SYSTEM_LIGHTS_PIN, OUTPUT);
+            digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
+            lightState = false;
+        } else {
+            Serial.println("Light pin not configured");
+            success = false;
+        }
+        
+        if (success) {
+            initialized = true;
+        }
+        
+        giveMutex();
+        return success;
     }
     
     /**
@@ -68,10 +190,17 @@ public:
      * @param off Time to turn lights off (seconds since midnight)
      */
     void updateSettings(bool master, bool cycle, time_t on, time_t off) {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in updateSettings");
+            return;
+        }
+        
         masterSwitch = master;
         timeCycleEnabled = cycle;
         onTime = on;
         offTime = off;
+        
+        giveMutex();
     }
     
     /**
@@ -79,45 +208,86 @@ public:
      * Handles both time-based and manual control modes
      */
     void update() {
-        if (timeCycleEnabled) {
+        if (!initialized) {
+            return;
+        }
+        
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in update");
+            return;
+        }
+        
+        bool newState = false;
+        
+        if (masterSwitch) {
+            // Manual control mode
+            newState = true;
+        } else if (timeCycleEnabled) {
+            // Time-based control mode
             time_t currentTime = getCurrentTimeOfDay();
             
-            if (offTime < onTime) { // Overnight cycle (e.g., 5pm off, 2am on)
-                if (currentTime >= onTime || currentTime <= offTime) {
-                    if (!lightState) {
-                        digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, HIGH);
-                        lightState = true;
-                    }
-                } else {
-                    if (lightState) {
-                        digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
-                        lightState = false;
-                    }
-                }
-            } else { // Same-day cycle (e.g., 9am to 5pm)
-                if (currentTime >= onTime && currentTime <= offTime) {
-                    if (!lightState) {
-                        digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, HIGH);
-                        lightState = true;
-                    }
-                } else {
-                    if (lightState) {
-                        digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
-                        lightState = false;
-                    }
-                }
-            }
-        } else {
-            if (lightState != masterSwitch) {
-                if (masterSwitch) {
-                    digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, HIGH);
-                    lightState = true;
-                } else {
-                    digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
-                    lightState = false;
-                }
+            // Handle time wrap-around (e.g., 23:00 to 06:00)
+            if (offTime < onTime) {
+                newState = currentTime >= onTime || currentTime < offTime;
+            } else {
+                newState = currentTime >= onTime && currentTime < offTime;
             }
         }
+        
+        // Only update if state changed
+        if (newState != lightState) {
+            resetPinIfNeeded();
+            writeLightPin(newState);
+        }
+        
+        giveMutex();
+    }
+    
+    /**
+     * Gets the current light state
+     * @return true if light is on
+     */
+    bool isLightOn() {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool state = lightState;
+        giveMutex();
+        return state;
+    }
+    
+    /**
+     * Gets the current control mode
+     * @return true if in manual control mode
+     */
+    bool isManualControl() {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        bool manual = masterSwitch;
+        giveMutex();
+        return manual;
+    }
+    
+    /**
+     * Gets the current time cycle settings
+     * @param onTime Reference to store on time
+     * @param offTime Reference to store off time
+     * @return true if time cycle is enabled
+     */
+    bool getTimeCycleSettings(time_t& onTime, time_t& offTime) {
+        if (!takeMutex()) {
+            return false;
+        }
+        
+        onTime = this->onTime;
+        offTime = this->offTime;
+        bool enabled = timeCycleEnabled;
+        
+        giveMutex();
+        return enabled;
     }
 };
 

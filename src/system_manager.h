@@ -7,6 +7,7 @@
 #include "ota_manager.h"
 #include "unit_manager.h"
 #include <Firebase_ESP_Client.h>
+#include <ArduinoOTA.h>
 
 /**
  * SystemManager Class
@@ -272,13 +273,19 @@ public:
             return false;
         }
         
+        // First update system data to get the system name
         updateSystemData();
-        otaManager.updateSystemVersion();
         
-        // Initialize system name for OTA if available
-        if (systemName != "") {
-            networkManager.handleOTA(systemName);
+        // Initialize OTA if we have a system name
+        if (systemName.length() > 0) {
+            if (!networkManager.handleOTA(systemName)) {
+                Serial.println("Failed to initialize OTA");
+                return false;
+            }
         }
+        
+        // Update system version in Firebase
+        otaManager.updateSystemVersion();
         
         initialized = true;
         return true;
@@ -295,6 +302,9 @@ public:
         
         unsigned long currentMillis = millis();
         unsigned long adjustedMillis = currentMillis + connectionOffset;
+        
+        // Handle OTA updates
+        ArduinoOTA.handle();
         
         // Handle all periodic updates
         if (adjustedMillis - systemState.previousHeartbeatMillis >= SystemConfig::INTERVAL_30_SECONDS) {
