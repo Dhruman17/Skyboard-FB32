@@ -320,9 +320,12 @@ public:
         : networkManager(nm), otaManager(om), lightManager(lm), 
           unitManager(um), firebaseManager(fm), systemState(ss),
           initialized(false), wasConnected(false), reconnectAttempts(0),
-          currentBackoffDelay(1000), minHeapEver(UINT32_MAX) {
+          currentBackoffDelay(1000), minHeapEver(UINT32_MAX),
+          lastConnectionCheck(0), lastReconnectAttempt(0),
+          lastHeapCheck(0), lightMasterSwitch(false),
+          timeCycleEnabled(false), connectionOffset(0) {
         
-        // Create mutex
+        // Create mutex first, before any other operations
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
             ErrorManager::mutexError(
@@ -330,6 +333,8 @@ public:
                 "Failed to create SystemManager mutex",
                 "SystemManager::SystemManager"
             );
+            // Don't proceed with initialization if mutex creation failed
+            return;
         }
         
         // Initialize string buffers

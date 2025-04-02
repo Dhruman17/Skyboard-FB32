@@ -145,7 +145,7 @@ void setup() {
     // Set up random seed for connection offset
     randomSeed(analogRead(0));
     
-    // Initialize Preferences
+    // Initialize Preferences with explicit namespace
     Serial.println("Initializing Preferences...");
     if (!preferences.begin("skyboard", false)) {
         Serial.println("CRITICAL ERROR: Failed to initialize Preferences");
@@ -157,7 +157,13 @@ void setup() {
     // Initialize PreferencesManager
     Serial.println("Initializing PreferencesManager...");
     preferencesManager = new PreferencesManager();
-    if (preferencesManager == nullptr || !preferencesManager->begin()) {
+    if (preferencesManager == nullptr) {
+        Serial.println("CRITICAL ERROR: Failed to create PreferencesManager");
+        delay(3000);
+        ESP.restart();
+    }
+    
+    if (!preferencesManager->begin()) {
         Serial.println("CRITICAL ERROR: Failed to initialize PreferencesManager");
         delay(3000);
         ESP.restart();
