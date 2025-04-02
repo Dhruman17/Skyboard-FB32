@@ -122,8 +122,9 @@ void setup() {
     disableCore1WDT();
     
     // Start serial communication for debugging
-    Serial.begin(115200);
-    delay(1000);  // Give serial time to initialize
+    Serial.begin(115200);  // Match platformio.ini setting
+    delay(2000);  // Give more time for serial to initialize
+    Serial.println("\n\n");  // Add some newlines to clear any garbage
     Serial.println("Starting initialization...");
     
     // Initialize NVS first, before any other components
