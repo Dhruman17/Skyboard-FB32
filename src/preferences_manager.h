@@ -60,7 +60,20 @@ public:
     /**
      * Constructor
      */
-    PreferencesManager() : isOpen(false) {}
+    PreferencesManager() : isOpen(false) {
+        // Don't initialize preferences here, wait for begin()
+    }
+    
+    /**
+     * Initializes the preferences manager
+     * @return true if initialization successful
+     */
+    bool begin() {
+        if (isOpen) {
+            preferences.end();
+        }
+        return true;
+    }
     
     /**
      * Destructor

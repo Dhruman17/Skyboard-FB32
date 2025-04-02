@@ -91,23 +91,40 @@ WiFiManager wifiManager;
 void setup() {
     // Start serial communication for debugging
     Serial.begin(9600);
-    randomSeed(analogRead(0));
+    delay(1000);  // Give serial time to initialize
+    Serial.println("Starting initialization...");
     
     // Initialize NVS first
-    esp_err_t ret = nvs_flash_init_partition("nvs");
+    Serial.println("Initializing NVS...");
+    esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        // NVS partition was truncated and needs to be erased
-        ESP_ERROR_CHECK(nvs_flash_erase_partition("nvs"));
-        ret = nvs_flash_init_partition("nvs");
+        Serial.println("NVS partition was truncated and needs to be erased");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
+    Serial.println("NVS initialized successfully");
+    
+    // Set up random seed for connection offset
+    randomSeed(analogRead(0));
     
     // Initialize Preferences
+    Serial.println("Initializing Preferences...");
     if (!preferences.begin("skyboard", false)) {
         Serial.println("CRITICAL ERROR: Failed to initialize Preferences");
         delay(3000);
         ESP.restart();
     }
+    Serial.println("Preferences initialized successfully");
+    
+    // Initialize PreferencesManager
+    Serial.println("Initializing PreferencesManager...");
+    if (!preferencesManager.begin()) {
+        Serial.println("CRITICAL ERROR: Failed to initialize PreferencesManager");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("PreferencesManager initialized successfully");
     
     // Load settings from storage first
     loadSettingsFromStorage();
