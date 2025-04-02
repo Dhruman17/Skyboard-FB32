@@ -19,6 +19,7 @@ private:
     String firmwareUrl;
     SemaphoreHandle_t mutex;
     bool shouldUpdate;
+    size_t firmwareSize;
     
     /**
      * Downloads firmware from the specified URL
@@ -141,6 +142,44 @@ private:
         return false;
     }
 
+    /**
+     * Verifies the downloaded firmware
+     * @return true if verification was successful
+     */
+    bool verifyFirmware() const {
+        // Check if firmware size is valid
+        if (firmwareSize == 0) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                "Invalid firmware size: 0 bytes",
+                "OTAManager::verifyFirmware"
+            );
+            return false;
+        }
+
+        if (!Update.end(true)) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                String("Firmware verification failed: ") + Update.errorString(),
+                "OTAManager::verifyFirmware"
+            );
+            return false;
+        }
+
+        // Verify the total bytes written matches the expected firmware size
+        if (Update.size() != firmwareSize) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
+                String("Firmware size mismatch. Expected: ") + String(firmwareSize) + 
+                " bytes, Got: " + String(Update.size()) + " bytes",
+                "OTAManager::verifyFirmware"
+            );
+            return false;
+        }
+
+        return true;
+    }
+
 public:
     /**
      * Constructor
@@ -154,7 +193,7 @@ public:
     OTAManager(FirebaseData& fbdo, const char* systemPath, const char* serialNumber,
                const char* firmwareUrl, const char* firmwarePath, const char* currentVersion)
         : fbdo(fbdo), initialized(false), updateInProgress(false), updateSize(0), 
-          mutex(NULL), shouldUpdate(false) {
+          mutex(NULL), shouldUpdate(false), firmwareSize(0) {
         this->firmwareUrl = String(firmwareUrl);
         
         mutex = xSemaphoreCreateMutex();

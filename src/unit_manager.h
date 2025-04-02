@@ -6,6 +6,7 @@
 #include "firebase_manager.h"
 #include "sensor_coms.h"
 #include <Firebase_ESP_Client.h>
+#include <time.h>
 
 /**
  * UnitManager Class
@@ -39,6 +40,15 @@ private:
     // Pre-allocate string space to prevent fragmentation
     static constexpr size_t UNIT_NAME_MAX_LENGTH = 50;
     String unitNames[SystemConfig::NUMBER_OF_UNITS];
+    
+    // Structure to hold atomizer timing information
+    struct AtomizerTiming {
+        time_t nextOnTime;
+        time_t nextOffTime;
+    };
+    
+    // Array to store timing information for each unit
+    AtomizerTiming atomizerTimings[SystemConfig::NUMBER_OF_UNITS];
     
     unsigned long previousMillis[SystemConfig::NUMBER_OF_UNITS];
     mutable bool atomizerStates[SystemConfig::NUMBER_OF_UNITS];
@@ -545,38 +555,29 @@ private:
     }
     
     /**
-     * Updates atomizer timing for a unit
-     * @param unitIndex Index of the unit
-     * @param currentMillis Current time in milliseconds
+     * Updates atomizer timing for a specific unit
+     * Thread-safe: Yes
+     * @param unitIndex Index of the unit to update
      */
-    void updateAtomizerTiming(int unitIndex, unsigned long currentMillis) {
-        if (!isValidAndEnabled(unitIndex)) {
-            return;
-        }
-        
+    void updateAtomizerTiming(int unitIndex) {
         if (!takeMutex()) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "UnitManager::updateAtomizerTiming"
-            );
             return;
         }
+
+        // Get current time
+        time_t now;
+        time(&now);
         
-        unsigned long elapsed = currentMillis - previousMillis[unitIndex];
+        // Get stored interval from system state
+        uint32_t onInterval = systemState.atomizerOnIntervals[unitIndex];
         
-        // Update atomizer state based on timing
-        if (elapsed >= DefaultValues::ATOMIZER_ON_INTERVAL) {
-            if (!atomizerStates[unitIndex]) {
-                atomizerStates[unitIndex] = true;
-                updateUnitField(unitIndex, "atomizerOn", true, "bool");
-            }
-        } else if (elapsed >= DefaultValues::ATOMIZER_OFF_INTERVAL) {
-            if (atomizerStates[unitIndex]) {
-                atomizerStates[unitIndex] = false;
-                updateUnitField(unitIndex, "atomizerOn", false, "bool");
-            }
-        }
+        // Calculate next on/off times based on stored interval
+        time_t nextOnTime = now + onInterval;
+        time_t nextOffTime = nextOnTime + onInterval;
+        
+        // Update the timing
+        atomizerTimings[unitIndex].nextOnTime = nextOnTime;
+        atomizerTimings[unitIndex].nextOffTime = nextOffTime;
         
         giveMutex();
     }
@@ -602,6 +603,10 @@ private:
             atomizerStates[i] = false;
             waterLevels[i] = INVALID_WATER_LEVEL;
             consecutiveErrors[i] = 0;
+            
+            // Initialize atomizer timing
+            atomizerTimings[i].nextOnTime = 0;
+            atomizerTimings[i].nextOffTime = 0;
         }
         
         i2cErrorCount = 0;
@@ -620,6 +625,11 @@ public:
      */
     UnitManager(SystemState& state, FirebaseManager& firebase, SensorManager& sensor)
         : systemState(state), firebaseManager(firebase), sensorManager(sensor) {
+        // Initialize atomizerTimings array
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            atomizerTimings[i].nextOnTime = 0;
+            atomizerTimings[i].nextOffTime = 0;
+        }
         begin();
     }
     
@@ -731,7 +741,7 @@ public:
         // Update atomizer states
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             if (systemState.unitsEnabled[i]) {
-                updateAtomizerTiming(i, currentMillis);
+                updateAtomizerTiming(i);
             }
         }
         
