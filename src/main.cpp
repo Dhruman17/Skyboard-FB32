@@ -29,11 +29,17 @@
 
 #define FIREBASEJSON_USE_PSRAM
 
+// Forward declarations
+class WiFiManager;
+
 // ============= Global Objects =============
 // Firebase objects for cloud communication
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
+
+// WiFi Manager for handling WiFi credentials
+WiFiManager wifiManager;
 
 // Hardware sensors (3 units, each with their own sensors)
 // Each unit has its own PCA9546A multiplexer connecting to:
@@ -58,7 +64,7 @@ UnitManager unitManager(systemState, firebaseManager, sensorManager, atomizerMan
 
 // System-wide control
 LightManager lightManager;  // Shared lighting system
-NetworkManager networkManager(fbdo, auth, config, lightManager);
+NetworkManager networkManager(fbdo, auth, config, lightManager, wifiManager);
 OTAManager otaManager(fbdo, SystemConfig::systemPath, SystemConfig::SERIAL_NUMBER, 
                      "firmware.skyboard.com", "/firmware/latest.bin", 
                      SystemConfig::FIRMWARE_VERSION);
@@ -77,9 +83,6 @@ void loadSettingsFromStorage() {
 void saveSettingsToStorage() {
     preferencesManager.saveSettings(systemState);
 }
-
-// WiFi Manager for handling WiFi credentials
-WiFiManager wifiManager;
 
 /**
  * System initialization

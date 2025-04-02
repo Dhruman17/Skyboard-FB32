@@ -89,8 +89,10 @@ private:
     FirebaseConfig& config;
     LightManager& lightManager;
     
-    // WiFi Manager
-    WiFiManager wifiManager;
+    // WiFi Manager reference
+    WiFiManager& wifiManager;
+    
+    // WiFi parameters
     WiFiManagerParameter* custom_email;
     WiFiManagerParameter* custom_password;
     
@@ -112,9 +114,6 @@ private:
     String email;
     String password;
     String otaPassword;
-    
-    // Preferences for credential storage
-    Preferences preferences;
     
     // Mutex for thread safety
     SemaphoreHandle_t mutex;
@@ -194,6 +193,7 @@ private:
         }
         
         // Initialize Preferences
+        Preferences preferences;
         preferences.begin(PREF_NAMESPACE, true);  // Read-only mode
         
         // Read credentials from Preferences
@@ -254,6 +254,7 @@ private:
         }
         
         // Initialize Preferences
+        Preferences preferences;
         preferences.begin(PREF_NAMESPACE, false);  // Read-write mode
         
         // Save credentials
@@ -284,9 +285,6 @@ private:
         email = "";
         password = "";
         otaPassword = "";
-        
-        // Clear Preferences
-        preferences.clear();
     }
     
     /**
@@ -537,11 +535,12 @@ public:
     /**
      * Constructor
      */
-    NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config, LightManager& light)
+    NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config, LightManager& light, WiFiManager& wifi)
         : fbdo(fbdo),
           auth(auth),
           config(config),
           lightManager(light),
+          wifiManager(wifi),
           reconnectAttempts(0),
           wasConnected(false),
           currentBackoffDelay(RECONNECT_DELAY),
@@ -603,9 +602,6 @@ public:
         
         // Clean up credentials
         cleanupCredentials();
-        
-        // End Preferences
-        preferences.end();
     }
     
     /**
