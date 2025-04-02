@@ -1,108 +1,280 @@
-#ifndef SENSOR_COMS
-#define SENSOR_COMS
-#include "Wire.h"
+#ifndef SENSOR_COMS_H
+#define SENSOR_COMS_H
+
 #include "config.h"
-#include "Protocentral_FDC1004.h"
+#include "hardware_manager.h"
+#include "Wire.h"
+#include "MCP3X21.h"
+#include <Protocentral_FDC1004.h>
 
-struct WaterLevelReading {
-    bool success;
-    float capacitance;
-    float waterLevel;
-    String error;
-};
-
+/**
+ * SensorManager Class
+ * 
+ * Manages sensor communication and data collection:
+ * 1. Sensor Initialization:
+ *    - FDC1004 capacitive sensors
+ *    - MCP3021 EC sensors
+ *    - Sensor calibration
+ * 
+ * 2. Data Collection:
+ *    - Water level readings
+ *    - EC measurements
+ *    - Sensor state monitoring
+ * 
+ * 3. Hardware Integration:
+ *    - Two-level I2C multiplexing
+ *    - Sensor channel selection
+ *    - Error handling and recovery
+ * 
+ * Sensor Configuration:
+ * - FDC1004: Channel 2 for water level
+ * - MCP3021: Channel 3 for EC
+ * - Readings averaged over 5 samples
+ * - 100ms delay between readings
+ */
 class SensorManager {
 private:
-    FDC1004& fdc;
-    int capdac;
+    HardwareManager& hardwareManager;
+    FDC1004* fdc1004[SystemConfig::NUMBER_OF_UNITS];
+    MCP3021* mcp3021[SystemConfig::NUMBER_OF_UNITS];
+    bool initialized;
     
-    WaterLevelReading readWaterLevelForUnit(int unitIndex) {
-        WaterLevelReading result = {false, 0.0f, 0.0f, ""};
+    // Constants for sensor reading
+    static constexpr uint8_t NUM_SAMPLES = 5;  // Number of samples to average
+    static constexpr uint8_t READING_DELAY = 100;  // Delay between readings in ms
+    
+    /**
+     * Initializes FDC1004 sensor for a unit
+     * @param unitIndex Index of the unit
+     * @return true if initialization successful
+     */
+    bool initializeFDC1004(int unitIndex) {
+        hardwareManager.selectUnitAndSensor(unitIndex, SystemConfig::FDC1004_CHANNEL);
         
-        // Select the appropriate TCA channel
-        tcaselect(unitIndex * 2);
-        
-        // Configure and trigger measurement
-        if (!fdc.configureMeasurementSingle(SystemConfig::MEASURMENT, SystemConfig::CHANNEL, capdac)) {
-            result.error = "Failed to configure measurement";
-            return result;
+        // Create new instance with error checking
+        fdc1004[unitIndex] = new (std::nothrow) FDC1004(SystemConfig::FDC1004_ADDR);
+        if (fdc1004[unitIndex] == nullptr) {
+            Serial.println("Failed to allocate FDC1004 for unit " + String(unitIndex));
+            return false;
         }
         
-        if (!fdc.triggerSingleMeasurement(SystemConfig::MEASURMENT, FDC1004_100HZ)) {
-            result.error = "Failed to trigger measurement";
-            return result;
+        // Configure FDC1004 with error checking
+        if (!fdc1004[unitIndex]->configureMeasurementSingle(1, FDC1004_100HZ, 0)) {
+            Serial.println("Failed to configure FDC1004 for unit " + String(unitIndex));
+            delete fdc1004[unitIndex];
+            fdc1004[unitIndex] = nullptr;
+            return false;
         }
         
-        // Wait for completion
-        delay(SystemConfig::WATER_LEVEL_READ_INTERVAL);
+        if (!fdc1004[unitIndex]->triggerSingleMeasurement(1, 0)) {
+            Serial.println("Failed to trigger FDC1004 measurement for unit " + String(unitIndex));
+            delete fdc1004[unitIndex];
+            fdc1004[unitIndex] = nullptr;
+            return false;
+        }
         
-        // Read measurement
-        uint16_t value[2];
-        if (!fdc.readMeasurement(SystemConfig::MEASURMENT, value)) {
-            int16_t msb = (int16_t)value[0];
-            
-            // Calculate capacitance
-            int32_t capacitance = ((int32_t)457) * ((int32_t)msb); // in attofarads
-            capacitance /= 1000;                                   // in femtofarads
-            capacitance += ((int32_t)3028) * ((int32_t)capdac);
-            result.capacitance = (float)capacitance / 1000; // in pF
-            
-            // Calculate water level
-            result.waterLevel = (result.capacitance - SystemConfig::WATER_LEVEL_CALIBRATION_OFFSET) / 
-                               SystemConfig::WATER_LEVEL_CALIBRATION_FACTOR;
-            
-            // Adjust capdac if needed
-            if (msb > SystemConfig::UPPER_BOUND) {
-                if (capdac < FDC1004_CAPDAC_MAX) capdac++;
-            } else if (msb < SystemConfig::LOWER_BOUND) {
-                if (capdac > 0) capdac--;
+        return true;
+    }
+    
+    /**
+     * Initializes MCP3021 sensor for a unit
+     * @param unitIndex Index of the unit
+     * @return true if initialization successful
+     */
+    bool initializeMCP3021(int unitIndex) {
+        hardwareManager.selectUnitAndSensor(unitIndex, SystemConfig::MCP3021_CHANNEL);
+        
+        // Create new instance with error checking
+        mcp3021[unitIndex] = new (std::nothrow) MCP3021();
+        if (mcp3021[unitIndex] == nullptr) {
+            Serial.println("Failed to allocate MCP3021 for unit " + String(unitIndex));
+            return false;
+        }
+        
+        // Verify sensor is responding
+        if (mcp3021[unitIndex]->read() < 0) {
+            Serial.println("Failed to read from MCP3021 for unit " + String(unitIndex));
+            delete mcp3021[unitIndex];
+            mcp3021[unitIndex] = nullptr;
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Reads multiple samples from FDC1004 and averages them
+     * @param unitIndex Index of the unit
+     * @return Average reading or -1 if error
+     */
+    float readFDC1004Averaged(int unitIndex) {
+        if (!initialized || fdc1004[unitIndex] == nullptr) {
+            return -1.0f;
+        }
+        
+        float sum = 0.0f;
+        uint8_t validReadings = 0;
+        
+        for (uint8_t i = 0; i < NUM_SAMPLES; i++) {
+            float reading = fdc1004[unitIndex]->readMeasurement(1, 0);
+            if (reading >= 0) {
+                sum += reading;
+                validReadings++;
             }
-            
-            result.success = true;
-        } else {
-            result.error = "Failed to read measurement";
+            delay(READING_DELAY);
         }
         
-        return result;
+        if (validReadings == 0) {
+            return -1.0f;
+        }
+        
+        return sum / validReadings;
+    }
+    
+    /**
+     * Reads multiple samples from MCP3021 and averages them
+     * @param unitIndex Index of the unit
+     * @return Average reading or -1 if error
+     */
+    float readMCP3021Averaged(int unitIndex) {
+        if (!initialized || mcp3021[unitIndex] == nullptr) {
+            return -1.0f;
+        }
+        
+        float sum = 0.0f;
+        uint8_t validReadings = 0;
+        
+        for (uint8_t i = 0; i < NUM_SAMPLES; i++) {
+            float reading = mcp3021[unitIndex]->read();
+            if (reading >= 0) {
+                sum += reading;
+                validReadings++;
+            }
+            delay(READING_DELAY);
+        }
+        
+        if (validReadings == 0) {
+            return -1.0f;
+        }
+        
+        return sum / validReadings;
     }
 
 public:
-    SensorManager(FDC1004& fdcSensor) : fdc(fdcSensor), capdac(0) {}
-    
-    bool readAllWaterLevels(float waterLevels[SystemConfig::NUMBER_OF_UNITS]) {
-        bool allSuccess = true;
-        
+    /**
+     * Constructor
+     * @param hardware Reference to hardware manager
+     */
+    SensorManager(HardwareManager& hardware) : hardwareManager(hardware), initialized(false) {
+        // Initialize arrays to nullptr
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            WaterLevelReading reading = readWaterLevelForUnit(i);
+            fdc1004[i] = nullptr;
+            mcp3021[i] = nullptr;
+        }
+    }
+    
+    /**
+     * Destructor
+     * Cleans up sensor objects
+     */
+    ~SensorManager() {
+        cleanup();
+    }
+    
+    /**
+     * Cleans up all sensor objects
+     */
+    void cleanup() {
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            if (fdc1004[i] != nullptr) {
+                delete fdc1004[i];
+                fdc1004[i] = nullptr;
+            }
+            if (mcp3021[i] != nullptr) {
+                delete mcp3021[i];
+                mcp3021[i] = nullptr;
+            }
+        }
+        initialized = false;
+    }
+    
+    /**
+     * Initializes all sensors
+     * @return true if initialization successful
+     */
+    bool begin() {
+        // Clean up any existing instances
+        cleanup();
+        
+        // Initialize sensors for each unit
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            if (!initializeMCP3021(i)) {
+                Serial.println("Failed to initialize MCP3021 for unit " + String(i));
+                cleanup();
+                return false;
+            }
             
-            if (reading.success) {
-                waterLevels[i] = reading.waterLevel;
-            } else {
-                Serial.printf("Failed to read water level for unit %d: %s\n", i, reading.error.c_str());
-                allSuccess = false;
+            if (!initializeFDC1004(i)) {
+                Serial.println("Failed to initialize FDC1004 for unit " + String(i));
+                cleanup();
+                return false;
             }
         }
         
-        return allSuccess;
+        initialized = true;
+        return true;
+    }
+    
+    /**
+     * Reads water level from FDC1004 sensor for a specific unit
+     * @param unitIndex Index of the unit to read from
+     * @return Water level reading (0-1)
+     */
+    float readWaterLevel(int unitIndex) {
+        float rawValue = readFDC1004Averaged(unitIndex);
+        if (rawValue < 0) {
+            return -1.0f;
+        }
+        
+        // Convert to water level (0-1)
+        float waterLevel = (rawValue - SystemConfig::WATER_LEVEL_MIN) / 
+                          (SystemConfig::WATER_LEVEL_MAX - SystemConfig::WATER_LEVEL_MIN);
+        return constrain(waterLevel, 0.0f, 1.0f);
+    }
+    
+    /**
+     * Reads EC value from MCP3021 sensor for a specific unit
+     * @param unitIndex Index of the unit to read from
+     * @return EC value (0-100)
+     */
+    float readECValue(int unitIndex) {
+        float rawValue = readMCP3021Averaged(unitIndex);
+        if (rawValue < 0) {
+            return -1.0f;
+        }
+        
+        // Convert to EC value (0-100)
+        float ecValue = (rawValue / 1024.0f) * SystemConfig::EC_MAX;
+        return constrain(ecValue, 0.0f, 100.0f);
+    }
+    
+    /**
+     * Reads water levels for all units
+     * @param levels Array to store water level readings
+     * @return true if readings successful
+     */
+    bool readAllWaterLevels(float levels[SystemConfig::NUMBER_OF_UNITS]) {
+        bool success = true;
+        
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            levels[i] = readWaterLevel(i);
+            if (levels[i] < 0) {
+                success = false;
+            }
+        }
+        
+        return success;
     }
 };
 
-// Legacy function for backward compatibility
-void tcaselect(uint8_t i) {
-    if (i > 7) return;
-    Wire.beginTransmission(SystemConfig::TCAADDR);
-    Wire.write(1 << i);
-    Wire.endTransmission();
-}
-
-namespace device {
-    float aref = 3.3; // Vref, this is for 3.3v compatible controller boards
-}
-
-namespace sensor {
-    float ec = 0;
-    unsigned int tds = 0;
-    float ecCalibration = 1;
-}
-
-#endif // SENSOR_COMS
+#endif // SENSOR_COMS_H

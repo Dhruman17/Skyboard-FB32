@@ -24,38 +24,75 @@
 
 #define FIREBASEJSON_USE_PSRAM
 
-// Global objects
+// ============= Global Objects =============
+// Firebase objects for cloud communication
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig config;
-FDC1004 fdc;
-MCP3021 mcp3021;
-SystemState systemState;
 
-// Initialize managers
-HardwareManager hardwareManager(mcp3021, fdc);
-SensorManager sensorManager(fdc);
-NetworkManager networkManager(fbdo, auth, config, serialNumber);
-OTAManager otaManager(fbdo, systemPath, serialNumber);
-LightManager lightManager;
+// Hardware sensors (3 units, each with their own sensors)
+// Each unit has its own PCA9546A multiplexer connecting to:
+// - FDC1004 (capacitive sensor for water level)
+// - MCP3021 (ADC for EC sensor)
+FDC1004 fdc[3];     // One per unit
+MCP3021 mcp3021[3]; // One per unit
+SystemState systemState;  // System state tracking
+
+// ============= System Managers =============
+// Core hardware management
+// Handles both TCA9548APWR (system level) and PCA9546A (unit level) multiplexers
+HardwareManager hardwareManager;
+SensorManager sensorManager(hardwareManager);
+
+// Unit management (3 vertical farming units)
 UnitManager unitManager(systemState, fbdo, sensorManager);
+
+// System-wide control
+LightManager lightManager;  // Shared lighting system
+NetworkManager networkManager(fbdo, auth, config);
+OTAManager otaManager(fbdo, systemPath, serialNumber, 
+                     "firmware.skyboard.com", "/firmware/latest.bin", 
+                     SystemConfig::FIRMWARE_VERSION);
+
+// Main system coordinator
 SystemManager systemManager(networkManager, otaManager, lightManager, unitManager, fbdo, systemState);
 
+/**
+ * System initialization
+ * 1. Initialize serial communication
+ * 2. Set up random seed for connection offset
+ * 3. Initialize hardware (I2C, multiplexers, sensors)
+ * 4. Initialize system (network, Firebase, etc.)
+ */
 void setup() {
+    // Start serial communication for debugging
     Serial.begin(9600);
     randomSeed(analogRead(0));
     
-    // Initialize hardware
-    hardwareManager.begin();
+    // Initialize hardware components
+    if (!hardwareManager.begin()) {
+        Serial.println("Failed to initialize hardware. Restarting...");
+        delay(3000);
+        ESP.restart();
+    }
     
-    // Initialize system
+    // Initialize system components
     if (!systemManager.begin()) {
         Serial.println("Failed to initialize system. Restarting...");
         delay(3000);
         ESP.restart();
     }
+    
+    Serial.println("Initialization complete");
 }
 
+/**
+ * Main program loop
+ * Handles all system updates through the SystemManager:
+ * - Unit management (water levels, EC, atomizers)
+ * - Light control (time-based on/off)
+ * - System monitoring and updates
+ */
 void loop() {
     systemManager.update();
 }

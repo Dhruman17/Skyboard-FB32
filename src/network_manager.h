@@ -7,6 +7,30 @@
 #include <Firebase_ESP_Client.h>
 #include <ArduinoOTA.h>
 
+/**
+ * NetworkManager Class
+ * 
+ * Handles all network-related operations:
+ * 1. WiFi Connection:
+ *    - Automatic connection to known networks
+ *    - Fallback to AP mode for manual configuration
+ *    - Connection state monitoring and recovery
+ * 
+ * 2. Firebase Integration:
+ *    - Authentication and configuration
+ *    - Connection state management
+ *    - Error handling and recovery
+ * 
+ * 3. OTA Updates:
+ *    - Hostname configuration
+ *    - Update server setup
+ * 
+ * Connection Management:
+ * - Auto-reconnect enabled
+ * - Persistent WiFi settings
+ * - Connection check every 30 seconds
+ * - Reconnection attempts every 5 seconds
+ */
 class NetworkManager {
 private:
     FirebaseData& fbdo;
@@ -20,6 +44,10 @@ private:
     const unsigned long WIFI_CHECK_INTERVAL = 30000; // Check WiFi every 30 seconds
     const unsigned long RECONNECT_INTERVAL = 5000;   // Try to reconnect every 5 seconds
     
+    /**
+     * Initializes system time using NTP
+     * Required for Firebase timestamps and scheduling
+     */
     void initializeTime() {
         configTime(0, 0, "pool.ntp.org", "time.nist.gov");
         // Wait for time to be set
@@ -30,6 +58,11 @@ private:
         }
     }
     
+    /**
+     * Attempts to connect to WiFi
+     * Tries known networks first, then falls back to AP mode
+     * @return true if connection successful
+     */
     bool connectToWiFi() {
         String hostname = "SA" + serialNumber;
         WiFi.setHostname(hostname.c_str());
@@ -94,9 +127,20 @@ private:
     }
 
 public:
-    NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config, String setupWifiName)
-        : fbdo(fbdo), auth(auth), config(config), setupWifiName(setupWifiName) {}
+    /**
+     * Constructor
+     * @param fbdo Reference to Firebase data object
+     * @param auth Reference to Firebase auth object
+     * @param config Reference to Firebase config object
+     */
+    NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config)
+        : fbdo(fbdo), auth(auth), config(config) {}
     
+    /**
+     * Initializes network components
+     * Sets up WiFi, Firebase, and time synchronization
+     * @return true if initialization successful
+     */
     bool begin() {
         if (!connectToWiFi()) {
             Serial.println("Wi-Fi setup failed.");
@@ -108,6 +152,10 @@ public:
         return true;
     }
     
+    /**
+     * Checks if WiFi is connected
+     * @return true if connected
+     */
     bool isConnected() {
         unsigned long currentMillis = millis();
         
@@ -128,6 +176,10 @@ public:
         return wifiConnected && Firebase.ready();
     }
     
+    /**
+     * Attempts to reconnect to WiFi
+     * @return true if reconnection successful
+     */
     bool reconnect() {
         unsigned long currentMillis = millis();
         
@@ -155,6 +207,10 @@ public:
         return true;
     }
     
+    /**
+     * Sets up OTA updates
+     * @param hostname System hostname for OTA
+     */
     void handleOTA(const String& hostname) {
         ArduinoOTA.setHostname(hostname.c_str());
         ArduinoOTA.begin();
