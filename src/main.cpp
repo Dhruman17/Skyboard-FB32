@@ -152,16 +152,20 @@ void setup() {
         ESP.restart();
     }
     
-    // Try to initialize network and system components
-    bool networkSuccess = networkManager.begin();
-    bool systemSuccess = systemManager.begin();
-    
-    if (!networkSuccess) {
+    // Initialize network first, as it's required for system initialization
+    Serial.println("Initializing network...");
+    if (!networkManager.begin()) {
         Serial.println("Failed to initialize network. Continuing with stored settings...");
+    } else {
+        Serial.println("Network initialized successfully");
     }
     
-    if (!systemSuccess) {
+    // Initialize system components
+    Serial.println("Initializing system...");
+    if (!systemManager.begin()) {
         Serial.println("Failed to initialize system. Continuing with stored settings...");
+    } else {
+        Serial.println("System initialized successfully");
     }
     
     // Re-enable watchdog timer after initialization

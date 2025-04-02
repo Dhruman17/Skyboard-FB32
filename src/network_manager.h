@@ -643,10 +643,16 @@ public:
         // Release mutex before WiFi connection attempt
         giveMutex();
         
-        // Try to connect to WiFi
-        if (!connectToWiFi()) {
-            Serial.println("Wi-Fi setup failed");
-            success = false;
+        // Try to connect to WiFi with timeout
+        Serial.println("Attempting to connect to WiFi...");
+        unsigned long startTime = millis();
+        while (!connectToWiFi()) {
+            if (millis() - startTime > WIFI_TIMEOUT) {
+                Serial.println("WiFi connection timeout");
+                success = false;
+                break;
+            }
+            delay(1000);
         }
         
         // Re-acquire mutex for remaining initialization
