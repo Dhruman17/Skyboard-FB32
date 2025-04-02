@@ -50,7 +50,7 @@ namespace SystemConfig {
     // 1. Firebase document paths
     // 2. OTA update identification
     // 3. System identification in logs
-    static constexpr const char* SERIAL_NUMBER = "TEST123456789";  // System serial number
+    static constexpr const char* SERIAL_NUMBER = "SME102345678";  // System serial number
     
     // Firebase Configuration
     static constexpr const char* FIREBASE_PROJECT_ID = "skyboard-fb32";  // Firebase project ID
@@ -157,7 +157,7 @@ namespace SystemConfig {
         CAPACITIVE,  // FDC1004 capacitive sensor
         FLOAT_SWITCH // Float switch with MCP3021 ADC
     };
-    static constexpr WaterLevelSensorType WATER_LEVEL_SENSOR_TYPE = WaterLevelSensorType::CAPACITIVE;
+    static constexpr WaterLevelSensorType WATER_LEVEL_SENSOR_TYPE = WaterLevelSensorType::FLOAT_SWITCH;
     
     // Float Switch Configuration (only used if WATER_LEVEL_SENSOR_TYPE is FLOAT_SWITCH)
     static constexpr float FLOAT_SWITCH_HIGH_THRESHOLD = 800.0f;  // ADC value for high water level
