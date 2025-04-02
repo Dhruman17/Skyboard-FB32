@@ -372,9 +372,11 @@ public:
         }
         Serial.println("[SystemManager] Successfully created mutex");
         
-        // Initialize string buffers
+        // Initialize string buffers without taking mutex
         Serial.println("[SystemManager] Initializing string buffers");
-        initializeStrings();
+        systemName.reserve(SYSTEM_NAME_MAX_LENGTH + 10);
+        lightOnTime.reserve(TIME_STRING_MAX_LENGTH + 10);
+        lightOffTime.reserve(TIME_STRING_MAX_LENGTH + 10);
         Serial.println("[SystemManager] Constructor completed successfully");
     }
     

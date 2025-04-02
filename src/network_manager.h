@@ -589,13 +589,13 @@ public:
         }
         Serial.println("[NetworkManager] Successfully created mutex");
         
-        // Pre-allocate space for credentials
+        // Pre-allocate space for credentials without taking mutex
         Serial.println("[NetworkManager] Pre-allocating credential strings");
         apiKey.reserve(CREDENTIAL_MAX_LENGTH);
         email.reserve(CREDENTIAL_MAX_LENGTH);
         password.reserve(CREDENTIAL_MAX_LENGTH);
         
-        // Initialize WiFiManager with safe defaults
+        // Initialize WiFiManager with safe defaults without taking mutex
         Serial.println("[NetworkManager] Initializing WiFiManager defaults");
         wifiManager.setDebugOutput(false);
         wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
