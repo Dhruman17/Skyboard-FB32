@@ -1,6 +1,7 @@
 #include <Arduino.h>
 #include <Wire.h>
 #include <Preferences.h>
+#include <nvs_flash.h>
 
 // Hardware Libraries
 #include "MCP3X21.h"
@@ -66,6 +67,7 @@ OTAManager otaManager(fbdo, SystemConfig::systemPath, SystemConfig::SERIAL_NUMBE
 SystemManager systemManager(networkManager, otaManager, lightManager, unitManager, firebaseManager, systemState);  // Add otaManager to constructor
 
 // Non-volatile storage for settings
+Preferences preferences;
 PreferencesManager preferencesManager;
 
 void loadSettingsFromStorage() {
@@ -91,12 +93,15 @@ void setup() {
     Serial.begin(9600);
     randomSeed(analogRead(0));
     
-    // Initialize Preferences first
-    if (!Preferences.begin("skyboard", false)) {
-        Serial.println("CRITICAL ERROR: Failed to initialize Preferences");
+    // Initialize NVS first
+    if (!nvs_flash_init()) {
+        Serial.println("CRITICAL ERROR: Failed to initialize NVS");
         delay(3000);
         ESP.restart();
     }
+    
+    // Initialize Preferences
+    preferences.begin("skyboard", false);
     
     // Load settings from storage first
     loadSettingsFromStorage();
