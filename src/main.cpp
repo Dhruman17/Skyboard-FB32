@@ -91,6 +91,13 @@ void setup() {
     Serial.begin(9600);
     randomSeed(analogRead(0));
     
+    // Initialize Preferences first
+    if (!Preferences.begin("skyboard", false)) {
+        Serial.println("CRITICAL ERROR: Failed to initialize Preferences");
+        delay(3000);
+        ESP.restart();
+    }
+    
     // Load settings from storage first
     loadSettingsFromStorage();
     
