@@ -327,18 +327,15 @@ public:
           unitManager(unit), firebaseManager(firebase), systemState(state), 
           initialized(false), mutex(NULL),
           lastHeapCheck(0), minHeapEver(ESP.getFreeHeap()) {
-        connectionOffset = 1000 + random(100, 10000);
-        initializeStrings();
-        
-        // Create mutex for thread safety
+        // Create mutex first
         mutex = xSemaphoreCreateMutex();
         if (!mutex) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_CREATION_FAILED,
-                "Failed to create mutex",
-                "SystemManager::SystemManager"
-            );
+            Serial.println("CRITICAL ERROR: Failed to create mutex in SystemManager");
+            return;
         }
+        
+        connectionOffset = 1000 + random(100, 10000);
+        initializeStrings();
     }
     
     /**

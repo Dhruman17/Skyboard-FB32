@@ -554,6 +554,13 @@ public:
           initialized(false),
           custom_email(nullptr),
           custom_password(nullptr) {
+        // Create mutex first
+        mutex = xSemaphoreCreateMutex();
+        if (mutex == NULL) {
+            Serial.println("CRITICAL ERROR: Failed to create mutex in NetworkManager");
+            return;
+        }
+        
         // Initialize WiFiManager
         wifiManager.setDebugOutput(false);
         wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
@@ -574,11 +581,6 @@ public:
         // Add parameters to WiFiManager
         wifiManager.addParameter(custom_email);
         wifiManager.addParameter(custom_password);
-        
-        mutex = xSemaphoreCreateMutex();
-        if (mutex == NULL) {
-            logError(ErrorManager::ErrorCode::MUTEX_CREATE_FAILED, "Failed to create mutex", "NetworkManager::NetworkManager");
-        }
     }
     
     /**

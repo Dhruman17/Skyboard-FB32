@@ -656,12 +656,30 @@ public:
      */
     UnitManager(SystemState& state, FirebaseManager& firebase, SensorManager& sensor, AtomizerManager& atomizer)
         : systemState(state), firebaseManager(firebase), sensorManager(sensor), atomizerManager(atomizer) {
+        // Create mutex first
+        mutex = xSemaphoreCreateMutex();
+        if (!mutex) {
+            Serial.println("CRITICAL ERROR: Failed to create mutex in UnitManager");
+            return;
+        }
+        
         // Initialize atomizerTimings array
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             atomizerTimings[i].nextOnTime = 0;
             atomizerTimings[i].nextOffTime = 0;
         }
-        begin();
+        
+        // Initialize arrays
+        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            previousMillis[i] = 0;
+            atomizerStates[i] = false;
+            waterLevels[i] = INVALID_WATER_LEVEL;
+            consecutiveErrors[i] = 0;
+        }
+        
+        i2cErrorCount = 0;
+        firebaseErrorCount = 0;
+        sensorErrorCount = 0;
     }
     
     /**
