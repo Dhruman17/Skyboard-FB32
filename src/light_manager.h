@@ -1,16 +1,16 @@
 #ifndef LIGHT_MANAGER_H
 #define LIGHT_MANAGER_H
 
-#include <time.h>
 #include "config.h"
+#include <time.h>
 
 class LightManager {
 private:
-    bool lightState;
-    bool lightMasterSwitch;
-    bool timeCycleEnabled;
-    time_t lightOnTime;
-    time_t lightOffTime;
+    bool lightState = false;
+    bool masterSwitch = false;
+    bool timeCycleEnabled = false;
+    time_t onTime = 0;
+    time_t offTime = 0;
     
     time_t getCurrentTimeOfDay() {
         time_t now;
@@ -26,25 +26,19 @@ private:
     }
 
 public:
-    LightManager() : lightState(false), lightMasterSwitch(false), timeCycleEnabled(false) {
-        pinMode(SystemConfig::SYSTEM_LIGHTS_PIN, OUTPUT);
-        digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
-    }
-    
-    void updateSettings(bool masterSwitch, bool cycleEnabled, time_t onTime, time_t offTime) {
-        lightMasterSwitch = masterSwitch;
-        timeCycleEnabled = cycleEnabled;
-        lightOnTime = onTime;
-        lightOffTime = offTime;
+    void updateSettings(bool master, bool cycle, time_t on, time_t off) {
+        masterSwitch = master;
+        timeCycleEnabled = cycle;
+        onTime = on;
+        offTime = off;
     }
     
     void update() {
         if (timeCycleEnabled) {
             time_t currentTime = getCurrentTimeOfDay();
             
-            if (lightOffTime < lightOnTime) {
-                // Handle overnight cycle (e.g., 5pm off, 2am on)
-                if (currentTime >= lightOnTime || currentTime <= lightOffTime) {
+            if (offTime < onTime) { // Overnight cycle (e.g., 5pm off, 2am on)
+                if (currentTime >= onTime || currentTime <= offTime) {
                     if (!lightState) {
                         digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, HIGH);
                         lightState = true;
@@ -55,9 +49,8 @@ public:
                         lightState = false;
                     }
                 }
-            } else {
-                // Handle same-day cycle (e.g., 9am to 5pm)
-                if (currentTime >= lightOnTime && currentTime <= lightOffTime) {
+            } else { // Same-day cycle (e.g., 9am to 5pm)
+                if (currentTime >= onTime && currentTime <= offTime) {
                     if (!lightState) {
                         digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, HIGH);
                         lightState = true;
@@ -70,8 +63,8 @@ public:
                 }
             }
         } else {
-            if (lightState != lightMasterSwitch) {
-                if (lightMasterSwitch) {
+            if (lightState != masterSwitch) {
+                if (masterSwitch) {
                     digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, HIGH);
                     lightState = true;
                 } else {

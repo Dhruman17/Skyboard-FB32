@@ -1,117 +1,69 @@
 #ifndef CONFIG_H
 #define CONFIG_H
-#include <addons/TokenHelper.h>
+
+#include <Arduino.h>
+#include <WiFi.h>
+#include <WiFiManager.h>
+#include <Firebase_ESP_Client.h>
+#include <MCP3X21.h>
+#include <Wire.h>
+#include <FDC1004.h>
 #include <time.h>
 
-<<<<<<< Updated upstream
-// Variables to track timing
-// Pin Definitions
-#define NUMBER_OF_UNITS 3
-#define SYSTEM_LIGHTS_PIN 26   // GPIO 26 for Lights
-#define SYSTEM_12V_POWER_PIN 12 // GPIO for 12V Power
-=======
-// System Configuration
 struct SystemConfig {
-    // Version
-    static const double FIRMWARE_VERSION = 1.4;
+    // Firmware version
+    static constexpr const char* FIRMWARE_VERSION = "1.1.0";
     
-    // Hardware Configuration
-    static const int NUMBER_OF_UNITS = 3;
-    static const int SYSTEM_LIGHTS_PIN = 26;    // GPIO 26 for Lights
-    static const int SYSTEM_12V_POWER_PIN = 12; // GPIO for 12V Power
+    // Hardware configuration
+    static constexpr int NUMBER_OF_UNITS = 3;
     
-    // Pin Arrays
-    static const int ATOMIZER_PINS[NUMBER_OF_UNITS];
-    static const int WATER_LEVEL_PINS[NUMBER_OF_UNITS];
+    // Pin arrays
+    static const uint8_t WATER_LEVEL_PINS[NUMBER_OF_UNITS];
+    static const uint8_t ATOMIZER_PINS[NUMBER_OF_UNITS];
     
-    // PWM Configuration
-    static const int PWM_FREQUENCY_ATOMIZER = 108000;
-    static const int PWM_RESOLUTION_ATOMIZER = 4; // 8-bit resolution
-    static const int PWM_ATOMIZER_ON = 9;
-    static const int PWM_ATOMIZER_OFF = 0;
+    // System pins
+    static constexpr uint8_t SYSTEM_12V_POWER_PIN = 32;
+    static constexpr uint8_t SYSTEM_LIGHTS_PIN = 33;
     
-    // I2C Configuration
-    static const int TCAADDR = 0x77;
+    // PWM configuration
+    static constexpr int PWM_FREQUENCY_ATOMIZER = 100000;
+    static constexpr int PWM_RESOLUTION_ATOMIZER = 8;
+    static constexpr int PWM_ATOMIZER_ON = 9;
+    static constexpr int PWM_ATOMIZER_OFF = 0;
     
-    // Timing Configuration
-    static const unsigned long INTERVAL_30_SECONDS = 30000;
-    static const unsigned long WIFI_RESET_INTERVAL = 60000;
-    static const unsigned long FIRMWARE_CHECK_INTERVAL = 3600; // Check every hour
-    static const unsigned long WATER_LEVEL_READ_INTERVAL = 100;
-    static const unsigned long RESET_INTERVAL = 21600000; // 6 hours in milliseconds
+    // I2C configuration
+    static constexpr uint8_t I2C_SDA = 21;
+    static constexpr uint8_t I2C_SCL = 22;
     
-    // Sensor Configuration
-    static const float WATER_LEVEL_CALIBRATION_OFFSET = 1.58;
-    static const float WATER_LEVEL_CALIBRATION_FACTOR = 0.107;
-    static const int16_t UPPER_BOUND = 0X4000; // max readout capacitance
-    static const int16_t LOWER_BOUND = -1 * UPPER_BOUND;
-    static const int CHANNEL = 2;    // channel to be read
-    static const int MEASURMENT = 0; // measurment channel
+    // Timing configuration
+    static constexpr unsigned long INTERVAL_30_SECONDS = 30000;
+    static constexpr unsigned long WIFI_RESET_INTERVAL = 300000;  // 5 minutes
+    static constexpr unsigned long FIRMWARE_CHECK_INTERVAL = 3600000;  // 1 hour
+    
+    // Sensor configuration
+    static constexpr float EC_CALIBRATION_FACTOR = 0.727;
+    static constexpr float EC_CALIBRATION_OFFSET = -0.365;
+    static constexpr float EC_CALIBRATION_SQUARE = 0.416;
 };
 
 // Initialize static members
-const int SystemConfig::ATOMIZER_PINS[NUMBER_OF_UNITS] = {4, 5, 2};
-const int SystemConfig::WATER_LEVEL_PINS[NUMBER_OF_UNITS] = {23, 25, 13};
->>>>>>> Stashed changes
+const uint8_t SystemConfig::ATOMIZER_PINS[SystemConfig::NUMBER_OF_UNITS] = {25, 26, 27};
+const uint8_t SystemConfig::WATER_LEVEL_PINS[SystemConfig::NUMBER_OF_UNITS] = {14, 12, 13};
 
-// State Variables
+// System state structure
 struct SystemState {
-    bool unitsEnabled[NUMBER_OF_UNITS] = {false, false, false};
-    bool previousWaterLevelStates[NUMBER_OF_UNITS] = {false, false, false};
-    bool waterLevelStates[NUMBER_OF_UNITS] = {false, false, false};
-    long atomizerOnIntervals[NUMBER_OF_UNITS] = {5000, 5000, 5000};
-    long atomizerOffIntervals[NUMBER_OF_UNITS] = {5000, 5000, 5000};
-    bool atomStates[NUMBER_OF_UNITS] = {false, false, false};
-    unsigned long previousMillis[NUMBER_OF_UNITS] = {0, 0, 0};
+    bool unitsEnabled[SystemConfig::NUMBER_OF_UNITS] = {false};
+    bool waterLevelStates[SystemConfig::NUMBER_OF_UNITS] = {false};
+    bool previousWaterLevelStates[SystemConfig::NUMBER_OF_UNITS] = {false};
+    unsigned long atomizerOnIntervals[SystemConfig::NUMBER_OF_UNITS] = {0};
+    unsigned long atomizerOffIntervals[SystemConfig::NUMBER_OF_UNITS] = {0};
     unsigned long previousHeartbeatMillis = 0;
     unsigned long lastConnectionCheckMillis = 0;
-    unsigned long lastNotificationMillis = 0;
-    unsigned long lastResetMillis = 0;
-    unsigned long startTime = 0;
-    bool isConnected = false;
     unsigned long lastFirmwareCheckMillis = 0;
 };
 
-<<<<<<< Updated upstream
-// PWM Configuration
-#define PWM_FREQUENCY_ATOMIZER 108000
-#define PWM_RESOLUTION_ATOMIZER 4 // 8-bit resolution
-#define PWM_RESOLUTION_ATOMIZER 4 // 8-bit resolution
-#define PWM_ATOMIZER_ON 9
-#define PWM_ATOMIZER_OFF 0
-
-// Timing Configurations
-const unsigned long INTERVAL_30_SECONDS = 30000;
-const unsigned long WIFI_RESET_INTERVAL = 60000;
-
-// Serial number
-extern String serialNumber;
-
-// Variables for system name and units
-extern String systemPath;
-extern String unitNames[3];
-extern String systemName;
-
-bool unitsEnabled[3] = {false, false, false}; 
-bool previousWaterLevelStates[3] = {false, false, false};
-bool waterLevelStates[3] = {false, false, false};
-long atomizerOnIntervals[3] = {5000, 5000, 5000};
-long atomizerOffIntervals[3] = {5000, 5000, 5000};
-bool atomStates[3] = {false, false, false};
-unsigned long previousMillis[3] = {0, 0, 0};
-
-unsigned long previousHeartbeatMillis = 0;
-unsigned long lastConnectionCheckMillis = 0;
-unsigned long lastNotificationMillis = 0;
-// Constants for reset interval
-const unsigned long resetInterval = 21600000; // 6 hours in milliseconds
-unsigned long lastResetMillis = 0;
-unsigned long startTime = 0; // Variable to store the start time of the delay
-bool isConnected = false;  // Flag to track Wi-Fi connection status
-=======
 // External declarations
 extern String serialNumber;
 extern SystemState systemState;
->>>>>>> Stashed changes
 
 #endif // CONFIG_H

@@ -1,10 +1,10 @@
 #ifndef OTA_MANAGER_H
 #define OTA_MANAGER_H
 
+#include "config.h"
+#include <ArduinoOTA.h>
 #include <HTTPClient.h>
 #include <Update.h>
-#include "http_client_wrapper.h"
-#include "config.h"
 #include <Firebase_ESP_Client.h>
 
 class OTAManager {
@@ -14,194 +14,145 @@ private:
     String serialNumber;
     
     void printPartitionInfo() {
-        const esp_partition_t *running = esp_ota_get_running_partition();
+        const esp_partition_t* running = esp_ota_get_running_partition();
         Serial.printf("Running partition: %s\n", running->label);
-    }
-    
-    void updateFirmwareVersionInFirestore(float newVersion) {
-        if (systemPath != "") {
-            String documentPath = systemPath;
-            FirebaseJson content;
-            content.set("fields/version/doubleValue", newVersion);
-
-            if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version")) {
-                Serial.printf("Updated Firestore firmware version to: %.2f\n", newVersion);
-            } else {
-                Serial.println("Failed to update firmware version in Firestore.");
-                Serial.println(fbdo.errorReason());
-            }
-        }
-    }
-    
-    float fetchLatestVersion() {
-        HTTPClient http;
-        ScopedHttpClient scopedHttp(http);
         
-        String versionUrl = "https://firebasestorage.googleapis.com/v0/b/" + String(FIREBASE_PROJECT_ID) +
-                            ".appspot.com/o/Version_" + serialNumber + ".txt?alt=media";
-
-        if (!scopedHttp.begin(versionUrl)) {
-            Serial.println("Failed to begin HTTP request");
-            return SystemConfig::FIRMWARE_VERSION;
-        }
-
-        int httpCode = scopedHttp.get().GET();
-
-        if (httpCode == HTTP_CODE_OK) {
-            String versionString = scopedHttp.get().getString();
-            return versionString.toFloat();
-        } else {
-            Serial.printf("Failed to fetch latest firmware version. HTTP Error: %s\n", 
-                         scopedHttp.get().errorToString(httpCode).c_str());
-            return SystemConfig::FIRMWARE_VERSION;
-        }
+        const esp_partition_t* next = esp_ota_get_next_update_partition(NULL);
+        Serial.printf("Next update partition: %s\n", next->label);
     }
     
-    void performOTAUpdate(String firmwareUrl, float newFirmwareVersion) {
-        HTTPClient http;
-        ScopedHttpClient scopedHttp(http);
+    bool updateFirmwareVersionInFirestore() {
+        if (systemPath == "") {
+            Serial.println("System path is not defined. Cannot update version.");
+            return false;
+        }
         
-        Serial.println("Connecting to firmware URL...");
-        if (!scopedHttp.begin(firmwareUrl)) {
-            Serial.println("Failed to begin HTTP request");
-            return;
-        }
-
-        int httpCode = scopedHttp.get().GET();
-
-        if (httpCode == HTTP_CODE_OK) {
-            int contentLength = scopedHttp.get().getSize();
-            WiFiClient *stream = scopedHttp.get().getStreamPtr();
-
-            Serial.printf("Firmware size (expected): %d\n", contentLength);
-            Serial.printf("Available Flash Space: %d\n", ESP.getFreeSketchSpace());
-
-            printPartitionInfo();
-
-            if (contentLength > ESP.getFreeSketchSpace()) {
-                Serial.println("Not enough space for OTA update! Aborting...");
-                return;
-            }
-
-            Serial.println("Initializing OTA update...");
-            if (!Update.begin(contentLength)) {
-                Serial.println("Update.begin() failed! Not enough space?");
-                return;
-            }
-
-            Serial.println("Writing firmware...");
-            size_t written = 0;
-            int chunkSize = 1024;
-            unsigned long timeout = millis();
-            
-            while (written < contentLength) {
-                if (stream->available()) {
-                    uint8_t buffer[chunkSize];
-                    int bytesRead = stream->read(buffer, chunkSize);
-                    if (bytesRead <= 0) {
-                        Serial.println("Read error or no data.");
-                        break;
-                    }
-
-                    written += Update.write(buffer, bytesRead);
-                    Serial.printf("Total bytes written: %u\n", written);
-                    timeout = millis();
-                } else {
-                    delay(10);
-                    if (millis() - timeout > 10000) {
-                        Serial.println("Timeout waiting for more data.");
-                        break;
-                    }
-                }
-            }
-
-            Serial.printf("Final bytes written: %u\n", written);
-
-            if (written == contentLength) {
-                Serial.println("OTA update successful!");
-                updateFirmwareVersionInFirestore(newFirmwareVersion);
-
-                Serial.println("Finishing update...");
-                if (Update.end()) {
-                    Serial.println("Rebooting ESP32...");
-                    delay(3000);
-                    ESP.restart();
-                } else {
-                    Serial.println("Update.end() failed!");
-                }
-            } else {
-                Serial.println("OTA update failed: Incomplete write!");
-            }
-        } else {
-            Serial.printf("Failed to download firmware: HTTP Error %d\n", httpCode);
-        }
-    }
-
-public:
-    OTAManager(FirebaseData& fbdo, const String& path, const String& serial) 
-        : fbdo(fbdo), systemPath(path), serialNumber(serial) {}
-    
-    void checkForUpdates() {
         String documentPath = systemPath;
-
+        FirebaseJson content;
+        content.set("fields/version/stringValue", SystemConfig::FIRMWARE_VERSION);
+        
+        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version")) {
+            Serial.println("System version updated successfully in Firestore.");
+            return true;
+        } else {
+            Serial.println("Failed to update system version.");
+            Serial.println(fbdo.errorReason());
+            return false;
+        }
+    }
+    
+    String fetchLatestVersion() {
+        String documentPath = systemPath;
         if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
             FirebaseJson json;
             json.setJsonData(fbdo.payload());
             FirebaseJsonData jsonData;
-
-            float cloudVersion = SystemConfig::FIRMWARE_VERSION;
-            if (json.get(jsonData, "fields/version/doubleValue")) {
-                cloudVersion = jsonData.floatValue;
-                Serial.printf("Cloud Firmware Version: %.2f\n", cloudVersion);
-            } else {
-                Serial.println("Failed to get firmware version from Firestore.");
+            
+            if (json.get(jsonData, "fields/version/stringValue")) {
+                return jsonData.stringValue;
             }
-
-            float storageVersion = fetchLatestVersion();
-            Serial.printf("Storage Firmware Version: %.2f\n", storageVersion);
-
-            if (storageVersion > cloudVersion) {
-                Serial.println("New firmware available. Proceeding with update...");
-
-                String firmwareUrl;
-                firmwareUrl.reserve(200);
-                firmwareUrl = "https://firebasestorage.googleapis.com/v0/b/";
-                firmwareUrl += FIREBASE_PROJECT_ID;
-                firmwareUrl += ".appspot.com/o/firmware_";
-                firmwareUrl += serialNumber;
-                firmwareUrl += ".bin?alt=media";
-
-                performOTAUpdate(firmwareUrl, storageVersion);
-            } else {
-                Serial.println("Firmware is up to date. No update needed.");
-            }
-        } else {
-            Serial.println("Failed to check Firestore for firmware update.");
-            Serial.println(fbdo.errorReason());
         }
+        return "";
+    }
+    
+    bool performOTAUpdate() {
+        String documentPath = systemPath;
+        if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str())) {
+            FirebaseJson json;
+            json.setJsonData(fbdo.payload());
+            FirebaseJsonData jsonData;
+            
+            if (json.get(jsonData, "fields/firmwareUrl/stringValue")) {
+                String firmwareUrl = jsonData.stringValue;
+                Serial.println("Firmware URL: " + firmwareUrl);
+                
+                ScopedHttpClient http;
+                if (!http.begin(firmwareUrl)) {
+                    Serial.println("Failed to begin HTTP request");
+                    return false;
+                }
+                
+                int httpCode = http.getClient().GET();
+                if (httpCode != HTTP_CODE_OK) {
+                    Serial.printf("HTTP GET failed, error: %s\n", http.getClient().errorToString(httpCode).c_str());
+                    return false;
+                }
+                
+                int contentLength = http.getClient().getSize();
+                Serial.printf("Content length: %d\n", contentLength);
+                
+                if (!Update.begin(contentLength)) {
+                    Serial.println("Failed to begin update");
+                    return false;
+                }
+                
+                size_t written = Update.writeStream(http.getClient());
+                Serial.printf("Written: %d\n", written);
+                
+                if (written != contentLength) {
+                    Serial.println("Written size mismatch");
+                    return false;
+                }
+                
+                if (!Update.end()) {
+                    Serial.println("Error occurred: " + String(Update.errorString()));
+                    return false;
+                }
+                
+                if (Update.isRunning()) {
+                    Serial.println("Update completed successfully");
+                    return true;
+                } else {
+                    Serial.println("Update failed");
+                    return false;
+                }
+            }
+        }
+        return false;
+    }
+
+public:
+    OTAManager(FirebaseData& fbdo, String systemPath, String serialNumber)
+        : fbdo(fbdo), systemPath(systemPath), serialNumber(serialNumber) {}
+    
+    void begin(const String& hostname) {
+        ArduinoOTA.setHostname(hostname.c_str());
+        ArduinoOTA.onStart([]() {
+            String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
+            Serial.printf("Start updating %s\n", type.c_str());
+        });
+        ArduinoOTA.onEnd([]() { Serial.println("\nUpdate Complete!"); });
+        ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+            Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+        });
+        ArduinoOTA.onError([](ota_error_t error) {
+            Serial.printf("Error[%u]: ", error);
+            if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
+            else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
+            else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
+            else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
+            else if (error == OTA_END_ERROR) Serial.println("End Failed");
+        });
+        ArduinoOTA.begin();
     }
     
     void updateSystemVersion() {
-        if (systemPath != "") {
-            String documentPath = systemPath;
-            FirebaseJson content;
-
-            content.set("fields/version/doubleValue", SystemConfig::FIRMWARE_VERSION);
-
-            String firmwareUrl = "https://firebasestorage.googleapis.com/v0/b/" + String(FIREBASE_PROJECT_ID) +
-                                ".appspot.com/o/firmware_" + serialNumber + ".bin?alt=media";
-
-            content.set("fields/firmware_url/stringValue", firmwareUrl);
-
-            if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version,firmware_url")) {
-                Serial.println("System version and firmware URL updated successfully in Firestore.");
-            } else {
-                Serial.println("Failed to update system version.");
-                Serial.println(fbdo.errorReason());
+        updateFirmwareVersionInFirestore();
+    }
+    
+    void checkForUpdates() {
+        String latestVersion = fetchLatestVersion();
+        if (latestVersion != "" && latestVersion != SystemConfig::FIRMWARE_VERSION) {
+            Serial.println("New firmware version available: " + latestVersion);
+            if (performOTAUpdate()) {
+                Serial.println("Update successful, restarting...");
+                ESP.restart();
             }
-        } else {
-            Serial.println("System path is not defined. Cannot update version.");
         }
+    }
+    
+    void handle() {
+        ArduinoOTA.handle();
     }
 };
 

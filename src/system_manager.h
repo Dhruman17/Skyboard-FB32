@@ -6,8 +6,10 @@
 #include "network_manager.h"
 #include "ota_manager.h"
 #include "unit_manager.h"
-#include "firebase_coms.h"
 #include <Firebase_ESP_Client.h>
+
+// Firebase path constant
+const char* systemPath = "systems";
 
 class SystemManager {
 private:
@@ -21,6 +23,8 @@ private:
     String systemName;
     String unitNames[SystemConfig::NUMBER_OF_UNITS];
     int connectionOffset;
+    unsigned long lastSystemDataUpdate = 0;
+    const unsigned long SYSTEM_DATA_UPDATE_INTERVAL = 30000; // Update system data every 30 seconds
     
     void sendHeartbeat() {
         String documentPath = systemPath;
@@ -36,9 +40,16 @@ private:
     }
     
     void updateSystemData() {
-        fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
-        unitManager.updateUnitNames(unitNames);
-        unitManager.updateUnitData();
+        unsigned long currentMillis = millis();
+        if (currentMillis - lastSystemDataUpdate >= SYSTEM_DATA_UPDATE_INTERVAL) {
+            lastSystemDataUpdate = currentMillis;
+            
+            if (Firebase.ready()) {
+                fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
+                unitManager.updateUnitNames(unitNames);
+                unitManager.updateUnitData();
+            }
+        }
     }
 
 public:
@@ -86,7 +97,7 @@ public:
                 unitManager.readWaterLevel();
                 unitManager.readECSensorValue();
                 systemState.previousHeartbeatMillis = currentMillis;
-                ArduinoOTA.handle();
+                otaManager.handle();
             }
             
             // Handle unit and light updates
@@ -104,8 +115,10 @@ public:
                 systemState.lastFirmwareCheckMillis = currentMillis;
             }
         } else {
+            Serial.println("System disconnected. Attempting to reconnect...");
             if (!networkManager.reconnect()) {
                 Serial.println("Failed to reconnect. Restarting...");
+                delay(3000);
                 ESP.restart();
             }
         }
