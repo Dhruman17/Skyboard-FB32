@@ -39,7 +39,6 @@ class SensorManager;
 class HardwareManager;
 class LightManager;
 class OTAManager;
-class PreferencesManager;
 
 // ============= Global Objects =============
 // Firebase objects for cloud communication (lightweight, can be global)
