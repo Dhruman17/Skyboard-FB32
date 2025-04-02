@@ -88,7 +88,7 @@ WiFiManager wifiManager;
  */
 void setup() {
     // Start serial communication for debugging
-    Serial.begin(115200);
+    Serial.begin(9600);
     randomSeed(analogRead(0));
     
     // Load settings from storage first
