@@ -36,6 +36,11 @@ A sophisticated vertical farming control system built for ESP32, featuring multi
 - Automatic reconnection handling
 - Data buffering for offline operation
 - Error reporting and diagnostics
+- Secure Firebase credentials management:
+  - Web-based configuration portal
+  - EEPROM storage for credentials
+  - Automatic reconnection with new credentials
+  - Password-protected access
 
 ### Smart Features
 - Automated irrigation scheduling
@@ -87,24 +92,32 @@ A sophisticated vertical farming control system built for ESP32, featuring multi
 ### Installation
 1. Clone this repository
 2. Install required libraries through Arduino IDE Library Manager or PlatformIO
-3. Configure Firebase credentials in `credentials.h`
-4. Set up your development environment:
+3. Set up your development environment:
    - For Arduino IDE: Configure board settings
    - For PlatformIO: Configure `platformio.ini`
-5. Upload the firmware to your ESP32
+4. Upload the firmware to your ESP32
 
 ### Configuration
-1. Update WiFi credentials in `credentials.h`
-2. Configure Firebase project settings
-3. Set system parameters in `config.h`:
+1. Initial Setup:
+   - Power on the system
+   - Connect to the "Skyboard_AP" WiFi network
+   - Access the configuration portal at 192.168.4.1
+   - Configure WiFi settings
+   - Configure Firebase credentials:
+     - API Key
+     - Email
+     - Password
+   - Save settings and restart
+
+2. System Parameters (in `config.h`):
    - System configuration
    - Update intervals
    - Sensor thresholds
    - Time settings
-4. Configure OTA update settings:
-   - Firebase OTA: Set firmware URL and path in `config.h`
-   - ArduinoOTA: Set hostname and password in `NetworkManager`
-5. Optional: Configure external RTC settings
+   - OTA update settings:
+     - Firebase OTA: Set firmware URL and path
+     - ArduinoOTA: Set hostname and password
+   - Optional: External RTC settings
 
 ## Usage
 
@@ -153,6 +166,23 @@ A sophisticated vertical farming control system built for ESP32, featuring multi
    - Use Arduino IDE to upload firmware
    - System automatically handles the update process
    - Development and testing support
+
+### Firebase Configuration
+1. Access the configuration portal:
+   - Connect to "Skyboard_AP" WiFi network
+   - Open browser and navigate to 192.168.4.1
+   - Click on "Firebase Settings" in the menu
+
+2. Enter Firebase credentials:
+   - API Key from Firebase Console
+   - Email address for authentication
+   - Password for authentication
+
+3. Save and apply:
+   - Click "Save Configuration"
+   - System will store credentials in EEPROM
+   - System will restart with new credentials
+   - Verify connection in Firebase console
 
 ## Firebase Data Structure
 
@@ -211,6 +241,10 @@ systems/{systemId}/
 6. Verify power supply stability
 7. Monitor system health metrics
 8. Review error logs
+9. Verify Firebase credentials:
+   - Check EEPROM storage
+   - Verify connection in Firebase console
+   - Test reconnection with new credentials
 
 ## Contributing
 1. Fork the repository

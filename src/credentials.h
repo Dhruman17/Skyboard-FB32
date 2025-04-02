@@ -16,10 +16,7 @@ const WiFiCredentials knownWiFi[] = {
 };
 const int knownWiFiCount = sizeof(knownWiFi) / sizeof(knownWiFi[0]);
 
-// Firebase Credentials
-#define API_KEY "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI"
+// Firebase Project ID
 #define FIREBASE_PROJECT_ID "skyacres-marketplace"
-#define USER_EMAIL "info@skyacres.ca"
-#define USER_PASSWORD "SkyacresBC"
 
 #endif // CREDENTIALS_H

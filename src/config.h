@@ -43,16 +43,20 @@ const char* systemPath = "systems";
  * System Configuration
  * Contains all hardware and software configuration parameters
  */
-struct SystemConfig {
+namespace SystemConfig {
     // Firmware version
     static constexpr const char* FIRMWARE_VERSION = "1.5";
+    
+    // Firebase API Key
+    static constexpr const char* FIREBASE_API_KEY = "AIzaSyDxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx";  // Replace with your actual API key
     
     // Number of units in the system
     static constexpr int NUMBER_OF_UNITS = 3;
     
     // Pin arrays
-    static const uint8_t WATER_LEVEL_PINS[NUMBER_OF_UNITS];
-    static const uint8_t ATOMIZER_PINS[NUMBER_OF_UNITS];
+    static constexpr uint8_t WATER_LEVEL_PINS[NUMBER_OF_UNITS] = {14, 12, 13};
+    static constexpr uint8_t ATOMIZER_PINS[NUMBER_OF_UNITS] = {25, 26, 27};
+    static constexpr uint8_t PCA_ADDRS[NUMBER_OF_UNITS] = {0xE0, 0xE2, 0xE4};
     
     // System pins
     static constexpr uint8_t SYSTEM_12V_POWER_PIN = 32;  // Required for atomizer power
@@ -68,9 +72,6 @@ struct SystemConfig {
     static constexpr uint8_t I2C_SDA = 21;
     static constexpr uint8_t I2C_SCL = 22;
     static constexpr uint8_t TCAADDR = 0x70;
-    
-    // PCA9546A Multiplexer Configuration
-    static const uint8_t PCA_ADDRS[NUMBER_OF_UNITS];
     
     // Sensor Channel Configuration
     static constexpr uint8_t FDC1004_CHANNEL = 2;  // Third channel for capacitive sensor
@@ -102,12 +103,18 @@ struct SystemConfig {
     static constexpr float WATER_LEVEL_MAX = 100.0;  // Maximum capacitance value
     static constexpr float UPPER_BOUND = 100.0;
     static constexpr float LOWER_BOUND = 0.0;
-};
 
-// Initialize static members
-const uint8_t SystemConfig::ATOMIZER_PINS[SystemConfig::NUMBER_OF_UNITS] = {25, 26, 27};
-const uint8_t SystemConfig::WATER_LEVEL_PINS[SystemConfig::NUMBER_OF_UNITS] = {14, 12, 13};
-const uint8_t SystemConfig::PCA_ADDRS[SystemConfig::NUMBER_OF_UNITS] = {0xE0, 0xE2, 0xE4};
+    // Firebase Configuration
+    static constexpr int FIREBASE_TIMEOUT = 10000;  // 10 seconds timeout for Firebase operations
+    static constexpr int FIREBASE_RETRY_DELAY = 5000;  // 5 seconds between retry attempts
+    static constexpr int MAX_FIREBASE_RETRIES = 3;  // Maximum number of retry attempts
+    
+    // EEPROM Configuration
+    static constexpr int EEPROM_SIZE = 512;
+    static constexpr int EEPROM_API_KEY_ADDR = 0;
+    static constexpr int EEPROM_EMAIL_ADDR = 128;
+    static constexpr int EEPROM_PASSWORD_ADDR = 256;
+}
 
 /**
  * System State Structure

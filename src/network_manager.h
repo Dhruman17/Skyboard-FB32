@@ -2,11 +2,14 @@
 #define NETWORK_MANAGER_H
 
 #include "config.h"
+#include "firebase_config_page.h"
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <Firebase_ESP_Client.h>
 #include <ArduinoOTA.h>
 #include <time.h>
+#include <EEPROM.h>
+#include <vector>
 
 /**
  * NetworkManager Class
@@ -41,17 +44,37 @@ private:
     bool initialized;
     SemaphoreHandle_t mutex;
     
+    // WiFiManager parameters (only email and password)
+    WiFiManagerParameter custom_email;
+    WiFiManagerParameter custom_password;
+    
     // Connection management constants
     static constexpr uint32_t WIFI_TIMEOUT = 10000;  // 10 seconds timeout for WiFi connection
-    static constexpr uint32_t FIREBASE_TIMEOUT = 10000;  // 10 seconds timeout for Firebase
-    static constexpr uint32_t RECONNECT_DELAY = 5000;  // 5 seconds between reconnection attempts
-    static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = 3;  // Maximum number of reconnection attempts
+    static constexpr uint32_t FIREBASE_TIMEOUT = SystemConfig::FIREBASE_TIMEOUT;
+    static constexpr uint32_t RECONNECT_DELAY = SystemConfig::FIREBASE_RETRY_DELAY;
+    static constexpr uint8_t MAX_RECONNECT_ATTEMPTS = SystemConfig::MAX_FIREBASE_RETRIES;
+    static constexpr uint32_t CONNECTION_CHECK_INTERVAL = 30000;  // 30 seconds
+    static constexpr uint32_t CONFIG_PORTAL_TIMEOUT = 60;  // 60 seconds
+    static constexpr uint8_t MIN_SIGNAL_QUALITY = 30;  // 30%
+    static constexpr float BACKOFF_MULTIPLIER = 1.5f;  // Exponential backoff multiplier
+    static constexpr uint32_t MAX_BACKOFF_DELAY = 30000;  // Maximum 30 seconds between attempts
     
     // Connection state tracking
     unsigned long lastConnectionCheck;
     unsigned long lastReconnectAttempt;
     uint8_t reconnectAttempts;
     bool wasConnected;
+    uint32_t currentBackoffDelay;
+    
+    // Firebase credentials with pre-allocated space
+    static constexpr size_t CREDENTIAL_MAX_LENGTH = 128;
+    String apiKey;  // Will be set from hardcoded value
+    String email;
+    String password;
+    
+    // OTA configuration
+    static constexpr const char* DEFAULT_OTA_PASSWORD = "admin";
+    String otaPassword;
     
     /**
      * Safely takes the mutex with timeout
@@ -66,6 +89,155 @@ private:
      */
     void giveMutex() {
         xSemaphoreGive(mutex);
+    }
+    
+    /**
+     * Loads Firebase credentials from EEPROM
+     */
+    void loadFirebaseCredentials() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in loadFirebaseCredentials");
+            return;
+        }
+        
+        // Initialize EEPROM
+        EEPROM.begin(SystemConfig::EEPROM_SIZE);
+        
+        // Set hardcoded API key
+        apiKey = SystemConfig::FIREBASE_API_KEY;
+        
+        // Read Email
+        email = "";
+        for (int i = 0; i < 128; i++) {
+            char c = EEPROM.read(SystemConfig::EEPROM_EMAIL_ADDR + i);
+            if (c == '\0') break;
+            email += c;
+        }
+        
+        // Read Password
+        password = "";
+        for (int i = 0; i < 128; i++) {
+            char c = EEPROM.read(SystemConfig::EEPROM_PASSWORD_ADDR + i);
+            if (c == '\0') break;
+            password += c;
+        }
+        
+        giveMutex();
+    }
+    
+    /**
+     * Validates Firebase credentials
+     * @return true if credentials are valid
+     */
+    bool validateCredentials() {
+        // API key is hardcoded, no need to validate
+        
+        if (email.length() < 5 || email.length() > CREDENTIAL_MAX_LENGTH) {
+            Serial.println("Invalid email length");
+            return false;
+        }
+        
+        if (password.length() < 6 || password.length() > CREDENTIAL_MAX_LENGTH) {
+            Serial.println("Invalid password length");
+            return false;
+        }
+        
+        // Basic email format validation
+        if (email.indexOf('@') == -1 || email.indexOf('.') == -1) {
+            Serial.println("Invalid email format");
+            return false;
+        }
+        
+        return true;
+    }
+    
+    /**
+     * Saves Firebase credentials to EEPROM
+     */
+    void saveFirebaseCredentials() {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in saveFirebaseCredentials");
+            return;
+        }
+        
+        // Validate credentials before saving
+        if (!validateCredentials()) {
+            Serial.println("Invalid credentials, not saving to EEPROM");
+            giveMutex();
+            return;
+        }
+        
+        // Only clear the credential sections, not the entire EEPROM
+        for (int i = 0; i < CREDENTIAL_MAX_LENGTH; i++) {
+            EEPROM.write(SystemConfig::EEPROM_EMAIL_ADDR + i, 0);
+            EEPROM.write(SystemConfig::EEPROM_PASSWORD_ADDR + i, 0);
+        }
+        
+        // Write Email
+        for (size_t i = 0; i < email.length(); i++) {
+            EEPROM.write(SystemConfig::EEPROM_EMAIL_ADDR + i, email[i]);
+        }
+        EEPROM.write(SystemConfig::EEPROM_EMAIL_ADDR + email.length(), '\0');
+        
+        // Write Password
+        for (size_t i = 0; i < password.length(); i++) {
+            EEPROM.write(SystemConfig::EEPROM_PASSWORD_ADDR + i, password[i]);
+        }
+        EEPROM.write(SystemConfig::EEPROM_PASSWORD_ADDR + password.length(), '\0');
+        
+        EEPROM.commit();
+        giveMutex();
+    }
+    
+    /**
+     * Sets up the WiFi Manager portal with Firebase configuration
+     */
+    void setupWiFiManager() {
+        // Remove any existing parameters
+        wifiManager.resetSettings();
+        
+        // Add parameters with current values (only email and password)
+        wifiManager.addParameter(new WiFiManagerParameter("email", "Firebase Email", email.c_str(), 128));
+        wifiManager.addParameter(new WiFiManagerParameter("password", "Firebase Password", password.c_str(), 128));
+        
+        // Set custom HTML page
+        wifiManager.setCustomHeadElement("<style>body{font-family:Arial,sans-serif;margin:20px;background-color:#f0f0f0;}</style>");
+        wifiManager.setCustomHeadElement("<div style='text-align:center;margin-bottom:20px;'><h1>Skyboard Configuration</h1></div>");
+        
+        // Set custom menu items
+        wifiManager.setCustomMenuHTML("<a href='/firebase'>Firebase Settings</a>");
+        
+        // Set custom save callback
+        wifiManager.setSaveConfigCallback([this]() {
+            // Get all parameters
+            WiFiManagerParameter** params = wifiManager.getParameters();
+            int paramCount = wifiManager.getParametersCount();
+            
+            // Find and update each parameter
+            for (int i = 0; i < paramCount; i++) {
+                WiFiManagerParameter* param = params[i];
+                if (strcmp(param->getID(), "email") == 0) {
+                    email = param->getValue();
+                } else if (strcmp(param->getID(), "password") == 0) {
+                    password = param->getValue();
+                }
+            }
+            
+            // Save to EEPROM
+            saveFirebaseCredentials();
+            
+            // Reinitialize Firebase with new credentials
+            initializeFirebase();
+        });
+    }
+    
+    /**
+     * Calculates the next backoff delay
+     * @return Delay in milliseconds
+     */
+    uint32_t calculateBackoffDelay() {
+        uint32_t delay = RECONNECT_DELAY * pow(BACKOFF_MULTIPLIER, reconnectAttempts);
+        return min(delay, MAX_BACKOFF_DELAY);
     }
     
     /**
@@ -85,18 +257,21 @@ private:
             Serial.println("Attempting to connect to WiFi...");
             
             // Configure WiFiManager
-            wifiManager.setConfigPortalTimeout(60);  // 60 second timeout for config portal
-            wifiManager.setMinimumSignalQuality(30);  // Minimum signal quality (30%)
+            wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
+            wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
             
             // Try to connect
             if (wifiManager.autoConnect("Skyboard_AP")) {
                 Serial.println("WiFi connected successfully");
                 success = true;
+                reconnectAttempts = 0;  // Reset on successful connection
+                currentBackoffDelay = RECONNECT_DELAY;  // Reset backoff delay
             } else {
                 Serial.println("Failed to connect to WiFi");
                 attempts++;
                 if (attempts < MAX_RECONNECT_ATTEMPTS) {
-                    delay(RECONNECT_DELAY);
+                    currentBackoffDelay = calculateBackoffDelay();
+                    delay(currentBackoffDelay);
                 }
             }
         }
@@ -151,9 +326,9 @@ private:
         while (!success && attempts < MAX_RECONNECT_ATTEMPTS) {
             Serial.println("Initializing Firebase...");
             
-            config.api_key = API_KEY;
-            auth.user.email = USER_EMAIL;
-            auth.user.password = USER_PASSWORD;
+            config.api_key = apiKey.c_str();
+            auth.user.email = email.c_str();
+            auth.user.password = password.c_str();
             
             Firebase.begin(&config, &auth);
             Firebase.reconnectWiFi(true);
@@ -217,11 +392,12 @@ private:
         
         bool success = false;
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
-            if (millis() - lastReconnectAttempt >= RECONNECT_DELAY) {
+            if (millis() - lastReconnectAttempt >= currentBackoffDelay) {
                 Serial.println("Attempting to reconnect to WiFi...");
                 success = connectToWiFi();
                 lastReconnectAttempt = millis();
                 reconnectAttempts++;
+                currentBackoffDelay = calculateBackoffDelay();
             }
         }
         
@@ -239,11 +415,22 @@ public:
     NetworkManager(FirebaseData& fbdo, FirebaseAuth& auth, FirebaseConfig& config)
         : fbdo(fbdo), auth(auth), config(config), initialized(false),
           lastConnectionCheck(0), lastReconnectAttempt(0),
-          reconnectAttempts(0), wasConnected(false) {
+          reconnectAttempts(0), wasConnected(false),
+          custom_email("email", "Firebase Email", "", 128),
+          custom_password("password", "Firebase Password", "", 128),
+          otaPassword(DEFAULT_OTA_PASSWORD) {
+        // Pre-allocate space for credentials
+        apiKey.reserve(CREDENTIAL_MAX_LENGTH);
+        email.reserve(CREDENTIAL_MAX_LENGTH);
+        password.reserve(CREDENTIAL_MAX_LENGTH);
+        
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
             Serial.println("Failed to create mutex in NetworkManager");
         }
+        
+        // Load Firebase credentials from EEPROM
+        loadFirebaseCredentials();
     }
     
     /**
@@ -267,6 +454,9 @@ public:
         }
         
         bool success = true;
+        
+        // Set up WiFi Manager with Firebase configuration
+        setupWiFiManager();
         
         if (!connectToWiFi()) {
             Serial.println("Wi-Fi setup failed");
@@ -303,8 +493,8 @@ public:
         
         unsigned long currentMillis = millis();
         
-        // Check connection every 30 seconds
-        if (currentMillis - lastConnectionCheck >= 30000) {
+        // Check connection every CONNECTION_CHECK_INTERVAL
+        if (currentMillis - lastConnectionCheck >= CONNECTION_CHECK_INTERVAL) {
             if (!checkWiFiConnection()) {
                 attemptReconnect();
             }
@@ -341,6 +531,25 @@ public:
     }
 
     /**
+     * Sets the OTA password
+     * @param password New OTA password
+     */
+    void setOTAPassword(const String& password) {
+        if (!takeMutex()) {
+            Serial.println("Failed to take mutex in setOTAPassword");
+            return;
+        }
+        
+        if (password.length() >= 6 && password.length() <= CREDENTIAL_MAX_LENGTH) {
+            otaPassword = password;
+        } else {
+            Serial.println("Invalid OTA password length");
+        }
+        
+        giveMutex();
+    }
+    
+    /**
      * Handles OTA updates for the system
      * @param systemName Name of the system
      * @return true if OTA handling successful
@@ -355,7 +564,7 @@ public:
         
         // Configure ArduinoOTA
         ArduinoOTA.setHostname(systemName.c_str());
-        ArduinoOTA.setPassword("admin");
+        ArduinoOTA.setPassword(otaPassword.c_str());
         
         // Start OTA server
         ArduinoOTA.begin();
