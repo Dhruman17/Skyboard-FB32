@@ -315,11 +315,13 @@ private:
             }
             
             // Save new credentials
-            email = custom_email->getValue();
-            password = custom_password->getValue();
-            
-            if (!saveFirebaseCredentials(email, password)) {
-                logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED, "Failed to save Firebase credentials", "NetworkManager::setupWiFiManager");
+            if (custom_email != nullptr && custom_password != nullptr) {
+                String newEmail = custom_email->getValue();
+                String newPassword = custom_password->getValue();
+                
+                if (!saveFirebaseCredentials(newEmail, newPassword)) {
+                    logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED, "Failed to save Firebase credentials", "NetworkManager::setupWiFiManager");
+                }
             }
             
             giveMutex();
@@ -571,12 +573,9 @@ public:
         email.reserve(CREDENTIAL_MAX_LENGTH);
         password.reserve(CREDENTIAL_MAX_LENGTH);
         
-        // Load saved credentials
-        loadFirebaseCredentials();
-        
-        // Create parameters with current values (empty or loaded)
-        custom_email = new WiFiManagerParameter("email", "Firebase Email", email.c_str(), CREDENTIAL_MAX_LENGTH);
-        custom_password = new WiFiManagerParameter("password", "Firebase Password", password.c_str(), CREDENTIAL_MAX_LENGTH);
+        // Create parameters with empty values
+        custom_email = new WiFiManagerParameter("email", "Firebase Email", "", CREDENTIAL_MAX_LENGTH);
+        custom_password = new WiFiManagerParameter("password", "Firebase Password", "", CREDENTIAL_MAX_LENGTH);
         
         // Add parameters to WiFiManager
         wifiManager.addParameter(custom_email);
@@ -621,6 +620,29 @@ public:
         }
         
         bool success = true;
+        
+        // Load Firebase credentials first
+        if (!loadFirebaseCredentials()) {
+            Serial.println("No Firebase credentials found. Will use default configuration.");
+        }
+        
+        // Remove old parameters if they exist
+        if (custom_email != nullptr) {
+            wifiManager.removeParameter(custom_email);
+            delete custom_email;
+        }
+        if (custom_password != nullptr) {
+            wifiManager.removeParameter(custom_password);
+            delete custom_password;
+        }
+        
+        // Create new parameters with current values
+        custom_email = new WiFiManagerParameter("email", "Firebase Email", email.c_str(), CREDENTIAL_MAX_LENGTH);
+        custom_password = new WiFiManagerParameter("password", "Firebase Password", password.c_str(), CREDENTIAL_MAX_LENGTH);
+        
+        // Add parameters to WiFiManager
+        wifiManager.addParameter(custom_email);
+        wifiManager.addParameter(custom_password);
         
         if (!connectToWiFi()) {
             Serial.println("Wi-Fi setup failed");

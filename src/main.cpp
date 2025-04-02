@@ -94,7 +94,7 @@ void setup() {
     delay(1000);  // Give serial time to initialize
     Serial.println("Starting initialization...");
     
-    // Initialize NVS first
+    // Initialize NVS first, before any other components
     Serial.println("Initializing NVS...");
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
