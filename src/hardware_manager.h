@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "error_manager.h"
+#include "mutex_manager.h"
 #include "Wire.h"
 
 /**
@@ -30,10 +31,9 @@
  * - FDC1004: Channel 2 for water level
  * - MCP3021: Channel 3 for EC
  */
-class HardwareManager {
+class HardwareManager : public MutexManager {
 private:
     bool initialized;
-    SemaphoreHandle_t mutex;
     
     // Hardware state tracking
     bool multiplexerStates[SystemConfig::NUMBER_OF_UNITS];
@@ -44,30 +44,15 @@ private:
     static constexpr uint8_t MAX_I2C_ERRORS = 3;
     
     /**
-     * Safely takes the mutex with timeout
-     * @return true if mutex was taken successfully
-     */
-    bool takeMutex() {
-        return xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE;
-    }
-    
-    /**
-     * Safely gives the mutex
-     */
-    void giveMutex() {
-        xSemaphoreGive(mutex);
-    }
-    
-    /**
      * Cleans up hardware resources
      */
     void cleanup() {
-        if (!takeMutex()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "cleanup");
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return;
         }
         
-        // Reset multiplexer states
+        // Reset all multiplexers
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             multiplexerStates[i] = false;
             pwmInitialized[i] = false;
@@ -75,12 +60,10 @@ private:
         
         // Reset I2C bus
         Wire.end();
-        
-        // Reset error count
-        i2cErrorCount = 0;
+        Wire.begin();
+        Wire.setClock(100000);
         
         initialized = false;
-        giveMutex();
     }
     
     /**
@@ -88,8 +71,8 @@ private:
      * @return true if initialization successful
      */
     bool initialize() {
-        if (!takeMutex()) {
-            Serial.printf(SystemConfig::ERROR_FORMAT_MUTEX, "initialize");
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -120,7 +103,6 @@ private:
             cleanup();
         }
         
-        giveMutex();
         return success;
     }
     
@@ -131,8 +113,8 @@ private:
      */
     bool initializePWM(int unitIndex) {
         if (unitIndex < 0 || unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
-            ::ErrorManager::hardwareError(
-                ::ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
                 "Invalid unit index for PWM initialization",
                 "HardwareManager::initializePWM"
             );
@@ -152,8 +134,8 @@ private:
                 pin = SystemConfig::ATOMIZER_PIN_3;
                 break;
             default:
-                ::ErrorManager::hardwareError(
-                    ::ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                ErrorManager::hardwareError(
+                    ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
                     "Invalid unit index for PWM initialization",
                     "HardwareManager::initializePWM"
                 );
@@ -176,26 +158,27 @@ private:
      * @return true if selection successful
      */
     bool selectUnit(int unitIndex) {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in selectUnit");
+        if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                "Invalid unit index",
+                "HardwareManager::selectUnit"
+            );
             return false;
         }
         
         bool success = false;
-        if (unitIndex >= 0 && unitIndex < SystemConfig::NUMBER_OF_UNITS) {
-            Wire.beginTransmission(SystemConfig::TCAADDR);
-            Wire.write(1 << unitIndex);
-            success = Wire.endTransmission() == 0;
-            
-            if (success) {
-                multiplexerStates[unitIndex] = true;
-            } else {
-                i2cErrorCount++;
-                Serial.println("Failed to select unit " + String(unitIndex));
-            }
+        Wire.beginTransmission(SystemConfig::TCAADDR);
+        Wire.write(1 << unitIndex);
+        success = Wire.endTransmission() == 0;
+        
+        if (success) {
+            multiplexerStates[unitIndex] = true;
+        } else {
+            i2cErrorCount++;
+            Serial.println("Failed to select unit " + String(unitIndex));
         }
         
-        giveMutex();
         return success;
     }
     
@@ -206,26 +189,26 @@ private:
      * @return true if selection successful
      */
     bool selectSensor(int unitIndex, int sensorChannel) {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in selectSensor");
+        if (unitIndex >= SystemConfig::NUMBER_OF_UNITS || sensorChannel >= SystemConfig::MAX_SENSOR_CHANNELS) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                "Invalid unit or sensor channel",
+                "HardwareManager::selectSensor"
+            );
             return false;
         }
         
         bool success = false;
-        if (unitIndex >= 0 && unitIndex < SystemConfig::NUMBER_OF_UNITS &&
-            sensorChannel >= 0 && sensorChannel < 4) {
-            Wire.beginTransmission(SystemConfig::PCA_ADDRS[unitIndex]);
-            Wire.write(1 << sensorChannel);
-            success = Wire.endTransmission() == 0;
-            
-            if (!success) {
-                i2cErrorCount++;
-                Serial.println("Failed to select sensor channel " + String(sensorChannel) + 
-                             " for unit " + String(unitIndex));
-            }
+        Wire.beginTransmission(SystemConfig::PCA_ADDRS[unitIndex]);
+        Wire.write(1 << sensorChannel);
+        success = Wire.endTransmission() == 0;
+        
+        if (!success) {
+            i2cErrorCount++;
+            Serial.println("Failed to select sensor channel " + String(sensorChannel) + 
+                         " for unit " + String(unitIndex));
         }
         
-        giveMutex();
         return success;
     }
     
@@ -233,7 +216,8 @@ private:
      * Resets I2C bus if too many errors occur
      */
     void resetI2CIfNeeded() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return;
         }
         
@@ -250,25 +234,17 @@ private:
                 selectUnit(i);
             }
         }
-        
-        giveMutex();
     }
 
 public:
     /**
      * Constructor
      */
-    HardwareManager() : initialized(false), mutex(NULL), i2cErrorCount(0) {
+    HardwareManager() : initialized(false), i2cErrorCount(0) {
         // Initialize arrays
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             multiplexerStates[i] = false;
             pwmInitialized[i] = false;
-        }
-        
-        // Create mutex for thread safety
-        mutex = xSemaphoreCreateMutex();
-        if (mutex == NULL) {
-            Serial.println("CRITICAL ERROR: Failed to create mutex in HardwareManager");
         }
     }
     
@@ -278,13 +254,6 @@ public:
      */
     ~HardwareManager() {
         cleanup();
-        if (mutex != NULL) {
-            // Ensure we're not holding the mutex before deleting
-            if (xSemaphoreGetMutexHolder(mutex) == xTaskGetCurrentTaskHandle()) {
-                xSemaphoreGive(mutex);
-            }
-            vSemaphoreDelete(mutex);
-        }
     }
     
     /**
@@ -305,17 +274,40 @@ public:
      * @return true if selection successful
      */
     bool selectUnitAndSensor(int unitIndex, int sensorChannel) {
-        if (!initialized) {
-            Serial.println("HardwareManager not initialized");
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
-        resetI2CIfNeeded();
+        if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                "Invalid unit index",
+                "HardwareManager::selectUnitAndSensor"
+            );
+            return false;
+        }
         
+        if (sensorChannel >= SystemConfig::MAX_SENSOR_CHANNELS) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                "Invalid sensor channel",
+                "HardwareManager::selectUnitAndSensor"
+            );
+            return false;
+        }
+        
+        // Select unit first
         if (!selectUnit(unitIndex)) {
             return false;
         }
-        return selectSensor(unitIndex, sensorChannel);
+        
+        // Then select sensor channel
+        if (!selectSensor(unitIndex, sensorChannel)) {
+            return false;
+        }
+        
+        return true;
     }
     
     /**
@@ -324,15 +316,16 @@ public:
      * @return true if unit is selected
      */
     bool isUnitSelected(int unitIndex) {
-        if (!takeMutex()) {
+        if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                "Invalid unit index",
+                "HardwareManager::isUnitSelected"
+            );
             return false;
         }
         
-        bool selected = unitIndex >= 0 && unitIndex < SystemConfig::NUMBER_OF_UNITS ? 
-                       multiplexerStates[unitIndex] : false;
-        
-        giveMutex();
-        return selected;
+        return multiplexerStates[unitIndex];
     }
     
     /**
@@ -341,15 +334,16 @@ public:
      * @return true if PWM is initialized
      */
     bool isPWMInitialized(int unitIndex) {
-        if (!takeMutex()) {
+        if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            ErrorManager::hardwareError(
+                ErrorManager::ErrorCode::HARDWARE_INVALID_STATE,
+                "Invalid unit index",
+                "HardwareManager::isPWMInitialized"
+            );
             return false;
         }
         
-        bool initialized = unitIndex >= 0 && unitIndex < SystemConfig::NUMBER_OF_UNITS ? 
-                          pwmInitialized[unitIndex] : false;
-        
-        giveMutex();
-        return initialized;
+        return pwmInitialized[unitIndex];
     }
 };
 

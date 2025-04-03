@@ -43,6 +43,7 @@
 namespace SystemConfig {
     // System Configuration
     static constexpr int NUMBER_OF_UNITS = 3;  // Number of vertical farming units
+    static constexpr int MAX_SENSOR_CHANNELS = 8;  // Maximum number of sensor channels per unit
     static constexpr const char* FIRMWARE_VERSION = "1.5";  // Current firmware version
     
     // System Identification
@@ -51,9 +52,15 @@ namespace SystemConfig {
     // 2. OTA update identification
     // 3. System identification in logs
     static constexpr const char* SERIAL_NUMBER = "SME102345678";  // System serial number
+    static constexpr size_t UNIT_NAME_MAX_LENGTH = 32;  // Maximum length of unit name
+    
+    // OTA Update Configuration
+    static constexpr const char* FIRMWARE_URL = "https://storage.googleapis.com/skyboard-firmware/";  // Base URL for firmware updates
+    static constexpr const char* FIRMWARE_PATH = "firmware.bin";  // Path to firmware file
     
     // Firebase Configuration
-    static constexpr const char* FIREBASE_PROJECT_ID = "skyboard-fb32";  // Firebase project ID
+    static constexpr const char* FIREBASE_PROJECT_ID = "skyacres-marketplace";  // Firebase project ID
+    static constexpr const char* FIREBASE_API_KEY = "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI";  // Firebase API key
     static constexpr const char* systemPath = "systems";  // Base path for system data
     static constexpr const char* UNIT_PATH_FORMAT = "systems/%s/units/%d";
     static constexpr const char* SYSTEM_PATH_FORMAT = "systems/%s";
@@ -80,7 +87,7 @@ namespace SystemConfig {
     static constexpr int ATOMIZER_PIN_1 = 25;  // Atomizer 1 PWM pin
     static constexpr int ATOMIZER_PIN_2 = 26;  // Atomizer 2 PWM pin
     static constexpr int ATOMIZER_PIN_3 = 27;  // Atomizer 3 PWM pin
-    static constexpr int ATOMIZER_PIN_4 = 14;  // Atomizer 4 PWM pin
+    static constexpr int ATOMIZER_PINS[] = {ATOMIZER_PIN_1, ATOMIZER_PIN_2, ATOMIZER_PIN_3};  // Array of atomizer pins
     
     // Unit Configuration
     static constexpr const char* UNIT_NAME_PATH = "fields/unitName/stringValue";
@@ -109,7 +116,7 @@ namespace SystemConfig {
     static constexpr uint32_t I2C_RETRY_DELAY_MS = 100;  // Delay between I2C retries
     static constexpr uint32_t SENSOR_RETRY_DELAY_MS = 100;  // Delay between sensor retries
     static constexpr uint32_t ERROR_RESET_DELAY_MS = 1000;  // Delay before system reset after max errors
-    static constexpr uint32_t MUTEX_TIMEOUT_MS = 100;  // Standard mutex timeout
+    static constexpr uint32_t MUTEX_TIMEOUT_MS = 500;  // Standard mutex timeout (increased from 100ms)
     static constexpr uint32_t SENSOR_READING_DELAY_MS = 100;  // Delay between sensor readings
     static constexpr uint8_t NUM_SENSOR_SAMPLES = 5;  // Number of samples to average for sensor readings
     
@@ -120,6 +127,8 @@ namespace SystemConfig {
     static constexpr uint8_t MCP3021_ADDR = 0x48;  // MCP3021 sensor address
     static constexpr uint8_t FDC1004_CHANNEL = 2;  // FDC1004 channel for water level
     static constexpr uint8_t MCP3021_CHANNEL = 3;  // MCP3021 channel for EC
+    static constexpr uint8_t WATER_LEVEL_CHANNEL = 2;  // Water level sensor channel
+    static constexpr uint8_t EC_CHANNEL = 3;  // EC sensor channel
     
     // PWM Configuration
     static constexpr uint32_t PWM_FREQUENCY_ATOMIZER = 25000;  // 25kHz for atomizer
@@ -143,6 +152,8 @@ namespace SystemConfig {
     static constexpr unsigned long INTERVAL_30_SECONDS = 30000;  // 30 seconds in milliseconds
     static constexpr unsigned long INTERVAL_1_MINUTE = 60000;  // 1 minute in milliseconds
     static constexpr unsigned long INTERVAL_5_MINUTES = 300000;  // 5 minutes in milliseconds
+    static constexpr unsigned long OTA_CHECK_INTERVAL = 300000;  // 5 minutes in milliseconds
+    static constexpr unsigned long SETTINGS_SAVE_INTERVAL = 300000;  // 5 minutes in milliseconds
     
     // Heap Monitoring
     static constexpr uint32_t HEAP_WARNING_THRESHOLD = 15000;  // Warning threshold in bytes
@@ -151,7 +162,7 @@ namespace SystemConfig {
     // WiFi Manager Configuration
     static constexpr uint32_t CONFIG_PORTAL_TIMEOUT = 180;  // 3 minutes timeout for config portal
     static constexpr int MIN_SIGNAL_QUALITY = 30;  // Minimum WiFi signal quality in dBm
-    static constexpr bool WIFI_MANAGER_RESET_ENABLED = true;  // Enable/disable WiFi Manager reset functionality through web interface
+    static constexpr bool WIFI_MANAGER_RESET_ENABLED = false;  // Enable/disable WiFi Manager reset functionality through web interface
     
     // Water Level Sensor Configuration
     enum class WaterLevelSensorType {
@@ -175,6 +186,16 @@ namespace DefaultValues {
     constexpr bool UNITS_ENABLED[SystemConfig::NUMBER_OF_UNITS] = {true, true, true};
     constexpr unsigned long ATOMIZER_ON_INTERVAL = 300;  // 5 minutes
     constexpr unsigned long ATOMIZER_OFF_INTERVAL = 1800;  // 30 minutes
+    constexpr unsigned long DEFAULT_ATOMIZER_ON_INTERVAL = 300;  // 5 minutes
+    constexpr unsigned long DEFAULT_ATOMIZER_OFF_INTERVAL = 1800;  // 30 minutes
+    
+    // Sensor Settings
+    constexpr float DEFAULT_WATER_LEVEL = 0.0f;
+    constexpr float DEFAULT_EC_VALUE = 0.0f;
+    
+    // System Settings
+    constexpr const char* DEFAULT_SYSTEM_NAME = "Skyboard System";
+    constexpr const char* DEFAULT_FIRMWARE_VERSION = SystemConfig::FIRMWARE_VERSION;
 }
 
 /**
@@ -209,6 +230,9 @@ struct SystemState {
     unsigned long lastLightStateChange = 0;  // Track when light state last changed
     bool isLightOn = false;  // Current light state
     
+    // System Settings
+    String systemName;  // Name of the system
+    
     // System Timing
     unsigned long previousHeartbeatMillis = 0;
     unsigned long lastConnectionCheckMillis = 0;
@@ -222,6 +246,11 @@ struct SystemState {
     // Heap Monitoring
     bool heapWarning = false;  // Whether heap is below warning threshold
     unsigned long minHeapSeen = ESP.getFreeHeap();  // Minimum heap seen during operation
+
+    // Network Status
+    bool isOnline = false;  // Whether system is connected to network
+    unsigned long lastConnectionAttempt = 0;  // Timestamp of last connection attempt
+    String connectionStatus = "offline";  // Current connection status
 };
 
 // External declarations

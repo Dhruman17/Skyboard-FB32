@@ -5,6 +5,7 @@
 #include "error_manager.h"
 #include "firebase_manager.h"
 #include "light_manager.h"
+#include "mutex_manager.h"
 #include "network_manager.h"
 #include "ota_manager.h"
 #include "unit_manager.h"
@@ -48,7 +49,7 @@
  * - Firmware check: Every hour
  * - Connection check: Every 30 seconds
  */
-class SystemManager {
+class SystemManager : public MutexManager {
 private:
     NetworkManager& networkManager;
     OTAManager& otaManager;
@@ -75,10 +76,6 @@ private:
     bool lightMasterSwitch;
     bool timeCycleEnabled;
     
-    // Mutex for thread safety
-    SemaphoreHandle_t mutex;
-    static constexpr uint32_t MUTEX_TIMEOUT_MS = 100;
-    
     // Connection state tracking
     unsigned long lastConnectionCheck;
     unsigned long lastReconnectAttempt;
@@ -92,67 +89,18 @@ private:
     uint32_t minHeapEver;
     
     /**
-     * Takes mutex with timeout
-     * Thread-safe: Yes
-     * @return true if mutex was taken
-     */
-    bool takeMutex() {
-        Serial.printf("[SystemManager] Attempting to take mutex (timeout: %dms)\n", MUTEX_TIMEOUT_MS);
-        if (mutex == NULL) {
-            Serial.println("[SystemManager] ERROR: Mutex is NULL");
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
-                "Mutex is NULL",
-                "SystemManager::takeMutex"
-            );
-            return false;
-        }
-        
-        // Add a small delay before taking mutex to prevent race conditions
-        delay(1);
-        
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
-            Serial.println("[SystemManager] ERROR: Failed to take mutex");
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "SystemManager::takeMutex"
-            );
-            return false;
-        }
-        Serial.println("[SystemManager] Successfully took mutex");
-        return true;
-    }
-    
-    /**
-     * Releases mutex
-     * Thread-safe: Yes
-     */
-    void giveMutex() {
-        if (mutex == NULL) {
-            Serial.println("[SystemManager] ERROR: Attempting to give NULL mutex");
-            return;
-        }
-        xSemaphoreGive(mutex);
-        Serial.println("[SystemManager] Successfully gave mutex");
-        // Add a small delay after giving mutex to prevent race conditions
-        delay(1);
-    }
-    
-    /**
      * Cleans up string resources
      * Thread-safe: Yes
      */
     void cleanupStrings() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return;
         }
         
         systemName = "";
         lightOnTime = "";
         lightOffTime = "";
-        
-        giveMutex();
     }
     
     /**
@@ -160,7 +108,8 @@ private:
      * Thread-safe: Yes
      */
     void initializeStrings() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return;
         }
         
@@ -172,8 +121,6 @@ private:
         systemName.reserve(SYSTEM_NAME_MAX_LENGTH + extraCapacity);
         lightOnTime.reserve(TIME_STRING_MAX_LENGTH + extraCapacity);
         lightOffTime.reserve(TIME_STRING_MAX_LENGTH + extraCapacity);
-        
-        giveMutex();
     }
     
     /**
@@ -206,7 +153,8 @@ private:
      * Thread-safe: Yes
      */
     void sendHeartbeat() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return;
         }
         
@@ -215,15 +163,13 @@ private:
         snprintf(pathBuffer, sizeof(pathBuffer), "systems/%s", systemName.c_str());
         
         // Update heartbeat timestamp in Firebase
-        if (!firebaseManager.updateField(pathBuffer, "heartbeat", String(millis()))) {
+        if (!firebaseManager.updateDocument(pathBuffer, String(millis()), "number")) {
             ErrorManager::firebaseError(
                 ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
                 "Failed to send heartbeat",
                 "SystemManager::sendHeartbeat"
             );
         }
-        
-        giveMutex();
     }
     
     /**
@@ -232,7 +178,8 @@ private:
      * @return true if update was successful
      */
     bool updateSystemData() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -279,8 +226,6 @@ private:
             success = false;
         }
         
-        giveMutex();
-        
         if (!success) {
             ErrorManager::systemError(
                 ErrorManager::ErrorCode::SYSTEM_UPDATE_FAILED,
@@ -298,7 +243,8 @@ private:
      * @return true if save was successful
      */
     bool saveSettingsToStorage() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -329,8 +275,23 @@ private:
             }
         }
         
-        giveMutex();
         return success;
+    }
+
+    void checkHeap() {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
+            return;
+        }
+        
+        uint32_t currentHeap = ESP.getFreeHeap();
+        if (currentHeap < SystemConfig::HEAP_WARNING_THRESHOLD) {
+            char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+            snprintf(pathBuffer, sizeof(pathBuffer), SystemConfig::UNIT_PATH_FORMAT, 
+                SystemConfig::SERIAL_NUMBER, 0);
+            
+            firebaseManager.updateDocument(pathBuffer, String(currentHeap < SystemConfig::HEAP_WARNING_THRESHOLD), "boolean");
+        }
     }
 
 public:
@@ -357,21 +318,6 @@ public:
         
         Serial.println("[SystemManager] Starting constructor");
         
-        // Create mutex first, before any other operations
-        Serial.println("[SystemManager] Creating mutex");
-        mutex = xSemaphoreCreateMutex();
-        if (mutex == NULL) {
-            Serial.println("[SystemManager] ERROR: Failed to create mutex");
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
-                "Failed to create SystemManager mutex",
-                "SystemManager::SystemManager"
-            );
-            // Don't proceed with initialization if mutex creation failed
-            return;
-        }
-        Serial.println("[SystemManager] Successfully created mutex");
-        
         // Initialize string buffers without taking mutex
         Serial.println("[SystemManager] Initializing string buffers");
         systemName.reserve(SYSTEM_NAME_MAX_LENGTH + 10);
@@ -386,10 +332,6 @@ public:
      */
     ~SystemManager() {
         Serial.println("[SystemManager] Starting destructor");
-        if (mutex != NULL) {
-            Serial.println("[SystemManager] Deleting mutex");
-            vSemaphoreDelete(mutex);
-        }
         Serial.println("[SystemManager] Cleaning up strings");
         cleanupStrings();
         Serial.println("[SystemManager] Destructor completed");
@@ -405,7 +347,8 @@ public:
             return true;
         }
         
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -504,7 +447,6 @@ public:
             initialized = true;
         }
         
-        giveMutex();
         return success;
     }
     
@@ -513,12 +455,40 @@ public:
      * Should be called in the main loop
      */
     void update() {
-        if (!takeMutex()) {
-            return;
-        }
-
         unsigned long currentMillis = millis();
         unsigned long adjustedMillis = currentMillis + connectionOffset;
+
+        // Only take mutex when we need to update something
+        bool needsUpdate = false;
+        
+        // Check if we need to update heap status
+        if (networkManager.isConnected() && currentMillis - lastHeapCheck >= HEAP_MONITOR_INTERVAL) {
+            needsUpdate = true;
+        }
+        
+        // Check if we need to do periodic updates
+        if (adjustedMillis - systemState.previousHeartbeatMillis >= SystemConfig::INTERVAL_30_SECONDS) {
+            needsUpdate = true;
+        }
+        
+        // Check if we need to check for firmware updates
+        if (networkManager.isConnected() && 
+            currentMillis - systemState.lastFirmwareCheckMillis >= SystemConfig::INTERVAL_5_MINUTES) {
+            needsUpdate = true;
+        }
+        
+        // If no updates needed, return early
+        if (!needsUpdate) {
+            delay(100);  // Small delay to prevent tight loop
+            return;
+        }
+        
+        // Use ScopedLock for automatic mutex management
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
+            delay(100);  // Small delay if we can't take mutex
+            return;
+        }
 
         // Monitor heap usage every hour (online only)
         if (networkManager.isConnected() && currentMillis - lastHeapCheck >= HEAP_MONITOR_INTERVAL) {
@@ -544,9 +514,9 @@ public:
             snprintf(pathBuffer, sizeof(pathBuffer), "systems/%s", systemName.c_str());
             
             // Update in Firebase
-            firebaseManager.updateField(pathBuffer, "heapStatus", String(currentHeap));
-            firebaseManager.updateField(pathBuffer, "minEver", String(minHeapEver));
-            firebaseManager.updateField(pathBuffer, "warning", String(currentHeap < SystemConfig::HEAP_WARNING_THRESHOLD));
+            firebaseManager.updateDocument(pathBuffer, String(currentHeap), "number");
+            firebaseManager.updateDocument(pathBuffer, String(minHeapEver), "number");
+            firebaseManager.updateDocument(pathBuffer, String(currentHeap < SystemConfig::HEAP_WARNING_THRESHOLD), "boolean");
             
             lastHeapCheck = currentMillis;
         }
@@ -587,7 +557,7 @@ public:
             systemState.lastFirmwareCheckMillis = currentMillis;
         }
         
-        giveMutex();
+        delay(100);  // Small delay after updates to prevent tight loop
     }
     
     /**
@@ -596,7 +566,8 @@ public:
      * @return true if refresh was successful
      */
     bool refreshSystemData() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
 
@@ -635,7 +606,6 @@ public:
             }
         }
         
-        giveMutex();
         return success;
     }
     
@@ -654,14 +624,12 @@ public:
      * @return true if reset was successful
      */
     bool resetWiFiManager() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
 
-        bool success = networkManager.resetWiFiManager();
-        
-        giveMutex();
-        return success;
+        return networkManager.resetWiFiManager();
     }
 };
 

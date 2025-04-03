@@ -11,6 +11,7 @@
 #include <time.h>
 #include <Preferences.h>
 #include <vector>
+#include "mutex_manager.h"
 
 // Static buffer sizes
 static constexpr size_t ERROR_BUFFER_SIZE = 256;
@@ -115,25 +116,35 @@ private:
     String password;
     String otaPassword;
     
-    // Mutex for thread safety
-    SemaphoreHandle_t mutex;
-    
     // System state
     bool initialized;
     bool timeSet;  // Track if time has been synchronized
     
+    MutexManager mutexManager;
+
     /**
-     * Logs an error to the ring buffer and ErrorManager
+     * Logs an error with appropriate category
+     * Thread-safe: Yes
      * @param code Error code
      * @param message Error message
      * @param location Error location
      */
-    void logError(ErrorManager::ErrorCode code, const char* message, const char* location) {
+    void logError(ErrorManager::ErrorCode code, const String& message, const String& location) {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "NetworkManager::logError"
+            );
+            return;
+        }
+
         // Store in ring buffer
         ErrorLog& log = errorLogs[currentErrorIndex];
-        strncpy(log.message, message, ERROR_BUFFER_SIZE - 1);
+        strncpy(log.message, message.c_str(), ERROR_BUFFER_SIZE - 1);
         log.message[ERROR_BUFFER_SIZE - 1] = '\0';
-        strncpy(log.location, location, ERROR_LOCATION_SIZE - 1);
+        strncpy(log.location, location.c_str(), ERROR_LOCATION_SIZE - 1);
         log.location[ERROR_LOCATION_SIZE - 1] = '\0';
         log.code = code;
         log.timestamp = millis();
@@ -162,72 +173,47 @@ private:
     }
     
     /**
-     * Safely takes the mutex with timeout
-     * Thread-safe: Yes
-     * @return true if mutex was taken successfully
-     */
-    bool takeMutex() {
-        if (mutex == NULL) {
-            Serial.println("[NetworkManager] ERROR: Mutex is NULL");
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
-                "Mutex is NULL",
-                "NetworkManager::takeMutex"
-            );
-            return false;
-        }
-        
-        // Try to take mutex with timeout
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
-            Serial.println("[NetworkManager] ERROR: Failed to take mutex");
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "NetworkManager::takeMutex"
-            );
-            return false;
-        }
-        return true;
-    }
-    
-    /**
-     * Safely gives the mutex
-     * Thread-safe: Yes
-     */
-    void giveMutex() {
-        if (mutex == NULL) {
-            Serial.println("[NetworkManager] ERROR: Attempting to give NULL mutex");
-            return;
-        }
-        xSemaphoreGive(mutex);
-    }
-    
-    /**
      * Loads Firebase credentials from Preferences
      * @return true if credentials were loaded successfully
      */
     bool loadFirebaseCredentials() {
-        // Initialize Preferences
-        Preferences preferences;
-        preferences.begin(PREF_NAMESPACE, true);  // Read-only mode
+        const int MAX_RETRIES = 3;
+        int retryCount = 0;
         
-        // Read credentials from Preferences
-        email = preferences.getString(PREF_EMAIL_KEY, "");
-        password = preferences.getString(PREF_PASSWORD_KEY, "");
-        
-        // Close Preferences
-        preferences.end();
-        
-        // Validate credentials
-        bool valid = !email.isEmpty() && !password.isEmpty();
-        
-        if (!valid) {
-            snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Firebase credentials not found in Preferences");
-            snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::loadFirebaseCredentials");
-            logError(ErrorManager::ErrorCode::NETWORK_INVALID_CREDENTIALS, errorMsgBuffer, errorLocBuffer);
+        while (retryCount < MAX_RETRIES) {
+            MutexManager::ScopedLock lock(mutexManager);
+            if (lock.isLocked()) {
+                Serial.println("[NetworkManager] Starting to load Firebase credentials");
+                
+                // Initialize Preferences
+                Preferences preferences;
+                Serial.println("[NetworkManager] Opening Preferences namespace");
+                
+                // First try to open in read-write mode to create namespace if it doesn't exist
+                if (!preferences.begin(PREF_NAMESPACE, false)) {
+                    Serial.println("[NetworkManager] ERROR: Failed to begin Preferences in read-write mode");
+                    return false;
+                }
+                
+                // Read credentials from Preferences
+                Serial.println("[NetworkManager] Reading email...");
+                email = preferences.getString(PREF_EMAIL_KEY, "");
+                Serial.println("[NetworkManager] Reading password...");
+                password = preferences.getString(PREF_PASSWORD_KEY, "");
+                
+                // Close Preferences
+                preferences.end();
+                
+                // Validate credentials
+                return !email.isEmpty() && !password.isEmpty();
+            }
+            
+            retryCount++;
+            delay(100);  // Small delay between retries
         }
         
-        return valid;
+        Serial.println("[NetworkManager] ERROR: Failed to acquire mutex after multiple retries");
+        return false;
     }
     
     /**
@@ -263,43 +249,103 @@ private:
      * @return true if credentials were saved successfully
      */
     bool saveFirebaseCredentials(const String& newEmail, const String& newPassword) {
-        Serial.println("[NetworkManager] Starting to save Firebase credentials");
+        const int MAX_RETRIES = 3;
+        int retryCount = 0;
         
-        // Initialize Preferences
-        Preferences preferences;
-        if (!preferences.begin(PREF_NAMESPACE, false)) {  // Read-write mode
-            Serial.println("[NetworkManager] ERROR: Failed to begin Preferences");
-            return false;
+        while (retryCount < MAX_RETRIES) {
+            MutexManager::ScopedLock lock(mutexManager);
+            if (lock.isLocked()) {
+                Serial.println("[NetworkManager] Starting to save Firebase credentials");
+                
+                // Validate input
+                if (newEmail.isEmpty() || newPassword.isEmpty()) {
+                    Serial.println("[NetworkManager] ERROR: Empty email or password provided");
+                    logError(ErrorManager::ErrorCode::NETWORK_INVALID_CREDENTIALS, 
+                            "Empty email or password provided", 
+                            "NetworkManager::saveFirebaseCredentials");
+                    return false;
+                }
+                
+                // Initialize Preferences
+                Preferences preferences;
+                Serial.println("[NetworkManager] Opening Preferences namespace");
+                
+                // First try to open in read-write mode
+                if (!preferences.begin(PREF_NAMESPACE, false)) {
+                    Serial.println("[NetworkManager] ERROR: Failed to begin Preferences in read-write mode");
+                    logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                            "Failed to open Preferences namespace",
+                            "NetworkManager::saveFirebaseCredentials");
+                    return false;
+                }
+                
+                // Save credentials with verification
+                bool success = true;
+                
+                Serial.println("[NetworkManager] Saving email...");
+                if (!preferences.putString(PREF_EMAIL_KEY, newEmail)) {
+                    Serial.println("[NetworkManager] ERROR: Failed to save email");
+                    logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                            "Failed to save email to Preferences",
+                            "NetworkManager::saveFirebaseCredentials");
+                    success = false;
+                } else {
+                    // Verify email was saved
+                    String savedEmail = preferences.getString(PREF_EMAIL_KEY, "");
+                    if (savedEmail != newEmail) {
+                        Serial.println("[NetworkManager] ERROR: Email verification failed");
+                        logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                                "Email verification failed after save",
+                                "NetworkManager::saveFirebaseCredentials");
+                        success = false;
+                    }
+                }
+                
+                Serial.println("[NetworkManager] Saving password...");
+                if (!preferences.putString(PREF_PASSWORD_KEY, newPassword)) {
+                    Serial.println("[NetworkManager] ERROR: Failed to save password");
+                    logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                            "Failed to save password to Preferences",
+                            "NetworkManager::saveFirebaseCredentials");
+                    success = false;
+                } else {
+                    // Verify password was saved
+                    String savedPassword = preferences.getString(PREF_PASSWORD_KEY, "");
+                    if (savedPassword != newPassword) {
+                        Serial.println("[NetworkManager] ERROR: Password verification failed");
+                        logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                                "Password verification failed after save",
+                                "NetworkManager::saveFirebaseCredentials");
+                        success = false;
+                    }
+                }
+                
+                // Close Preferences
+                preferences.end();
+                
+                if (success) {
+                    email = newEmail;
+                    password = newPassword;
+                    Serial.println("[NetworkManager] Successfully saved and verified Firebase credentials");
+                    return true;
+                } else {
+                    Serial.println("[NetworkManager] ERROR: Failed to save Firebase credentials");
+                    logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                            "Failed to save and verify Firebase credentials",
+                            "NetworkManager::saveFirebaseCredentials");
+                    return false;
+                }
+            }
+            
+            retryCount++;
+            delay(100);  // Small delay between retries
         }
         
-        // Save credentials
-        bool success = true;
-        
-        if (!preferences.putString(PREF_EMAIL_KEY, newEmail)) {
-            Serial.println("[NetworkManager] ERROR: Failed to save email");
-            success = false;
-        }
-        
-        if (!preferences.putString(PREF_PASSWORD_KEY, newPassword)) {
-            Serial.println("[NetworkManager] ERROR: Failed to save password");
-            success = false;
-        }
-        
-        // Close Preferences
-        preferences.end();
-        
-        if (success) {
-            email = newEmail;
-            password = newPassword;
-            Serial.println("[NetworkManager] Successfully saved Firebase credentials to Preferences");
-        } else {
-            Serial.println("[NetworkManager] ERROR: Failed to save Firebase credentials");
-            snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Failed to save Firebase credentials");
-            snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::saveFirebaseCredentials");
-            logError(ErrorManager::ErrorCode::NETWORK_INVALID_CREDENTIALS, errorMsgBuffer, errorLocBuffer);
-        }
-        
-        return success;
+        Serial.println("[NetworkManager] ERROR: Failed to acquire mutex after multiple retries");
+        logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to acquire mutex for credential save",
+                "NetworkManager::saveFirebaseCredentials");
+        return false;
     }
     
     /**
@@ -318,19 +364,19 @@ private:
      * @return true if setup successful
      */
     bool setupWiFiManager() {
-        bool success = true;
-        
-        // Load saved credentials
-        if (!loadFirebaseCredentials()) {
-            logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED, "Failed to load Firebase credentials", "NetworkManager::setupWiFiManager");
-            success = false;
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
+            return false;
         }
+
+        bool success = true;
         
         // Set up callback for saving credentials
         wifiManager.setSaveConfigCallback([this]() {
             Serial.println("[NetworkManager] WiFi Manager save callback triggered");
             
-            if (!takeMutex()) {
+            MutexManager::ScopedLock callbackLock(mutexManager);
+            if (!callbackLock.isLocked()) {
                 logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, "Failed to take mutex in callback", "NetworkManager::setupWiFiManager");
                 return;
             }
@@ -351,8 +397,6 @@ private:
                 Serial.println("[NetworkManager] ERROR: Custom parameters are null in save callback");
                 logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED, "Custom parameters are null in save callback", "NetworkManager::setupWiFiManager");
             }
-            
-            giveMutex();
         });
         
         return success;
@@ -373,6 +417,11 @@ private:
      * @return true if connection successful
      */
     bool connectToWiFi() {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
+            return false;
+        }
+
         bool success = true;
         
         // Set up WiFi Manager
@@ -399,11 +448,11 @@ private:
      * @return true if initialization successful
      */
     bool initializeTime() {
-        if (!takeMutex()) {
-            Serial.println("[NetworkManager] ERROR: Failed to take mutex in initializeTime");
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
             return false;
         }
-        
+
         bool success = true;
         timeSet = false;
         
@@ -429,7 +478,6 @@ private:
             Serial.println("[NetworkManager] Time set successfully");
         }
         
-        giveMutex();
         return success;
     }
     
@@ -438,11 +486,11 @@ private:
      * @return true if initialization successful
      */
     bool initializeFirebase() {
-        if (!takeMutex()) {
-            Serial.println("[NetworkManager] ERROR: Failed to take mutex in initializeFirebase");
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
             return false;
         }
-        
+
         bool success = true;
         
         // Load credentials from Preferences
@@ -471,7 +519,6 @@ private:
             Serial.println("[NetworkManager] Firebase configuration completed");
         }
         
-        giveMutex();
         return success;
     }
     
@@ -480,7 +527,13 @@ private:
      * @return true if connection is stable
      */
     bool checkWiFiConnection() {
-        if (!takeMutex()) {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "NetworkManager::checkWiFiConnection"
+            );
             return false;
         }
         
@@ -497,7 +550,6 @@ private:
             }
         }
         
-        giveMutex();
         return isConnected;
     }
     
@@ -506,10 +558,11 @@ private:
      * @return true if reconnection successful
      */
     bool attemptReconnect() {
-        if (!takeMutex()) {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
             return false;
         }
-        
+
         bool success = false;
         if (reconnectAttempts < MAX_RECONNECT_ATTEMPTS) {
             if (millis() - lastReconnectAttempt >= currentBackoffDelay) {
@@ -521,7 +574,6 @@ private:
             }
         }
         
-        giveMutex();
         return success;
     }
     
@@ -530,27 +582,36 @@ private:
      * @return true if Firebase is ready
      */
     bool checkFirebaseConnection() {
-        if (!takeMutex()) {
-            snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Failed to check Firebase connection");
-            snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::checkFirebaseConnection");
-            logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, errorMsgBuffer, errorLocBuffer);
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "NetworkManager::checkFirebaseConnection"
+            );
             return false;
         }
         
         bool isReady = Firebase.ready();
         
         if (!isReady) {
-            logError(ErrorManager::ErrorCode::FIREBASE_CONNECTION_FAILED, "Firebase connection lost or token expired", "NetworkManager::checkFirebaseConnection");
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_CONNECTION_FAILED,
+                "Firebase connection lost or token expired",
+                "NetworkManager::checkFirebaseConnection"
+            );
             
             // Attempt to reinitialize Firebase
             if (!initializeFirebase()) {
-                logError(ErrorManager::ErrorCode::FIREBASE_INIT_FAILED, "Failed to reinitialize Firebase", "NetworkManager::checkFirebaseConnection");
-                giveMutex();
+                ErrorManager::firebaseError(
+                    ErrorManager::ErrorCode::FIREBASE_INIT_FAILED,
+                    "Failed to reinitialize Firebase",
+                    "NetworkManager::checkFirebaseConnection"
+                );
                 return false;
             }
         }
         
-        giveMutex();
         return isReady;
     }
 
@@ -566,41 +627,29 @@ public:
     NetworkManager(FirebaseData& fbdo, FirebaseAuth& fa, FirebaseConfig& fc,
                   LightManager& lm, WiFiManager& wm)
         : fbdo(fbdo), auth(fa), config(fc), lightManager(lm), wifiManager(wm),
-          initialized(false), reconnectAttempts(0), wasConnected(false), currentBackoffDelay(0),
+          initialized(false), reconnectAttempts(0), wasConnected(false), currentBackoffDelay(RECONNECT_DELAY),
           lastReconnectAttempt(0), lastConnectionCheckMillis(0),
           lastFirmwareCheckMillis(0), previousHeartbeatMillis(0),
-          lastHeapCheckMillis(0), minHeapSeen(0),
+          lastHeapCheckMillis(0), minHeapSeen(UINT32_MAX),
           lastConnectionCheck(0), lastFirebaseCheck(0),
           custom_email(nullptr), custom_password(nullptr),
           timeSet(false) {
         
         Serial.println("[NetworkManager] Starting constructor");
         
-        // Create mutex first
-        mutex = xSemaphoreCreateMutex();
-        if (mutex == NULL) {
-            Serial.println("[NetworkManager] CRITICAL ERROR: Failed to create mutex");
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
-                "Failed to create NetworkManager mutex",
-                "NetworkManager::NetworkManager"
-            );
-            // Don't proceed with initialization if mutex creation failed
-            return;
-        }
-        Serial.println("[NetworkManager] Successfully created mutex");
-        
-        // Pre-allocate space for credentials without taking mutex
-        Serial.println("[NetworkManager] Pre-allocating credential strings");
+        // Pre-allocate space for credentials
         apiKey.reserve(CREDENTIAL_MAX_LENGTH);
         email.reserve(CREDENTIAL_MAX_LENGTH);
         password.reserve(CREDENTIAL_MAX_LENGTH);
         
-        // Initialize WiFiManager with safe defaults without taking mutex
-        Serial.println("[NetworkManager] Initializing WiFiManager defaults");
+        // Initialize WiFiManager with safe defaults
         wifiManager.setDebugOutput(false);
         wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
         wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
+        
+        // Initialize WiFi parameters
+        custom_email = new WiFiManagerParameter("email", "Firebase Email", "", 64);
+        custom_password = new WiFiManagerParameter("password", "Firebase Password", "", 64, "type=\"password\"");
         
         Serial.println("[NetworkManager] Constructor completed successfully");
     }
@@ -611,10 +660,6 @@ public:
      */
     ~NetworkManager() {
         Serial.println("[NetworkManager] Starting destructor");
-        if (mutex != NULL) {
-            Serial.println("[NetworkManager] Deleting mutex");
-            vSemaphoreDelete(mutex);
-        }
         
         // Clean up WiFi parameters
         Serial.println("[NetworkManager] Cleaning up WiFi parameters");
@@ -640,116 +685,70 @@ public:
      * @return true if initialization successful
      */
     bool begin() {
-        Serial.println("[NetworkManager] Starting begin()");
-        
-        if (!takeMutex()) {
-            Serial.println("[NetworkManager] Failed to take mutex in begin");
-            return false;
+        if (initialized) {
+            return true;
         }
+
+        Serial.println("[NetworkManager] Starting initialization");
         
-        bool success = true;
-        
-        // Load Firebase credentials first
-        if (!loadFirebaseCredentials()) {
-            Serial.println("[NetworkManager] No Firebase credentials found. Will use default configuration.");
-        }
-        
-        // Clean up old parameters
-        if (custom_email != nullptr) {
-            delete custom_email;
-            custom_email = nullptr;
-        }
-        if (custom_password != nullptr) {
-            delete custom_password;
-            custom_password = nullptr;
-        }
-        
-        // Create new parameters with current values
-        custom_email = new WiFiManagerParameter("email", "Firebase Email", email.c_str(), CREDENTIAL_MAX_LENGTH);
-        custom_password = new WiFiManagerParameter("password", "Firebase Password", password.c_str(), CREDENTIAL_MAX_LENGTH);
-        
-        // Add parameters to WiFiManager
+        // Add custom parameters to WiFi Manager
         wifiManager.addParameter(custom_email);
         wifiManager.addParameter(custom_password);
         
-        // Release mutex before WiFi connection attempt
-        giveMutex();
+        // Configure WiFi Manager
+        wifiManager.setMinimumSignalQuality(MIN_SIGNAL_QUALITY);
+        wifiManager.setConfigPortalTimeout(CONFIG_PORTAL_TIMEOUT);
         
-        // Try to connect to WiFi with timeout and yield
-        Serial.println("[NetworkManager] Attempting to connect to WiFi...");
-        unsigned long startTime = millis();
-        unsigned long lastYieldTime = startTime;
-        
-        // Try to connect to WiFi without holding the mutex
-        while (!wifiManager.autoConnect(AP_NAME, AP_PASSWORD)) {
-            if (millis() - startTime > WIFI_TIMEOUT) {
-                Serial.println("[NetworkManager] WiFi connection timeout");
-                success = false;
-                break;
+        // Set up callback for saving credentials
+        wifiManager.setSaveConfigCallback([this]() {
+            Serial.println("[NetworkManager] WiFi Manager save callback triggered");
+            
+            MutexManager::ScopedLock callbackLock(mutexManager);
+            if (!callbackLock.isLocked()) {
+                ErrorManager::mutexError(
+                    ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                    "Failed to take mutex in callback",
+                    "NetworkManager::begin"
+                );
+                return;
             }
             
-            // Yield and feed watchdog every 100ms
-            if (millis() - lastYieldTime >= 100) {
-                yield();
-                delay(1);  // Small delay to ensure watchdog is fed
-                lastYieldTime = millis();
+            // Save new credentials
+            if (custom_email != nullptr && custom_password != nullptr) {
+                String newEmail = custom_email->getValue();
+                String newPassword = custom_password->getValue();
+                
+                Serial.printf("[NetworkManager] Saving new credentials - Email: %s\n", newEmail.c_str());
+                
+                if (!saveFirebaseCredentials(newEmail, newPassword)) {
+                    ErrorManager::systemError(
+                        ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                        "Failed to save Firebase credentials",
+                        "NetworkManager::begin"
+                    );
+                } else {
+                    Serial.println("[NetworkManager] Successfully saved Firebase credentials");
+                }
+            } else {
+                Serial.println("[NetworkManager] ERROR: Custom parameters are null in save callback");
+                ErrorManager::systemError(
+                    ErrorManager::ErrorCode::SYSTEM_INIT_FAILED,
+                    "Custom parameters are null in save callback",
+                    "NetworkManager::begin"
+                );
             }
-            
-            delay(10);  // Short delay between connection attempts
-        }
+        });
         
-        // Re-acquire mutex for remaining initialization
-        if (!takeMutex()) {
-            Serial.println("[NetworkManager] Failed to re-acquire mutex after WiFi connection");
+        // Initialize WiFi Manager
+        if (!wifiManager.autoConnect(AP_NAME, AP_PASSWORD)) {
+            logError(ErrorManager::ErrorCode::NETWORK_INIT_FAILED,
+                    "Failed to connect to WiFi",
+                    "NetworkManager::begin");
             return false;
         }
         
-        if (success) {
-            // Initialize time with timeout
-            Serial.println("[NetworkManager] Initializing time...");
-            giveMutex();  // Release mutex before time initialization
-            if (!initializeTime()) {
-                Serial.println("[NetworkManager] Time initialization failed");
-                success = false;
-            } else {
-                Serial.println("[NetworkManager] Time initialized successfully");
-            }
-            
-            // Re-acquire mutex for Firebase initialization
-            if (!takeMutex()) {
-                Serial.println("[NetworkManager] Failed to re-acquire mutex after time initialization");
-                return false;
-            }
-            
-            // Initialize Firebase with timeout
-            if (success) {
-                Serial.println("[NetworkManager] Initializing Firebase...");
-                giveMutex();  // Release mutex before Firebase initialization
-                if (!initializeFirebase()) {
-                    Serial.println("[NetworkManager] Firebase initialization failed");
-                    success = false;
-                } else {
-                    Serial.println("[NetworkManager] Firebase initialized successfully");
-                }
-                
-                // Re-acquire mutex for final state update
-                if (!takeMutex()) {
-                    Serial.println("[NetworkManager] Failed to re-acquire mutex after Firebase initialization");
-                    return false;
-                }
-            }
-        }
-        
-        if (success) {
-            initialized = true;
-            wasConnected = true;
-            Serial.println("[NetworkManager] Network initialization completed successfully");
-        } else {
-            Serial.println("[NetworkManager] Network initialization failed");
-        }
-        
-        giveMutex();
-        return success;
+        initialized = true;
+        return true;
     }
     
     /**
@@ -779,119 +778,107 @@ public:
     }
     
     /**
-     * Checks if WiFi is connected
-     * Thread-safe: Yes
+     * Checks if the network is connected
      * @return true if connected
      */
     bool isConnected() {
-        if (!takeMutex()) {
-            logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, "Failed to check WiFi connection", "NetworkManager::isConnected");
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
             return false;
         }
-        
-        bool connected = WiFi.status() == WL_CONNECTED;
-        giveMutex();
-        return connected;
+        return WiFi.status() == WL_CONNECTED;
     }
     
     /**
-     * Gets the current WiFi signal strength
-     * Thread-safe: Yes
-     * @return Signal strength in dBm
+     * Gets the current connection state
+     * @return WiFi connection state
      */
-    int getSignalStrength() {
-        if (!takeMutex()) {
-            logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, "Failed to get signal strength", "NetworkManager::getSignalStrength");
+    wl_status_t getConnectionState() {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
+            return WL_DISCONNECTED;
+        }
+        return WiFi.status();
+    }
+    
+    /**
+     * Gets the current RSSI
+     * @return RSSI value
+     */
+    int32_t getRSSI() {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
             return 0;
         }
-        
-        int strength = WiFi.RSSI();
-        giveMutex();
-        return strength;
+        return WiFi.RSSI();
     }
-
+    
+    /**
+     * Gets the current IP address
+     * @return IP address as string
+     */
+    String getIPAddress() {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
+            return "";
+        }
+        return WiFi.localIP().toString();
+    }
+    
+    /**
+     * Gets the MAC address
+     * @return MAC address as string
+     */
+    String getMACAddress() {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
+            return "";
+        }
+        return WiFi.macAddress();
+    }
+    
     /**
      * Sets the OTA password
-     * Thread-safe: Yes
      * @param password New OTA password
      */
     void setOTAPassword(const String& password) {
-        if (!takeMutex()) {
-            logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, "Failed to set OTA password", "NetworkManager::setOTAPassword");
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
             return;
         }
-        
-        if (password.length() >= 6 && password.length() <= CREDENTIAL_MAX_LENGTH) {
-            otaPassword = password;
-        } else {
-            logError(ErrorManager::ErrorCode::SYSTEM_INVALID_STATE, "Invalid OTA password length", "NetworkManager::setOTAPassword");
-        }
-        
-        giveMutex();
+        otaPassword = password;
     }
     
     /**
-     * Handles OTA updates for the system
-     * Thread-safe: Yes
-     * @param systemName Name of the system
-     * @return true if OTA handling successful
+     * Handles OTA update
+     * @param password OTA password
+     * @return true if update was successful
      */
-    bool handleOTA(String systemName) {
-        if (!takeMutex()) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to handle OTA",
-                "NetworkManager::handleOTA"
-            );
+    bool handleOTA(String password) {
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
             return false;
         }
         
-        bool success = true;
-        
-        // Ensure systemName doesn't exceed maximum length
-        if (systemName.length() > SYSTEM_NAME_MAX_LENGTH) {
-            systemName = systemName.substring(0, SYSTEM_NAME_MAX_LENGTH);
+        if (password != otaPassword) {
+            return false;
         }
         
-        // Configure ArduinoOTA
-        ArduinoOTA.setHostname(systemName.c_str());
-        ArduinoOTA.setPassword(otaPassword.c_str());
-        
-        // Start OTA server
         ArduinoOTA.begin();
-        Serial.println("OTA server started");
-        
-        giveMutex();
-        return success;
+        return true;
     }
-
+    
     /**
-     * Resets WiFi Manager settings if enabled in config
-     * Thread-safe: Yes
+     * Resets the WiFi Manager
      * @return true if reset was successful
      */
     bool resetWiFiManager() {
-        if (!SystemConfig::WIFI_MANAGER_RESET_ENABLED) {
-            Serial.println("[NetworkManager] WiFi Manager reset disabled in config");
+        MutexManager::ScopedLock lock(mutexManager);
+        if (!lock.isLocked()) {
             return false;
         }
-
-        if (!takeMutex()) {
-            Serial.println("[NetworkManager] Failed to take mutex for WiFi Manager reset");
-            return false;
-        }
-
-        Serial.println("[NetworkManager] Resetting WiFi Manager settings...");
-        Serial.flush();  // Ensure message is sent
         
         wifiManager.resetSettings();
-        
-        Serial.println("[NetworkManager] WiFi Manager settings reset successfully");
-        Serial.flush();  // Ensure message is sent
-        
-        delay(1000);  // Give time for serial output to be sent
-        
-        giveMutex();
         return true;
     }
 };

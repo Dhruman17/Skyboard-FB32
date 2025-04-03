@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "error_manager.h"
+#include "mutex_manager.h"
 #include <time.h>
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
@@ -41,7 +42,7 @@
  * - Times are stored in 24-hour format (HH:MM)
  * - Converted to seconds since midnight for comparison
  */
-class LightManager {
+class LightManager : public MutexManager {
 private:
     // Light state tracking
     bool lightState;
@@ -50,7 +51,6 @@ private:
     time_t onTime;
     time_t offTime;
     bool initialized;
-    SemaphoreHandle_t mutex;
     
     // Error tracking
     uint8_t pinErrorCount;
@@ -69,70 +69,13 @@ private:
     bool timeValid;
     
     /**
-     * Safely takes the mutex with timeout
-     * @return true if mutex was taken successfully
-     */
-    bool takeMutex() {
-        return xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) == pdTRUE;
-    }
-    
-    /**
-     * Safely gives the mutex
-     */
-    void giveMutex() {
-        xSemaphoreGive(mutex);
-    }
-    
-    /**
-     * Gets current time of day in seconds since midnight
-     * Thread-safe: Yes
-     * @return Current time of day in seconds
-     */
-    time_t getCurrentTimeOfDay() {
-        if (!takeMutex()) {
-            return 0;
-        }
-        
-        time_t currentTime;
-        time(&currentTime);
-        
-        // Validate time every hour
-        if (millis() - lastTimeValidation >= TIME_VALIDATION_INTERVAL) {
-            struct tm timeinfo;
-            if (!getLocalTime(&timeinfo)) {
-                consecutiveTimeFailures++;
-                if (consecutiveTimeFailures >= MAX_TIME_FAILURES) {
-                    timeValid = false;
-                    Serial.println("CRITICAL ERROR: Persistent time synchronization failure");
-                }
-            } else {
-                consecutiveTimeFailures = 0;
-                timeValid = true;
-            }
-            lastTimeValidation = millis();
-        }
-        
-        // If time is invalid, return 0 to prevent incorrect lighting control
-        if (!timeValid) {
-            giveMutex();
-            return 0;
-        }
-        
-        struct tm timeinfo;
-        localtime_r(&currentTime, &timeinfo);
-        time_t timeOfDay = timeinfo.tm_hour * 3600 + timeinfo.tm_min * 60;
-        
-        giveMutex();
-        return timeOfDay;
-    }
-    
-    /**
      * Safely writes to the light pin with error handling
      * @param state Whether to turn the light on or off
      * @return true if write successful
      */
     bool writeLightPin(bool state) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             Serial.println("Failed to take mutex in writeLightPin");
             return false;
         }
@@ -147,7 +90,6 @@ private:
             success = false;
         }
         
-        giveMutex();
         return success;
     }
     
@@ -155,7 +97,13 @@ private:
      * Resets pin if too many errors occur
      */
     void resetPinIfNeeded() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "LightManager::resetPinIfNeeded"
+            );
             return;
         }
         
@@ -167,8 +115,6 @@ private:
             }
             pinErrorCount = 0;
         }
-        
-        giveMutex();
     }
     
     /**
@@ -215,7 +161,6 @@ public:
                     onTime(0),
                     offTime(0),
                     initialized(false),
-                    mutex(xSemaphoreCreateMutex()),
                     pinErrorCount(0),
                     lastLightStateChange(0),
                     fallbackLightState(false),
@@ -232,12 +177,12 @@ public:
      * Ensures proper cleanup of resources
      */
     ~LightManager() {
-        if (mutex != NULL) {
-            // Ensure we're not holding the mutex before deleting
-            if (xSemaphoreGetMutexHolder(mutex) == xTaskGetCurrentTaskHandle()) {
-                xSemaphoreGive(mutex);
+        ScopedLock lock(*this);
+        if (lock.isLocked()) {
+            // Turn off light before cleanup
+            if (SystemConfig::SYSTEM_LIGHTS_PIN != -1) {
+                digitalWrite(SystemConfig::SYSTEM_LIGHTS_PIN, LOW);
             }
-            vSemaphoreDelete(mutex);
         }
     }
     
@@ -246,7 +191,8 @@ public:
      * @return true if initialization successful
      */
     bool begin() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             Serial.println("Failed to take mutex in begin");
             return false;
         }
@@ -267,7 +213,6 @@ public:
             initialized = true;
         }
         
-        giveMutex();
         return success;
     }
     
@@ -279,7 +224,8 @@ public:
      * @param off Time to turn lights off (seconds since midnight)
      */
     void updateSettings(bool master, bool cycle, time_t on, time_t off) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             Serial.println("Failed to take mutex in updateSettings");
             return;
         }
@@ -294,8 +240,6 @@ public:
             lastLightStateChange = millis();
             fallbackLightState = false;
         }
-        
-        giveMutex();
     }
     
     /**
@@ -307,7 +251,8 @@ public:
             return;
         }
         
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             Serial.println("Failed to take mutex in update");
             return;
         }
@@ -339,8 +284,6 @@ public:
             resetPinIfNeeded();
             writeLightPin(newState);
         }
-        
-        giveMutex();
     }
     
     /**
@@ -348,13 +291,11 @@ public:
      * @return true if light is on
      */
     bool isLightOn() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
-        
-        bool state = lightState;
-        giveMutex();
-        return state;
+        return lightState;
     }
     
     /**
@@ -362,13 +303,11 @@ public:
      * @return true if in manual control mode
      */
     bool isManualControl() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
-        
-        bool manual = masterSwitch;
-        giveMutex();
-        return manual;
+        return masterSwitch;
     }
     
     /**
@@ -378,16 +317,14 @@ public:
      * @return true if time cycle is enabled
      */
     bool getTimeCycleSettings(time_t& onTime, time_t& offTime) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
         onTime = this->onTime;
         offTime = this->offTime;
-        bool enabled = timeCycleEnabled;
-        
-        giveMutex();
-        return enabled;
+        return timeCycleEnabled;
     }
 
     /**
@@ -395,7 +332,8 @@ public:
      * @param valid Whether time is valid
      */
     void setTimeValid(bool valid) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             Serial.println("Failed to take mutex in setTimeValid");
             return;
         }
@@ -404,8 +342,53 @@ public:
         if (valid) {
             consecutiveTimeFailures = 0;
         }
+    }
+
+    /**
+     * Gets current time of day in seconds since midnight
+     * Thread-safe: Yes
+     * @return Current time of day in seconds
+     */
+    time_t getCurrentTimeOfDay() {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "LightManager::getCurrentTimeOfDay"
+            );
+            return 0;
+        }
         
-        giveMutex();
+        time_t currentTime;
+        time(&currentTime);
+        
+        // Validate time every hour
+        if (millis() - lastTimeValidation >= TIME_VALIDATION_INTERVAL) {
+            struct tm timeinfo;
+            if (!getLocalTime(&timeinfo)) {
+                consecutiveTimeFailures++;
+                if (consecutiveTimeFailures >= MAX_TIME_FAILURES) {
+                    timeValid = false;
+                    Serial.println("CRITICAL ERROR: Persistent time synchronization failure");
+                }
+            } else {
+                consecutiveTimeFailures = 0;
+                timeValid = true;
+            }
+            lastTimeValidation = millis();
+        }
+        
+        // If time is invalid, return 0 to prevent incorrect lighting control
+        if (!timeValid) {
+            return 0;
+        }
+        
+        struct tm timeinfo;
+        localtime_r(&currentTime, &timeinfo);
+        time_t timeOfDay = timeinfo.tm_hour * 3600 + timeinfo.tm_min * 60;
+        
+        return timeOfDay;
     }
 };
 

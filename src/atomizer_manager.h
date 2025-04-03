@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "error_manager.h"
+#include "mutex_manager.h"
 #include <Arduino.h>
 
 /**
@@ -24,20 +25,13 @@
  *    - Hardware error detection
  *    - Error recovery mechanisms
  */
-class AtomizerManager {
+class AtomizerManager : public MutexManager {
 private:
     // PWM configuration
     static constexpr uint8_t PWM_CHANNELS = SystemConfig::NUMBER_OF_UNITS;
     static constexpr uint32_t PWM_FREQUENCY = 25000;  // 25kHz
-    static constexpr uint8_t PWM_RESOLUTION = 8;  // 8-bit resolution (0-255)
+    static constexpr uint8_t PWM_RESOLUTION = 8;  // 8-bit resolution
     static constexpr uint8_t PWM_DUTY_CYCLE = 128;  // 50% duty cycle
-    
-    // Pin configuration
-    static constexpr int ATOMIZER_PINS[SystemConfig::NUMBER_OF_UNITS] = {
-        SystemConfig::ATOMIZER_PIN_1,
-        SystemConfig::ATOMIZER_PIN_2,
-        SystemConfig::ATOMIZER_PIN_3
-    };
     
     // Timing configuration
     struct AtomizerTiming {
@@ -48,7 +42,6 @@ private:
     };
     
     AtomizerTiming timings[SystemConfig::NUMBER_OF_UNITS];
-    mutable SemaphoreHandle_t mutex;
     
     /**
      * Initializes PWM for a specific channel
@@ -66,33 +59,10 @@ private:
         }
         
         ledcSetup(channel, PWM_FREQUENCY, PWM_RESOLUTION);
-        ledcAttachPin(ATOMIZER_PINS[channel], channel);
+        ledcAttachPin(SystemConfig::ATOMIZER_PINS[channel], channel);
         ledcWrite(channel, 0);  // Start with atomizer off
         
         return true;
-    }
-    
-    /**
-     * Takes mutex with timeout
-     * @return true if mutex was taken
-     */
-    bool takeMutex() const {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(SystemConfig::MUTEX_TIMEOUT_MS)) != pdTRUE) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "AtomizerManager::takeMutex"
-            );
-            return false;
-        }
-        return true;
-    }
-    
-    /**
-     * Releases mutex
-     */
-    void giveMutex() const {
-        xSemaphoreGive(mutex);
     }
 
 public:
@@ -100,15 +70,6 @@ public:
      * Constructor
      */
     AtomizerManager() {
-        mutex = xSemaphoreCreateMutex();
-        if (!mutex) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_CREATION_FAILED,
-                "Failed to create mutex",
-                "AtomizerManager::AtomizerManager"
-            );
-        }
-        
         // Initialize timings
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             timings[i].onInterval = 0;
@@ -121,18 +82,15 @@ public:
     /**
      * Destructor
      */
-    ~AtomizerManager() {
-        if (mutex) {
-            vSemaphoreDelete(mutex);
-        }
-    }
+    ~AtomizerManager() {}
     
     /**
      * Initializes the atomizer manager
      * @return true if initialization was successful
      */
     bool begin() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -146,7 +104,6 @@ public:
             }
         }
         
-        giveMutex();
         return success;
     }
     
@@ -158,7 +115,8 @@ public:
      * @return true if timing was set successfully
      */
     bool setTiming(uint8_t unitIndex, unsigned long onInterval, unsigned long offInterval) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -168,7 +126,6 @@ public:
                 "Invalid unit index",
                 "AtomizerManager::setTiming"
             );
-            giveMutex();
             return false;
         }
         
@@ -178,7 +135,6 @@ public:
                 "Invalid timing intervals",
                 "AtomizerManager::setTiming"
             );
-            giveMutex();
             return false;
         }
         
@@ -190,38 +146,44 @@ public:
         // Start with atomizer off
         ledcWrite(unitIndex, 0);
         
-        giveMutex();
         return true;
     }
     
     /**
      * Updates atomizer states based on timing
+     * Should be called in the main loop
      */
     void update() {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return;
         }
         
         unsigned long currentMillis = millis();
         
         for (uint8_t i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            AtomizerTiming& timing = timings[i];
-            unsigned long elapsed = currentMillis - timing.lastStateChange;
+            if (timings[i].onInterval == 0 || timings[i].offInterval == 0) {
+                continue;  // Skip unconfigured units
+            }
             
-            if (timing.isOn && elapsed >= timing.onInterval) {
-                // Turn off atomizer
-                ledcWrite(i, 0);
-                timing.isOn = false;
-                timing.lastStateChange = currentMillis;
-            } else if (!timing.isOn && elapsed >= timing.offInterval) {
-                // Turn on atomizer
-                ledcWrite(i, PWM_DUTY_CYCLE);
-                timing.isOn = true;
-                timing.lastStateChange = currentMillis;
+            unsigned long elapsed = currentMillis - timings[i].lastStateChange;
+            
+            if (timings[i].isOn) {
+                if (elapsed >= timings[i].onInterval) {
+                    // Turn off atomizer
+                    ledcWrite(i, 0);
+                    timings[i].isOn = false;
+                    timings[i].lastStateChange = currentMillis;
+                }
+            } else {
+                if (elapsed >= timings[i].offInterval) {
+                    // Turn on atomizer
+                    ledcWrite(i, PWM_DUTY_CYCLE);
+                    timings[i].isOn = true;
+                    timings[i].lastStateChange = currentMillis;
+                }
             }
         }
-        
-        giveMutex();
     }
     
     /**
@@ -229,18 +191,42 @@ public:
      * @param unitIndex Index of the unit
      * @return true if atomizer is on
      */
-    bool isOn(uint8_t unitIndex) const {
-        if (!takeMutex()) {
+    bool isAtomizerOn(uint8_t unitIndex) const {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
-        bool state = false;
-        if (unitIndex < SystemConfig::NUMBER_OF_UNITS) {
-            state = timings[unitIndex].isOn;
+        if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            return false;
         }
         
-        giveMutex();
-        return state;
+        return timings[unitIndex].isOn;
+    }
+    
+    /**
+     * Gets the remaining time in the current state
+     * @param unitIndex Index of the unit
+     * @return Remaining time in milliseconds
+     */
+    unsigned long getRemainingTime(uint8_t unitIndex) const {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
+            return 0;
+        }
+        
+        if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
+            return 0;
+        }
+        
+        unsigned long currentMillis = millis();
+        unsigned long elapsed = currentMillis - timings[unitIndex].lastStateChange;
+        
+        if (timings[unitIndex].isOn) {
+            return timings[unitIndex].onInterval - elapsed;
+        } else {
+            return timings[unitIndex].offInterval - elapsed;
+        }
     }
 };
 

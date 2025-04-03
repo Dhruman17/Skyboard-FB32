@@ -40,12 +40,15 @@ namespace ErrorManager {
         FIREBASE_OPERATION_FAILED = 3005,
         FIREBASE_BATCH_FAILED = 3006,
         FIREBASE_PATH_INVALID = 3007,
+        FIREBASE_INVALID_TYPE = 3008,
+        FIREBASE_UPDATE_FAILED = 3009,
         
         // Sensor Errors (4000-4999)
         SENSOR_INIT_FAILED = 4000,
         SENSOR_READ_FAILED = 4001,
         SENSOR_CALIBRATION_FAILED = 4002,
         SENSOR_INVALID_DATA = 4003,
+        SENSOR_READING_FAILED = 4004,
         
         // Hardware Errors (5000-5999)
         HARDWARE_INIT_FAILED = 5000,
@@ -54,13 +57,23 @@ namespace ErrorManager {
         HARDWARE_INVALID_STATE = 5003,
         HARDWARE_I2C_ERROR = 5004,
         HARDWARE_PWM_ERROR = 5005,
+        HARDWARE_PIN_ERROR = 5006,
         
         // Mutex Errors (6000-6999)
         MUTEX_CREATE_FAILED = 6000,
         MUTEX_TIMEOUT = 6001,
         MUTEX_ALREADY_TAKEN = 6002,
         MUTEX_NOT_TAKEN = 6003,
-        MUTEX_CREATION_FAILED = 6004  // Alias for MUTEX_CREATE_FAILED for backward compatibility
+        MUTEX_CREATION_FAILED = 6004,  // Alias for MUTEX_CREATE_FAILED for backward compatibility
+        MUTEX_NOT_INITIALIZED = 6005,  // New error code for uninitialized mutex
+        
+        // OTA errors
+        OTA_INIT_FAILED = 7000,
+        OTA_DOWNLOAD_FAILED = 7001,
+        OTA_UPDATE_FAILED = 7002,
+        
+        // Unit errors
+        INVALID_UNIT = 8000
     };
 
     // Error Severity Levels

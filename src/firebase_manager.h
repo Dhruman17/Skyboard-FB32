@@ -3,6 +3,7 @@
 
 #include "config.h"
 #include "error_manager.h"
+#include "mutex_manager.h"
 #include <Firebase_ESP_Client.h>
 #include <map>
 #include <vector>
@@ -31,10 +32,10 @@
  * - Reuses JSON objects to prevent memory fragmentation
  * - Pre-allocates strings for paths and values
  */
-class FirebaseManager {
+class FirebaseManager : public MutexManager {
 private:
     FirebaseData& fbdo;
-    SemaphoreHandle_t mutex;
+    FirebaseJson documentJson;  // Reusable JSON object for document operations
     
     // Batch operation structure
     struct BatchedUpdate {
@@ -68,33 +69,7 @@ private:
     unsigned long lastBatchFlushTime = 0;
     
     // Pre-allocated buffers
-    FirebaseJson documentJson;
     char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
-    
-    /**
-     * Takes mutex with timeout
-     * Thread-safe: Yes
-     * @return true if mutex was taken
-     */
-    bool takeMutex() {
-        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(SystemConfig::MUTEX_TIMEOUT_MS)) != pdTRUE) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "FirebaseManager::takeMutex"
-            );
-            return false;
-        }
-        return true;
-    }
-    
-    /**
-     * Releases mutex
-     * Thread-safe: Yes
-     */
-    void giveMutex() {
-        xSemaphoreGive(mutex);
-    }
     
     /**
      * Creates a Firebase document path
@@ -136,25 +111,12 @@ public:
      * Constructor
      * @param fbdo Firebase Data object reference
      */
-    FirebaseManager(FirebaseData& fbdo) : fbdo(fbdo) {
-        mutex = xSemaphoreCreateMutex();
-        if (!mutex) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_CREATION_FAILED,
-                "Failed to create mutex",
-                "FirebaseManager::FirebaseManager"
-            );
-        }
-    }
+    FirebaseManager(FirebaseData& fbdo) : fbdo(fbdo), documentJson() {}
     
     /**
      * Destructor
      */
-    ~FirebaseManager() {
-        if (mutex) {
-            vSemaphoreDelete(mutex);
-        }
-    }
+    ~FirebaseManager() {}
     
     /**
      * Adds a field update to the batch
@@ -165,117 +127,85 @@ public:
      * @return true if added successfully
      */
     bool addToBatch(int unitIndex, const char* fieldPath, const String& value, const char* valueType) {
-        if (!takeMutex()) {
-            Serial.println("Failed to take mutex in addToBatch");
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
-        // Check for duplicate entries
-        for (auto& entry : batchOperations) {
-            if (entry.unitIndex == unitIndex && 
-                entry.fieldPath == fieldPath) {
-                // Update existing entry instead of adding duplicate
-                entry = BatchedUpdate(unitIndex, fieldPath, value, valueType);
-                giveMutex();
-                return true;
+        if (batchOperations.size() >= MAX_BATCH_SIZE) {
+            if (!flushBatch()) {
+                return false;
             }
         }
         
-        // Add new entry if no duplicate found
-        batchOperations.push_back(BatchedUpdate(unitIndex, fieldPath, value, valueType));
-        
-        giveMutex();
+        batchOperations.emplace_back(unitIndex, fieldPath, value, valueType);
         return true;
     }
     
     /**
-     * Flushes pending batch operations
-     * Thread-safe: Yes
-     * @return true if all operations were successful
+     * Flushes the current batch of operations
+     * @return true if flush was successful
      */
     bool flushBatch() {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
+            return false;
+        }
+        
         if (batchOperations.empty()) {
             return true;
         }
         
-        if (!takeMutex()) {
-            return false;
-        }
-        
+        // Process batch operations
         bool success = true;
-        
-        // Group operations by unit
-        std::map<int, std::vector<BatchedUpdate>> unitOperations;
         for (const auto& op : batchOperations) {
-            unitOperations[op.unitIndex].push_back(op);
-        }
-        
-        // Process each unit's operations
-        for (const auto& unit : unitOperations) {
-            if (!createPath(pathBuffer, sizeof(pathBuffer), 
-                          SystemConfig::UNIT_PATH_FORMAT, 
-                          SystemConfig::SERIAL_NUMBER, unit.first)) {
+            if (!createPath(pathBuffer, sizeof(pathBuffer), "units/%d/%s", op.unitIndex, op.fieldPath)) {
                 success = false;
                 continue;
             }
             
-            documentJson.clear();
-            for (const auto& op : unit.second) {
-                documentJson.set(op.fieldPath.c_str(), op.value);
-            }
-            
-            if (!Firebase.Firestore.patchDocument(&fbdo, 
-                                                SystemConfig::FIREBASE_PROJECT_ID, 
-                                                "", pathBuffer, 
-                                                documentJson.raw(), "fields")) {
-                ErrorManager::firebaseError(
-                    ErrorManager::ErrorCode::FIREBASE_BATCH_FAILED,
-                    String("Batch update failed: ") + fbdo.errorReason().c_str(),
-                    "FirebaseManager::flushBatch"
-                );
+            // Update document with valueType as String
+            if (!updateDocument(pathBuffer, op.value, op.valueType)) {
                 success = false;
             }
         }
         
         batchOperations.clear();
-        batchOperations.shrink_to_fit();  // Shrink capacity to fit current size (0)
         lastBatchFlushTime = millis();
-        
-        giveMutex();
         return success;
     }
     
     /**
-     * Updates a single field in a document
-     * Thread-safe: Yes
+     * Updates a document field
      * @param path Document path
-     * @param field Field to update
-     * @param value Value to set
+     * @param value New value
+     * @param valueType Type of the value
      * @return true if update was successful
      */
-    bool updateField(const char* path, const char* field, const String& value) {
-        if (!takeMutex()) {
+    bool updateDocument(const char* path, const String& value, const String& valueType) {
+        if (!Firebase.ready()) {
+            Serial.println("FirebaseManager not ready");
+            return false;
+        }
+
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
+            return false;
+        }
+
+        documentJson.clear();
+        
+        // Create the document structure
+        documentJson.set("fields/" + valueType + "/stringValue", value);
+        
+        // Update the document with correct patchDocument signature
+        const char* emptyStr = "";
+        if (!Firebase.Firestore.patchDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, emptyStr, path, "fields", documentJson.raw())) {
+            Serial.printf("Failed to update document: %s\n", fbdo.errorReason().c_str());
             return false;
         }
         
-        documentJson.clear();
-        documentJson.set(field, value);
-        
-        bool success = Firebase.Firestore.patchDocument(&fbdo, 
-                                                      SystemConfig::FIREBASE_PROJECT_ID, 
-                                                      "", path, 
-                                                      documentJson.raw(), field);
-        
-        if (!success) {
-            ErrorManager::firebaseError(
-                ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
-                String("Field update failed: ") + fbdo.errorReason().c_str(),
-                "FirebaseManager::updateField"
-            );
-        }
-        
-        giveMutex();
-        return success;
+        return true;
     }
     
     /**
@@ -285,7 +215,8 @@ public:
      * @return true if update was successful
      */
     bool updateSystemHealth(const char* field, const std::map<const char*, String>& data) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -298,10 +229,11 @@ public:
             documentJson.set(pair.first, pair.second);
         }
         
+        const char* emptyStr = "";
         bool success = Firebase.Firestore.patchDocument(&fbdo, 
                                                       SystemConfig::FIREBASE_PROJECT_ID, 
-                                                      "", pathBuffer, 
-                                                      documentJson.raw(), field);
+                                                      emptyStr, pathBuffer, 
+                                                      "fields", documentJson.raw());
         
         if (!success) {
             ErrorManager::firebaseError(
@@ -311,7 +243,6 @@ public:
             );
         }
         
-        giveMutex();
         return success;
     }
     
@@ -331,7 +262,8 @@ public:
     bool fetchSystemData(String* systemName, time_t* lightOnTime, time_t* lightOffTime,
                         bool* lightMasterSwitch, bool* timeCycleEnabled, bool* unitsEnabled,
                         unsigned long* atomizerOnIntervals, unsigned long* atomizerOffIntervals) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -408,7 +340,6 @@ public:
             }
         }
         
-        giveMutex();
         return success;
     }
     
@@ -423,7 +354,8 @@ public:
      */
     bool saveLightSettings(bool lightMasterSwitch, bool timeCycleEnabled,
                          const String& lightOnTime, const String& lightOffTime) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -445,7 +377,7 @@ public:
             if (!Firebase.Firestore.patchDocument(&fbdo, 
                                                 SystemConfig::FIREBASE_PROJECT_ID, 
                                                 "", pathBuffer, 
-                                                documentJson.raw(), "fields")) {
+                                                "fields", documentJson.raw())) {
                 ErrorManager::firebaseError(
                     ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
                     String("Failed to save light settings: ") + fbdo.errorReason().c_str(),
@@ -455,7 +387,6 @@ public:
             }
         }
         
-        giveMutex();
         return success;
     }
     
@@ -471,7 +402,8 @@ public:
     bool saveUnitSettings(int unitIndex, bool enabled,
                          unsigned long atomizerOnInterval,
                          unsigned long atomizerOffInterval) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
@@ -501,7 +433,7 @@ public:
             if (!Firebase.Firestore.patchDocument(&fbdo, 
                                                 SystemConfig::FIREBASE_PROJECT_ID, 
                                                 "", pathBuffer, 
-                                                documentJson.raw(), "fields")) {
+                                                "fields", documentJson.raw())) {
                 ErrorManager::firebaseError(
                     ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
                     String("Failed to save unit settings: ") + fbdo.errorReason().c_str(),
@@ -511,7 +443,6 @@ public:
             }
         }
         
-        giveMutex();
         return success;
     }
     
@@ -520,14 +451,14 @@ public:
      * @return true if update was successful
      */
     bool updateSystemVersion(const char* version) {
-        if (!takeMutex()) {
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
             return false;
         }
         
         if (!createPath(pathBuffer, sizeof(pathBuffer), 
                        SystemConfig::SYSTEM_PATH_FORMAT, 
                        SystemConfig::SERIAL_NUMBER)) {
-            giveMutex();
             return false;
         }
         
@@ -537,7 +468,7 @@ public:
         bool success = Firebase.Firestore.patchDocument(&fbdo, 
                                                       SystemConfig::FIREBASE_PROJECT_ID, 
                                                       "", pathBuffer, 
-                                                      documentJson.raw(), "fields");
+                                                      "fields", documentJson.raw());
         
         if (!success) {
             ErrorManager::firebaseError(
@@ -547,8 +478,68 @@ public:
             );
         }
         
-        giveMutex();
         return success;
+    }
+    
+    /**
+     * Gets a document field value
+     * @param path Document path
+     * @param value Output parameter for the value
+     * @return true if get was successful
+     */
+    bool getDocument(const char* path, String& value) {
+        if (!Firebase.ready()) {
+            Serial.println("FirebaseManager not ready");
+            return false;
+        }
+
+        ScopedLock lock(*this);
+        if (!lock.isLocked()) {
+            return false;
+        }
+        
+        if (!Firebase.Firestore.getDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, "", path)) {
+            ErrorManager::firebaseError(
+                ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
+                String("Failed to get document: ") + fbdo.errorReason().c_str(),
+                "FirebaseManager::getDocument"
+            );
+            return false;
+        }
+        
+        documentJson.setJsonData(fbdo.payload());
+        FirebaseJsonData jsonData;
+        
+        // Try to get string value first
+        if (documentJson.get(jsonData, "fields/value/stringValue")) {
+            value = jsonData.stringValue;
+            return true;
+        }
+        
+        // Try integer value
+        if (documentJson.get(jsonData, "fields/value/integerValue")) {
+            value = String(jsonData.intValue);
+            return true;
+        }
+        
+        // Try boolean value
+        if (documentJson.get(jsonData, "fields/value/booleanValue")) {
+            value = jsonData.boolValue ? "true" : "false";
+            return true;
+        }
+        
+        // Try double/float value
+        if (documentJson.get(jsonData, "fields/value/doubleValue")) {
+            value = String(jsonData.doubleValue);
+            return true;
+        }
+        
+        ErrorManager::firebaseError(
+            ErrorManager::ErrorCode::FIREBASE_INVALID_TYPE,
+            "No valid value field found in document",
+            "FirebaseManager::getDocument"
+        );
+        return false;
     }
 };
 
