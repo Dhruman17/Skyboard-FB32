@@ -188,24 +188,31 @@ public:
             return false;
         }
 
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return false;
+        // Prepare JSON outside of mutex
+        FirebaseJson localJson;
+        localJson.set("fields/" + valueType + "/stringValue", value);
+        
+        // Get JSON string outside of mutex
+        String jsonStr = localJson.raw();
+        
+        // Perform Firebase operation with minimal mutex time
+        bool success = false;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            
+            // Update the document with correct patchDocument signature
+            const char* emptyStr = "";
+            success = Firebase.Firestore.patchDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, emptyStr, path, "fields", jsonStr);
         }
-
-        documentJson.clear();
         
-        // Create the document structure
-        documentJson.set("fields/" + valueType + "/stringValue", value);
-        
-        // Update the document with correct patchDocument signature
-        const char* emptyStr = "";
-        if (!Firebase.Firestore.patchDocument(&fbdo, SystemConfig::FIREBASE_PROJECT_ID, emptyStr, path, "fields", documentJson.raw())) {
+        if (!success) {
             Serial.printf("Failed to update document: %s\n", fbdo.errorReason().c_str());
-            return false;
         }
         
-        return true;
+        return success;
     }
     
     /**

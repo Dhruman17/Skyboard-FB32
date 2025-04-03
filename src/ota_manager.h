@@ -195,6 +195,16 @@ public:
             return false;
         }
         
+        // Second-stage guard: Verify Firebase is initialized and online
+        if (!Firebase.ready()) {
+            ErrorManager::systemError(
+                ErrorManager::ErrorCode::OTA_UPDATE_FAILED,
+                "Firebase not ready for OTA update check",
+                "OTAManager::checkForUpdates"
+            );
+            return false;
+        }
+        
         // Check Firebase for new version
         String newVersion;
         if (!firebaseManager.getDocument("/firmware/version", newVersion)) {

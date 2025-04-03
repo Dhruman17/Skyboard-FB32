@@ -95,6 +95,11 @@ private:
         
         ScopedLock lock(*this);
         if (!lock.isLocked()) {
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "UnitManager::initializeUnit"
+            );
             return false;
         }
         
@@ -245,46 +250,75 @@ private:
     }
     
     /**
-     * Handles sensor reading errors with retry mechanism
+     * Handles sensor errors with retry mechanism
      * @param unitIndex Index of the unit
-     * @param errorType Type of error ("water" or "ec")
+     * @param errorType Type of error
      * @return true if error was handled successfully
      */
     bool handleSensorError(int unitIndex, const char* errorType) const {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "UnitManager::handleSensorError"
-            );
-            return false;
+        // Get current error count with minimal mutex time
+        uint8_t currentErrors = 0;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                ErrorManager::mutexError(
+                    ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                    "Failed to take mutex",
+                    "UnitManager::handleSensorError"
+                );
+                return false;
+            }
+            currentErrors = consecutiveErrors[unitIndex];
         }
         
-        bool success = true;
-        consecutiveErrors[unitIndex]++;
+        // Increment error count
+        currentErrors++;
         
-        if (consecutiveErrors[unitIndex] >= SystemConfig::MAX_CONSECUTIVE_ERRORS) {
+        // Update error count with minimal mutex time
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            consecutiveErrors[unitIndex] = currentErrors;
+        }
+        
+        if (currentErrors >= SystemConfig::MAX_CONSECUTIVE_ERRORS) {
             ErrorManager::sensorError(
                 ErrorManager::ErrorCode::SENSOR_READ_FAILED,
                 String("Too many consecutive ") + errorType + " sensor errors for unit " + String(unitIndex),
                 "UnitManager::handleSensorError"
             );
             
-            // Attempt sensor recalibration
-            if (!recalibrateSensor(unitIndex, errorType)) {
+            // Allow other tasks to run before recalibration
+            yield();
+            
+            // Attempt sensor recalibration outside of main mutex
+            bool recalibrated = recalibrateSensor(unitIndex, errorType);
+            
+            // Update error count based on recalibration result
+            {
+                ScopedLock lock(*this);
+                if (!lock.isLocked()) {
+                    return false;
+                }
+                
+                if (recalibrated) {
+                    consecutiveErrors[unitIndex] = 0;
+                }
+            }
+            
+            if (!recalibrated) {
                 ErrorManager::sensorError(
                     ErrorManager::ErrorCode::SENSOR_READ_FAILED,
                     String("Failed to recover ") + errorType + " sensor for unit " + String(unitIndex),
                     "UnitManager::handleSensorError"
                 );
-                success = false;
-            } else {
-                consecutiveErrors[unitIndex] = 0;
+                return false;
             }
         }
         
-        return success;
+        return true;
     }
     
     /**
@@ -297,17 +331,23 @@ private:
             return false;
         }
         
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "UnitManager::setMultiplexer"
-            );
-            return false;
+        // Get hardware manager reference with minimal mutex time
+        HardwareManager* hwManager = nullptr;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                ErrorManager::mutexError(
+                    ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                    "Failed to take mutex",
+                    "UnitManager::setMultiplexer"
+                );
+                return false;
+            }
+            hwManager = &sensorManager.getHardwareManager();
         }
         
-        bool success = sensorManager.getHardwareManager().selectUnitAndSensor(unitIndex, SystemConfig::FDC1004_CHANNEL);
+        // Perform I2C operation outside of mutex
+        bool success = hwManager->selectUnitAndSensor(unitIndex, SystemConfig::FDC1004_CHANNEL);
         if (!success) {
             ErrorManager::hardwareError(
                 ErrorManager::ErrorCode::HARDWARE_I2C_ERROR,
@@ -511,6 +551,27 @@ private:
     }
     
     /**
+     * Updates water level readings for all units
+     */
+    void updateWaterLevelReadings() {
+        // Process one unit at a time to avoid long mutex holds
+        static int currentUnit = 0;
+        
+        // Process the current unit
+        if (currentUnit < SystemConfig::NUMBER_OF_UNITS) {
+            if (systemState.unitsEnabled[currentUnit]) {
+                updateWaterLevel(currentUnit);
+            }
+            
+            // Move to next unit for next call
+            currentUnit++;
+        } else {
+            // Reset to start for next cycle
+            currentUnit = 0;
+        }
+    }
+    
+    /**
      * Updates water level for a specific unit
      * @param unitIndex Index of the unit
      */
@@ -519,49 +580,70 @@ private:
             return;
         }
         
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "UnitManager::updateWaterLevel"
-            );
-            return;
+        // Get atomizer state with minimal mutex time
+        bool atomizerOn = false;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                ErrorManager::mutexError(
+                    ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                    "Failed to take mutex",
+                    "UnitManager::updateWaterLevel"
+                );
+                return;
+            }
+            atomizerOn = atomizerStates[unitIndex];
         }
         
         // Only read water level if atomizer is off
-        if (!atomizerStates[unitIndex]) {
+        if (!atomizerOn) {
+            // Set multiplexer outside of main mutex
             if (!setMultiplexer(unitIndex)) {
                 return;
             }
             
+            // Allow other tasks to run
+            yield();
+            
+            // Get water level reading
             float level = sensorManager.getWaterLevel(unitIndex);
+            
+            // Process the reading with minimal mutex time
             if (level >= 0) {
-                waterLevels[unitIndex] = level;
-                waterLevelStates[unitIndex] = level > SystemConfig::WATER_LEVEL_MIN;
+                bool newWaterLevelState = level > SystemConfig::WATER_LEVEL_MIN;
+                bool stateChanged = false;
                 
-                // Update Firebase if water level state changed
-                if (waterLevelStates[unitIndex] != previousWaterLevelStates[unitIndex]) {
+                {
+                    ScopedLock lock(*this);
+                    if (!lock.isLocked()) {
+                        return;
+                    }
+                    
+                    // Update water level state
+                    waterLevels[unitIndex] = level;
+                    waterLevelStates[unitIndex] = newWaterLevelState;
+                    
+                    // Check if state changed
+                    stateChanged = (waterLevelStates[unitIndex] != previousWaterLevelStates[unitIndex]);
+                    if (stateChanged) {
+                        previousWaterLevelStates[unitIndex] = waterLevelStates[unitIndex];
+                    }
+                }
+                
+                // Update Firebase outside of mutex if state changed
+                if (stateChanged) {
+                    // Allow other tasks to run
+                    yield();
+                    
                     firebaseManager.updateDocument(
                         SystemConfig::UNIT_PATH_FORMAT,
-                        waterLevelStates[unitIndex] ? "true" : "false",
+                        newWaterLevelState ? "true" : "false",
                         "bool"
                     );
-                    previousWaterLevelStates[unitIndex] = waterLevelStates[unitIndex];
                 }
             } else {
+                // Handle sensor error outside of main mutex
                 handleSensorError(unitIndex, SystemConfig::SENSOR_TYPE_WATER);
-            }
-        }
-    }
-    
-    /**
-     * Updates water level readings for all units
-     */
-    void updateWaterLevelReadings() {
-        for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (systemState.unitsEnabled[i]) {
-                updateWaterLevel(i);
             }
         }
     }
@@ -740,24 +822,26 @@ private:
 public:
     /**
      * Constructor
-     * @param state Reference to system state
-     * @param firebase Reference to Firebase manager
-     * @param sensor Reference to sensor manager
-     * @param atomizer Reference to atomizer manager
      */
-    UnitManager(SystemState& state, FirebaseManager& firebase, SensorManager& sensor, AtomizerManager& atomizer)
-        : systemState(state), firebaseManager(firebase), sensorManager(sensor), atomizerManager(atomizer),
-          initialized(false), lastUpdate(0) {
-        
+    UnitManager(SystemState& state, FirebaseManager& fb, SensorManager& sm, AtomizerManager& am)
+        : MutexManager(), systemState(state), firebaseManager(fb), sensorManager(sm), atomizerManager(am),
+          i2cErrorCount(0), initialized(false), lastUpdate(0) {
         // Initialize arrays
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
+            unitNames[i].reserve(UNIT_NAME_MAX_LENGTH);
+            atomizerTimings[i] = {0, 0};
+            previousMillis[i] = 0;
+            atomizerStates[i] = false;
+            previousWaterLevelStates[i] = false;
+            waterLevels[i] = INVALID_WATER_LEVEL;
+            consecutiveErrors[i] = 0;
+            atomizerOnTimes[i] = 0;
+            atomizerOffTimes[i] = 0;
             unitStates[i] = false;
             waterLevelStates[i] = false;
-            atomizerStates[i] = false;
-            atomizerOnIntervals[i] = DefaultValues::DEFAULT_ATOMIZER_ON_INTERVAL;
-            atomizerOffIntervals[i] = DefaultValues::DEFAULT_ATOMIZER_OFF_INTERVAL;
+            atomizerOnIntervals[i] = 0;
+            atomizerOffIntervals[i] = 0;
             lastAtomizerStateChange[i] = 0;
-            unitNames[i].reserve(SystemConfig::UNIT_NAME_MAX_LENGTH);
         }
     }
     

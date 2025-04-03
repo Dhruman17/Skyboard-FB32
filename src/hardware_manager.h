@@ -240,7 +240,7 @@ public:
     /**
      * Constructor
      */
-    HardwareManager() : initialized(false), i2cErrorCount(0) {
+    HardwareManager() : MutexManager(), initialized(false), i2cErrorCount(0) {
         // Initialize arrays
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             multiplexerStates[i] = false;

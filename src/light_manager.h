@@ -6,8 +6,6 @@
 #include "mutex_manager.h"
 #include <time.h>
 #include <Arduino.h>
-#include <freertos/FreeRTOS.h>
-#include <freertos/semphr.h>
 
 /**
  * LightManager Class
@@ -251,37 +249,64 @@ public:
             return;
         }
         
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            Serial.println("Failed to take mutex in update");
-            return;
+        // Get current state and settings with minimal mutex time
+        bool currentLightState;
+        bool currentMasterSwitch;
+        bool currentTimeCycleEnabled;
+        time_t currentOnTime;
+        time_t currentOffTime;
+        
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                Serial.println("Failed to take mutex in update");
+                return;
+            }
+            
+            currentLightState = lightState;
+            currentMasterSwitch = masterSwitch;
+            currentTimeCycleEnabled = timeCycleEnabled;
+            currentOnTime = onTime;
+            currentOffTime = offTime;
         }
         
+        // Calculate new state outside of mutex
         bool newState = false;
         
-        if (masterSwitch) {
+        if (currentMasterSwitch) {
             // Manual control mode
             newState = true;
         } else {
-            // Check if we have valid time
+            // Get current time of day outside of mutex
             time_t currentTime = getCurrentTimeOfDay();
             
             if (currentTime == 0) {
                 // Time not set or invalid, use fallback cycle
                 newState = handleFallbackCycle();
-            } else if (timeCycleEnabled) {
+            } else if (currentTimeCycleEnabled) {
                 // Time-based control mode with valid time
-                if (offTime < onTime) {
-                    newState = currentTime >= onTime || currentTime < offTime;
+                if (currentOffTime < currentOnTime) {
+                    newState = currentTime >= currentOnTime || currentTime < currentOffTime;
                 } else {
-                    newState = currentTime >= onTime && currentTime < offTime;
+                    newState = currentTime >= currentOnTime && currentTime < currentOffTime;
                 }
             }
         }
         
         // Only update if state changed
-        if (newState != lightState) {
-            resetPinIfNeeded();
+        if (newState != currentLightState) {
+            // Reset pin if needed with minimal mutex time
+            {
+                ScopedLock lock(*this);
+                if (lock.isLocked()) {
+                    resetPinIfNeeded();
+                }
+            }
+            
+            // Allow other tasks to run
+            yield();
+            
+            // Write to pin with minimal mutex time
             writeLightPin(newState);
         }
     }
@@ -350,40 +375,69 @@ public:
      * @return Current time of day in seconds
      */
     time_t getCurrentTimeOfDay() {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            ErrorManager::mutexError(
-                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
-                "Failed to take mutex",
-                "LightManager::getCurrentTimeOfDay"
-            );
-            return 0;
-        }
-        
+        // Get current time outside of mutex
         time_t currentTime;
         time(&currentTime);
         
-        // Validate time every hour
-        if (millis() - lastTimeValidation >= TIME_VALIDATION_INTERVAL) {
-            struct tm timeinfo;
-            if (!getLocalTime(&timeinfo)) {
-                consecutiveTimeFailures++;
-                if (consecutiveTimeFailures >= MAX_TIME_FAILURES) {
-                    timeValid = false;
-                    Serial.println("CRITICAL ERROR: Persistent time synchronization failure");
-                }
-            } else {
-                consecutiveTimeFailures = 0;
-                timeValid = true;
+        // Check if we need to validate time
+        bool needValidation = false;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                ErrorManager::mutexError(
+                    ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                    "Failed to take mutex",
+                    "LightManager::getCurrentTimeOfDay"
+                );
+                return 0;
             }
-            lastTimeValidation = millis();
+            
+            needValidation = (millis() - lastTimeValidation >= TIME_VALIDATION_INTERVAL);
+        }
+        
+        // Validate time if needed, outside of mutex
+        if (needValidation) {
+            struct tm timeinfo;
+            bool timeValid = getLocalTime(&timeinfo);
+            
+            // Update validation status with minimal mutex time
+            {
+                ScopedLock lock(*this);
+                if (lock.isLocked()) {
+                    if (!timeValid) {
+                        consecutiveTimeFailures++;
+                        if (consecutiveTimeFailures >= MAX_TIME_FAILURES) {
+                            this->timeValid = false;
+                            Serial.println("CRITICAL ERROR: Persistent time synchronization failure");
+                        }
+                    } else {
+                        consecutiveTimeFailures = 0;
+                        this->timeValid = true;
+                    }
+                    lastTimeValidation = millis();
+                }
+            }
+            
+            // Allow other tasks to run
+            yield();
+        }
+        
+        // Check if time is valid with minimal mutex time
+        bool isTimeValid;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return 0;
+            }
+            isTimeValid = timeValid;
         }
         
         // If time is invalid, return 0 to prevent incorrect lighting control
-        if (!timeValid) {
+        if (!isTimeValid) {
             return 0;
         }
         
+        // Convert to seconds since midnight outside of mutex
         struct tm timeinfo;
         localtime_r(&currentTime, &timeinfo);
         time_t timeOfDay = timeinfo.tm_hour * 3600 + timeinfo.tm_min * 60;

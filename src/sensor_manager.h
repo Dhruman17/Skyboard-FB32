@@ -66,11 +66,7 @@ private:
      * @return true if initialization successful
      */
     bool initializeWaterLevelSensor(uint8_t unitIndex) {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return false;
-        }
-        
+        // Validate unit index with minimal mutex time
         if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
             ErrorManager::sensorError(
                 ErrorManager::ErrorCode::SENSOR_INIT_FAILED,
@@ -80,15 +76,22 @@ private:
             return false;
         }
         
-        // Clean up existing sensor if any
-        if (waterSensors[unitIndex] != nullptr) {
-            delete waterSensors[unitIndex];
-            waterSensors[unitIndex] = nullptr;
+        // Clean up existing sensor with minimal mutex time
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            
+            if (waterSensors[unitIndex] != nullptr) {
+                delete waterSensors[unitIndex];
+                waterSensors[unitIndex] = nullptr;
+            }
         }
         
-        // Create new sensor instance with concrete implementation
-        waterSensors[unitIndex] = new CapacitiveWaterLevelSensor(unitIndex);
-        if (waterSensors[unitIndex] == nullptr) {
+        // Create new sensor instance outside of mutex
+        WaterLevelSensor* newSensor = new CapacitiveWaterLevelSensor(unitIndex);
+        if (newSensor == nullptr) {
             ErrorManager::sensorError(
                 ErrorManager::ErrorCode::SENSOR_INIT_FAILED,
                 "Failed to allocate water level sensor",
@@ -97,14 +100,25 @@ private:
             return false;
         }
         
-        // Initialize sensor
-        if (!waterSensors[unitIndex]->initialize()) {
-            delete waterSensors[unitIndex];
-            waterSensors[unitIndex] = nullptr;
-            return false;
+        // Initialize sensor outside of mutex
+        bool initSuccess = newSensor->initialize();
+        
+        // Store sensor with minimal mutex time
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                delete newSensor;
+                return false;
+            }
+            
+            if (initSuccess) {
+                waterSensors[unitIndex] = newSensor;
+            } else {
+                delete newSensor;
+            }
         }
         
-        return true;
+        return initSuccess;
     }
     
     /**
@@ -113,11 +127,7 @@ private:
      * @return true if initialization successful
      */
     bool initializeECSensor(uint8_t unitIndex) {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return false;
-        }
-        
+        // Validate unit index with minimal mutex time
         if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
             ErrorManager::sensorError(
                 ErrorManager::ErrorCode::SENSOR_INIT_FAILED,
@@ -127,15 +137,22 @@ private:
             return false;
         }
         
-        // Clean up existing sensor if any
-        if (mcp3021[unitIndex] != nullptr) {
-            delete mcp3021[unitIndex];
-            mcp3021[unitIndex] = nullptr;
+        // Clean up existing sensor with minimal mutex time
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            
+            if (mcp3021[unitIndex] != nullptr) {
+                delete mcp3021[unitIndex];
+                mcp3021[unitIndex] = nullptr;
+            }
         }
         
-        // Create new sensor instance
-        mcp3021[unitIndex] = new MCP3021(SystemConfig::MCP3021_ADDR);
-        if (mcp3021[unitIndex] == nullptr) {
+        // Create new sensor instance outside of mutex
+        MCP3021* newSensor = new MCP3021(SystemConfig::MCP3021_ADDR);
+        if (newSensor == nullptr) {
             ErrorManager::sensorError(
                 ErrorManager::ErrorCode::SENSOR_INIT_FAILED,
                 "Failed to allocate EC sensor",
@@ -144,15 +161,26 @@ private:
             return false;
         }
         
-        // Initialize sensor
-        int testReading = mcp3021[unitIndex]->read();
-        if (testReading < 0) {
-            delete mcp3021[unitIndex];
-            mcp3021[unitIndex] = nullptr;
-            return false;
+        // Initialize sensor outside of mutex
+        int testReading = newSensor->read();
+        bool initSuccess = (testReading >= 0);
+        
+        // Store sensor with minimal mutex time
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                delete newSensor;
+                return false;
+            }
+            
+            if (initSuccess) {
+                mcp3021[unitIndex] = newSensor;
+            } else {
+                delete newSensor;
+            }
         }
         
-        return true;
+        return initSuccess;
     }
     
     /**
@@ -215,27 +243,50 @@ public:
      * @return true if initialization successful
      */
     bool begin() {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return false;
+        // Check if already initialized with minimal mutex time
+        bool alreadyInitialized = false;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            alreadyInitialized = initialized;
         }
         
-        if (initialized) {
+        if (alreadyInitialized) {
             return true;
         }
         
         bool success = true;
         
-        // Initialize sensors for each unit
+        // Initialize sensors for each unit one at a time
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (!initializeWaterLevelSensor(i) || !initializeECSensor(i)) {
+            // Initialize water level sensor with minimal mutex time
+            if (!initializeWaterLevelSensor(i)) {
                 success = false;
                 break;
             }
+            
+            // Allow other tasks to run
+            yield();
+            
+            // Initialize EC sensor with minimal mutex time
+            if (!initializeECSensor(i)) {
+                success = false;
+                break;
+            }
+            
+            // Allow other tasks to run
+            yield();
         }
         
-        if (success) {
-            initialized = true;
+        // Update initialization state with minimal mutex time
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            initialized = success;
         }
         
         return success;

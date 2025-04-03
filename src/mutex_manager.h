@@ -111,14 +111,6 @@ public:
         }
         return true;
     }
-
-    /**
-     * Gets the mutex handle
-     * @return The mutex handle
-     */
-    SemaphoreHandle_t getMutex() const {
-        return mutex;
-    }
 };
 
 #endif // MUTEX_MANAGER_H 

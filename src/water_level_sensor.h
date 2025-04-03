@@ -51,6 +51,9 @@ public:
                 initialized = true;
                 return true;
             }
+            
+            // Allow other tasks to run between retries
+            yield();
             delay(SystemConfig::SENSOR_RETRY_DELAY_MS);
         }
         

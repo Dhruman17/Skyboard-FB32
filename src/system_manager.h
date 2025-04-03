@@ -153,16 +153,19 @@ private:
      * Thread-safe: Yes
      */
     void sendHeartbeat() {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return;
+        // Create path buffer for Firebase outside of mutex
+        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+        
+        // Get system name with minimal mutex time
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return;
+            }
+            snprintf(pathBuffer, sizeof(pathBuffer), "systems/%s", systemName.c_str());
         }
         
-        // Create path buffer for Firebase
-        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
-        snprintf(pathBuffer, sizeof(pathBuffer), "systems/%s", systemName.c_str());
-        
-        // Update heartbeat timestamp in Firebase
+        // Update heartbeat timestamp in Firebase outside of mutex
         if (!firebaseManager.updateDocument(pathBuffer, String(millis()), "number")) {
             ErrorManager::firebaseError(
                 ErrorManager::ErrorCode::FIREBASE_OPERATION_FAILED,
@@ -170,6 +173,9 @@ private:
                 "SystemManager::sendHeartbeat"
             );
         }
+        
+        // Allow other tasks to run
+        yield();
     }
     
     /**
@@ -178,35 +184,47 @@ private:
      * @return true if update was successful
      */
     bool updateSystemData() {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return false;
-        }
-        
         bool success = true;
         
-        // Update system status
-        systemStatus = networkManager.isConnected() ? "online" : "offline";
+        // Get system status with minimal mutex time
+        bool isConnected = false;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            isConnected = networkManager.isConnected();
+        }
         
-        // Create path buffer for Firebase
-        char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
+        // Update system status outside of mutex
+        String status = isConnected ? "online" : "offline";
         
-        // Update unit data
+        // Process one unit at a time to avoid long mutex holds
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (!systemState.unitsEnabled[i]) {
+            // Check if unit is enabled with minimal mutex time
+            bool unitEnabled = false;
+            {
+                ScopedLock lock(*this);
+                if (!lock.isLocked()) {
+                    return false;
+                }
+                unitEnabled = systemState.unitsEnabled[i];
+            }
+            
+            if (!unitEnabled) {
                 continue;
             }
             
-            // Create unit path
+            // Create unit path outside of mutex
+            char pathBuffer[SystemConfig::FIREBASE_PATH_BUFFER_SIZE];
             snprintf(pathBuffer, sizeof(pathBuffer), "units/%d", i);
             
-            // Update unit status
-            if (!firebaseManager.addToBatch(i, "status", 
-                systemState.unitsEnabled[i] ? "enabled" : "disabled", "string")) {
+            // Update unit status outside of mutex
+            if (!firebaseManager.addToBatch(i, "status", "enabled", "string")) {
                 success = false;
             }
             
-            // Update sensor values
+            // Get sensor values outside of mutex
             float ecValue = unitManager.readECSensorValue(i);
             if (ecValue >= 0) {
                 if (!firebaseManager.addToBatch(i, "ecValue", String(ecValue, 3), "float")) {
@@ -214,14 +232,17 @@ private:
                 }
             }
             
-            // Update control values
-            if (!firebaseManager.addToBatch(i, "atomizerOn", 
-                unitManager.isAtomizerOn(i) ? "true" : "false", "bool")) {
+            // Get atomizer state outside of mutex
+            bool atomizerOn = unitManager.isAtomizerOn(i);
+            if (!firebaseManager.addToBatch(i, "atomizerOn", atomizerOn ? "true" : "false", "bool")) {
                 success = false;
             }
+            
+            // Allow other tasks to run between units
+            yield();
         }
         
-        // Flush any remaining batched operations
+        // Flush any remaining batched operations outside of mutex
         if (!firebaseManager.flushBatch()) {
             success = false;
         }

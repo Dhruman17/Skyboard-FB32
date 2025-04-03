@@ -56,7 +56,7 @@ static uint8_t currentErrorIndex = 0;
  * - Connection check every 30 seconds
  * - Reconnection attempts every 5 seconds
  */
-class NetworkManager {
+class NetworkManager : public MutexManager {
 private:
     // Constants
     static constexpr uint32_t WIFI_TIMEOUT = 20000;  // 20 seconds
@@ -119,8 +119,17 @@ private:
     // System state
     bool initialized;
     bool timeSet;  // Track if time has been synchronized
-    
-    MutexManager mutexManager;
+
+    /**
+     * Safely deletes a WiFiManagerParameter pointer
+     * @param param Reference to the parameter pointer
+     */
+    void safeDeleteParam(WiFiManagerParameter*& param) {
+        if (param) {
+            delete param;
+            param = nullptr;
+        }
+    }
 
     /**
      * Logs an error with appropriate category
@@ -130,7 +139,7 @@ private:
      * @param location Error location
      */
     void logError(ErrorManager::ErrorCode code, const String& message, const String& location) {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             ErrorManager::mutexError(
                 ErrorManager::ErrorCode::MUTEX_TIMEOUT,
@@ -181,7 +190,7 @@ private:
         int retryCount = 0;
         
         while (retryCount < MAX_RETRIES) {
-            MutexManager::ScopedLock lock(mutexManager);
+            ScopedLock lock(*this);
             if (lock.isLocked()) {
                 Serial.println("[NetworkManager] Starting to load Firebase credentials");
                 
@@ -253,7 +262,7 @@ private:
         int retryCount = 0;
         
         while (retryCount < MAX_RETRIES) {
-            MutexManager::ScopedLock lock(mutexManager);
+            ScopedLock lock(*this);
             if (lock.isLocked()) {
                 Serial.println("[NetworkManager] Starting to save Firebase credentials");
                 
@@ -364,7 +373,7 @@ private:
      * @return true if setup successful
      */
     bool setupWiFiManager() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return false;
         }
@@ -375,7 +384,7 @@ private:
         wifiManager.setSaveConfigCallback([this]() {
             Serial.println("[NetworkManager] WiFi Manager save callback triggered");
             
-            MutexManager::ScopedLock callbackLock(mutexManager);
+            ScopedLock callbackLock(*this);
             if (!callbackLock.isLocked()) {
                 logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, "Failed to take mutex in callback", "NetworkManager::setupWiFiManager");
                 return;
@@ -417,7 +426,7 @@ private:
      * @return true if connection successful
      */
     bool connectToWiFi() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return false;
         }
@@ -448,7 +457,7 @@ private:
      * @return true if initialization successful
      */
     bool initializeTime() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return false;
         }
@@ -486,7 +495,7 @@ private:
      * @return true if initialization successful
      */
     bool initializeFirebase() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return false;
         }
@@ -527,7 +536,7 @@ private:
      * @return true if connection is stable
      */
     bool checkWiFiConnection() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             ErrorManager::mutexError(
                 ErrorManager::ErrorCode::MUTEX_TIMEOUT,
@@ -558,7 +567,7 @@ private:
      * @return true if reconnection successful
      */
     bool attemptReconnect() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return false;
         }
@@ -582,7 +591,7 @@ private:
      * @return true if Firebase is ready
      */
     bool checkFirebaseConnection() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             ErrorManager::mutexError(
                 ErrorManager::ErrorCode::MUTEX_TIMEOUT,
@@ -663,14 +672,8 @@ public:
         
         // Clean up WiFi parameters
         Serial.println("[NetworkManager] Cleaning up WiFi parameters");
-        if (custom_email != nullptr) {
-            delete custom_email;
-            custom_email = nullptr;
-        }
-        if (custom_password != nullptr) {
-            delete custom_password;
-            custom_password = nullptr;
-        }
+        safeDeleteParam(custom_email);
+        safeDeleteParam(custom_password);
         
         // Clean up credentials
         Serial.println("[NetworkManager] Cleaning up credentials");
@@ -691,6 +694,14 @@ public:
 
         Serial.println("[NetworkManager] Starting initialization");
         
+        // Clean up any existing parameters first
+        safeDeleteParam(custom_email);
+        safeDeleteParam(custom_password);
+        
+        // Create new parameters
+        custom_email = new WiFiManagerParameter("email", "Firebase Email", "", 64);
+        custom_password = new WiFiManagerParameter("password", "Firebase Password", "", 64, "type=\"password\"");
+        
         // Add custom parameters to WiFi Manager
         wifiManager.addParameter(custom_email);
         wifiManager.addParameter(custom_password);
@@ -703,7 +714,7 @@ public:
         wifiManager.setSaveConfigCallback([this]() {
             Serial.println("[NetworkManager] WiFi Manager save callback triggered");
             
-            MutexManager::ScopedLock callbackLock(mutexManager);
+            ScopedLock callbackLock(*this);
             if (!callbackLock.isLocked()) {
                 ErrorManager::mutexError(
                     ErrorManager::ErrorCode::MUTEX_TIMEOUT,
@@ -782,7 +793,7 @@ public:
      * @return true if connected
      */
     bool isConnected() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return false;
         }
@@ -794,7 +805,7 @@ public:
      * @return WiFi connection state
      */
     wl_status_t getConnectionState() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return WL_DISCONNECTED;
         }
@@ -806,7 +817,7 @@ public:
      * @return RSSI value
      */
     int32_t getRSSI() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return 0;
         }
@@ -818,7 +829,7 @@ public:
      * @return IP address as string
      */
     String getIPAddress() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return "";
         }
@@ -830,7 +841,7 @@ public:
      * @return MAC address as string
      */
     String getMACAddress() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return "";
         }
@@ -842,7 +853,7 @@ public:
      * @param password New OTA password
      */
     void setOTAPassword(const String& password) {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return;
         }
@@ -855,7 +866,7 @@ public:
      * @return true if update was successful
      */
     bool handleOTA(String password) {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return false;
         }
@@ -873,7 +884,7 @@ public:
      * @return true if reset was successful
      */
     bool resetWiFiManager() {
-        MutexManager::ScopedLock lock(mutexManager);
+        ScopedLock lock(*this);
         if (!lock.isLocked()) {
             return false;
         }

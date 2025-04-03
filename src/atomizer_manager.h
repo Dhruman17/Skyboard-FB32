@@ -69,7 +69,7 @@ public:
     /**
      * Constructor
      */
-    AtomizerManager() {
+    AtomizerManager() : MutexManager() {
         // Initialize timings
         for (int i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
             timings[i].onInterval = 0;
@@ -89,19 +89,28 @@ public:
      * @return true if initialization was successful
      */
     bool begin() {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return false;
+        // Check if already initialized with minimal mutex time
+        bool alreadyInitialized = false;
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            // We could add an initialized flag here if needed
         }
         
         bool success = true;
         
-        // Initialize PWM channels
+        // Initialize PWM channels one at a time
         for (uint8_t i = 0; i < PWM_CHANNELS; i++) {
+            // Initialize PWM channel with minimal mutex time
             if (!initializePWMChannel(i)) {
                 success = false;
                 break;
             }
+            
+            // Allow other tasks to run
+            yield();
         }
         
         return success;
@@ -115,11 +124,7 @@ public:
      * @return true if timing was set successfully
      */
     bool setTiming(uint8_t unitIndex, unsigned long onInterval, unsigned long offInterval) {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return false;
-        }
-        
+        // Validate parameters with minimal mutex time
         if (unitIndex >= SystemConfig::NUMBER_OF_UNITS) {
             ErrorManager::systemError(
                 ErrorManager::ErrorCode::SYSTEM_INVALID_STATE,
@@ -138,12 +143,20 @@ public:
             return false;
         }
         
-        timings[unitIndex].onInterval = onInterval;
-        timings[unitIndex].offInterval = offInterval;
-        timings[unitIndex].lastStateChange = millis();
-        timings[unitIndex].isOn = false;
+        // Update timing data with minimal mutex time
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return false;
+            }
+            
+            timings[unitIndex].onInterval = onInterval;
+            timings[unitIndex].offInterval = offInterval;
+            timings[unitIndex].lastStateChange = millis();
+            timings[unitIndex].isOn = false;
+        }
         
-        // Start with atomizer off
+        // Perform hardware operation outside of mutex
         ledcWrite(unitIndex, 0);
         
         return true;
@@ -154,36 +167,77 @@ public:
      * Should be called in the main loop
      */
     void update() {
-        ScopedLock lock(*this);
-        if (!lock.isLocked()) {
-            return;
-        }
+        // Process one unit at a time to avoid long mutex holds
+        static uint8_t currentUnit = 0;
         
+        // Get current time outside of mutex
         unsigned long currentMillis = millis();
         
-        for (uint8_t i = 0; i < SystemConfig::NUMBER_OF_UNITS; i++) {
-            if (timings[i].onInterval == 0 || timings[i].offInterval == 0) {
-                continue;  // Skip unconfigured units
+        // Get timing data for current unit with minimal mutex time
+        bool isOn = false;
+        unsigned long lastStateChange = 0;
+        unsigned long onInterval = 0;
+        unsigned long offInterval = 0;
+        
+        {
+            ScopedLock lock(*this);
+            if (!lock.isLocked()) {
+                return;
             }
             
-            unsigned long elapsed = currentMillis - timings[i].lastStateChange;
+            if (currentUnit >= SystemConfig::NUMBER_OF_UNITS) {
+                currentUnit = 0;
+                return;
+            }
             
-            if (timings[i].isOn) {
-                if (elapsed >= timings[i].onInterval) {
-                    // Turn off atomizer
-                    ledcWrite(i, 0);
-                    timings[i].isOn = false;
-                    timings[i].lastStateChange = currentMillis;
+            if (timings[currentUnit].onInterval == 0 || timings[currentUnit].offInterval == 0) {
+                // Skip unconfigured units
+                currentUnit = (currentUnit + 1) % SystemConfig::NUMBER_OF_UNITS;
+                return;
+            }
+            
+            isOn = timings[currentUnit].isOn;
+            lastStateChange = timings[currentUnit].lastStateChange;
+            onInterval = timings[currentUnit].onInterval;
+            offInterval = timings[currentUnit].offInterval;
+        }
+        
+        // Calculate elapsed time outside of mutex
+        unsigned long elapsed = currentMillis - lastStateChange;
+        
+        // Determine if state change is needed
+        bool needStateChange = false;
+        bool newState = isOn;
+        
+        if (isOn && elapsed >= onInterval) {
+            // Turn off atomizer
+            needStateChange = true;
+            newState = false;
+        } else if (!isOn && elapsed >= offInterval) {
+            // Turn on atomizer
+            needStateChange = true;
+            newState = true;
+        }
+        
+        // Update state if needed
+        if (needStateChange) {
+            // Update hardware outside of mutex
+            ledcWrite(currentUnit, newState ? PWM_DUTY_CYCLE : 0);
+            
+            // Update timing data with minimal mutex time
+            {
+                ScopedLock lock(*this);
+                if (!lock.isLocked()) {
+                    return;
                 }
-            } else {
-                if (elapsed >= timings[i].offInterval) {
-                    // Turn on atomizer
-                    ledcWrite(i, PWM_DUTY_CYCLE);
-                    timings[i].isOn = true;
-                    timings[i].lastStateChange = currentMillis;
-                }
+                
+                timings[currentUnit].isOn = newState;
+                timings[currentUnit].lastStateChange = currentMillis;
             }
         }
+        
+        // Move to next unit for next call
+        currentUnit = (currentUnit + 1) % SystemConfig::NUMBER_OF_UNITS;
     }
     
     /**
