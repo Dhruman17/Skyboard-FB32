@@ -546,6 +546,10 @@ void sendHeartbeat()
     }
 }
 
+unsigned long lastFirmwareCheckMillis = 0;
+unsigned long lastRestartMillis = 0;  // Track last restart time
+const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000;  // 24 hours in milliseconds
+
 void setup()
 {
     Serial.begin(9600);
@@ -625,6 +629,14 @@ void loop()
     if (WiFi.status() == WL_CONNECTED)
     {
         unsigned long currentMillis = millis();
+
+        // Check for daily restart
+        if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
+        {
+            Serial.println("Performing daily restart to clear memory...");
+            delay(1000);  // Give time for the message to be sent
+            ESP.restart();
+        }
 
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS + connectionOffset)
         {
