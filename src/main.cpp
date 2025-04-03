@@ -117,67 +117,31 @@ void saveSettingsToStorage() {
  * 4. Initialize system (network, Firebase, etc.)
  */
 void setup() {
-    // Disable all watchdog timers during initialization
+    // Disable watchdog timers during initialization
     disableCore0WDT();
     disableCore1WDT();
+    disableLoopWDT();
     
-    // Start serial communication for debugging
-    Serial.begin(115200);  // Match platformio.ini setting
-    delay(2000);  // Give more time for serial to initialize
-    Serial.println("\n\n");  // Add some newlines to clear any garbage
-    Serial.println("Starting initialization...");
+    // Initialize serial first, before any other operations
+    Serial.begin(115200);
+    delay(1000);  // Give serial time to initialize
+    Serial.println("\n\nStarting Skyboard initialization...");
     
-    // Initialize NVS
+    // Initialize NVS first
     Serial.println("Initializing NVS...");
-    esp_err_t ret = nvs_flash_init();
-    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
-        Serial.println("NVS partition was truncated and needs to be erased");
-        ESP_ERROR_CHECK(nvs_flash_erase());
-        ret = nvs_flash_init();
+    if (!nvs_flash_init()) {
+        Serial.println("ERROR: Failed to initialize NVS");
+        return;
     }
-    ESP_ERROR_CHECK(ret);
     Serial.println("NVS initialized successfully");
-    
-    // Set up random seed for connection offset
-    randomSeed(analogRead(0));
     
     // Initialize Preferences
     Serial.println("Initializing Preferences...");
-    if (!preferences.begin("system", false)) {
-        Serial.println("ERROR: Failed to initialize preferences");
-        ErrorManager::systemError(
-            ErrorManager::ErrorCode::SYSTEM_CONFIG_FAILED,
-            "Failed to initialize preferences",
-            "setup"
-        );
-        ESP.restart();
-    }
+    preferences.begin("skyboard", false);
     Serial.println("Preferences initialized successfully");
     
-    // Initialize PreferencesManager
-    Serial.println("Initializing PreferencesManager...");
-    preferencesManager = new PreferencesManager();
-    if (preferencesManager == nullptr) {
-        Serial.println("CRITICAL ERROR: Failed to create PreferencesManager");
-        delay(3000);
-        ESP.restart();
-    }
-    
-    // Ensure preferences are properly initialized before calling begin
-    delay(100);  // Give time for preferences to settle
-    
-    if (!preferencesManager->begin()) {
-        Serial.println("CRITICAL ERROR: Failed to initialize PreferencesManager");
-        delay(3000);
-        ESP.restart();
-    }
-    Serial.println("PreferencesManager initialized successfully");
-    
-    // Load settings from storage first
-    loadSettingsFromStorage();
-    
     // Initialize hardware components
-    Serial.println("Initializing hardware...");
+    Serial.println("Initializing hardware components...");
     hardwareManager = new HardwareManager();
     if (hardwareManager == nullptr || !hardwareManager->begin()) {
         Serial.println("CRITICAL ERROR: Failed to initialize HardwareManager");
@@ -236,25 +200,21 @@ void setup() {
     }
     Serial.println("LightManager created successfully");
     
-    // Initialize WiFiManager with shorter timeout
+    // Initialize WiFiManager
     Serial.println("Initializing WiFiManager...");
     wifiManager = new WiFiManager();
     if (wifiManager == nullptr) {
-        Serial.println("CRITICAL ERROR: Failed to create WiFiManager");
-        delay(3000);
-        ESP.restart();
+        Serial.println("ERROR: Failed to create WiFiManager");
+        return;
     }
-    // Set shorter timeout for WiFi portal
-    wifiManager->setConfigPortalTimeout(60);  // Reduce from 180 to 60 seconds
     Serial.println("WiFiManager created successfully");
     
     // Initialize NetworkManager
     Serial.println("Initializing NetworkManager...");
     networkManager = new NetworkManager(fbdo, auth, config, *lightManager, *wifiManager);
     if (networkManager == nullptr) {
-        Serial.println("CRITICAL ERROR: Failed to create NetworkManager");
-        delay(3000);
-        ESP.restart();
+        Serial.println("ERROR: Failed to create NetworkManager");
+        return;
     }
     Serial.println("NetworkManager created successfully");
     
@@ -275,42 +235,24 @@ void setup() {
     systemManager = new SystemManager(*networkManager, *otaManager, *lightManager, 
                                     *unitManager, *firebaseManager, systemState);
     if (systemManager == nullptr) {
-        Serial.println("CRITICAL ERROR: Failed to create SystemManager");
-        delay(3000);
-        ESP.restart();
+        Serial.println("ERROR: Failed to create SystemManager");
+        return;
     }
     Serial.println("SystemManager created successfully");
     
-    // Initialize system components
+    // Start system initialization
     Serial.println("Starting system initialization...");
     if (!systemManager->begin()) {
-        Serial.println("Failed to initialize system. Continuing with stored settings...");
-    } else {
-        Serial.println("System initialized successfully");
+        Serial.println("ERROR: Failed to initialize system");
+        return;
     }
+    Serial.println("System initialization completed successfully");
     
-    // Create network initialization task
-    Serial.println("Creating network initialization task...");
-    if (xTaskCreate(
-        networkInitTask,          // Task function
-        "NetworkInit",           // Task name
-        4096,                    // Stack size
-        networkManager,          // Task parameter
-        1,                       // Priority
-        &networkInitTaskHandle   // Task handle
-    ) != pdPASS) {
-        Serial.println("CRITICAL ERROR: Failed to create network initialization task");
-        delay(3000);
-        ESP.restart();
-    }
-    Serial.println("Network initialization task created successfully");
-    
-    // Re-enable watchdog timer after initialization
+    // Re-enable watchdog timers after initialization
     enableCore0WDT();
     enableCore1WDT();
-    
-    Serial.println("Initialization complete");
-    delay(1000);  // Give time for serial output to complete
+    enableLoopWDT();
+    Serial.println("Watchdog timers re-enabled");
 }
 
 /**
