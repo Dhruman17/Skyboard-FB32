@@ -129,15 +129,28 @@ void setup() {
     
     // Initialize NVS first
     Serial.println("Initializing NVS...");
-    if (!nvs_flash_init()) {
+    esp_err_t ret = nvs_flash_init();
+    if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
+        // NVS partition was truncated and needs to be erased
+        Serial.println("NVS partition was truncated and needs to be erased");
+        ESP_ERROR_CHECK(nvs_flash_erase());
+        ret = nvs_flash_init();
+    }
+    if (ret != ESP_OK) {
         Serial.println("ERROR: Failed to initialize NVS");
-        return;
+        Serial.printf("Error code: %d\n", ret);
+        delay(3000);
+        ESP.restart();
     }
     Serial.println("NVS initialized successfully");
     
     // Initialize Preferences
     Serial.println("Initializing Preferences...");
-    preferences.begin("skyboard", false);
+    if (!preferences.begin("skyboard", false)) {
+        Serial.println("ERROR: Failed to initialize preferences");
+        delay(3000);
+        ESP.restart();
+    }
     Serial.println("Preferences initialized successfully");
     
     // Initialize hardware components
@@ -204,8 +217,9 @@ void setup() {
     Serial.println("Initializing WiFiManager...");
     wifiManager = new WiFiManager();
     if (wifiManager == nullptr) {
-        Serial.println("ERROR: Failed to create WiFiManager");
-        return;
+        Serial.println("CRITICAL ERROR: Failed to create WiFiManager");
+        delay(3000);
+        ESP.restart();
     }
     Serial.println("WiFiManager created successfully");
     
@@ -213,8 +227,9 @@ void setup() {
     Serial.println("Initializing NetworkManager...");
     networkManager = new NetworkManager(fbdo, auth, config, *lightManager, *wifiManager);
     if (networkManager == nullptr) {
-        Serial.println("ERROR: Failed to create NetworkManager");
-        return;
+        Serial.println("CRITICAL ERROR: Failed to create NetworkManager");
+        delay(3000);
+        ESP.restart();
     }
     Serial.println("NetworkManager created successfully");
     
@@ -235,8 +250,9 @@ void setup() {
     systemManager = new SystemManager(*networkManager, *otaManager, *lightManager, 
                                     *unitManager, *firebaseManager, systemState);
     if (systemManager == nullptr) {
-        Serial.println("ERROR: Failed to create SystemManager");
-        return;
+        Serial.println("CRITICAL ERROR: Failed to create SystemManager");
+        delay(3000);
+        ESP.restart();
     }
     Serial.println("SystemManager created successfully");
     
@@ -244,7 +260,8 @@ void setup() {
     Serial.println("Starting system initialization...");
     if (!systemManager->begin()) {
         Serial.println("ERROR: Failed to initialize system");
-        return;
+        delay(3000);
+        ESP.restart();
     }
     Serial.println("System initialization completed successfully");
     
