@@ -166,26 +166,26 @@ private:
      * @return true if mutex was taken successfully
      */
     bool takeMutex() {
-        Serial.printf("[NetworkManager] Attempting to take mutex (timeout: %dms)\n", MUTEX_TIMEOUT_MS);
         if (mutex == NULL) {
             Serial.println("[NetworkManager] ERROR: Mutex is NULL");
-            snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Mutex is NULL");
-            snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::takeMutex");
-            logError(ErrorManager::ErrorCode::MUTEX_CREATE_FAILED, errorMsgBuffer, errorLocBuffer);
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
+                "Mutex is NULL",
+                "NetworkManager::takeMutex"
+            );
             return false;
         }
         
-        // Add a small delay before taking mutex to prevent race conditions
-        delay(1);
-        
+        // Try to take mutex with timeout
         if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MUTEX_TIMEOUT_MS)) != pdTRUE) {
             Serial.println("[NetworkManager] ERROR: Failed to take mutex");
-            snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Failed to take mutex");
-            snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::takeMutex");
-            logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, errorMsgBuffer, errorLocBuffer);
+            ErrorManager::mutexError(
+                ErrorManager::ErrorCode::MUTEX_TIMEOUT,
+                "Failed to take mutex",
+                "NetworkManager::takeMutex"
+            );
             return false;
         }
-        Serial.println("[NetworkManager] Successfully took mutex");
         return true;
     }
     
@@ -199,9 +199,6 @@ private:
             return;
         }
         xSemaphoreGive(mutex);
-        Serial.println("[NetworkManager] Successfully gave mutex");
-        // Add a small delay after giving mutex to prevent race conditions
-        delay(1);
     }
     
     /**
@@ -314,10 +311,6 @@ private:
      * @return true if setup successful
      */
     bool setupWiFiManager() {
-        if (!takeMutex()) {
-            return false;
-        }
-
         bool success = true;
         
         // Load saved credentials
@@ -346,7 +339,6 @@ private:
             giveMutex();
         });
         
-        giveMutex();
         return success;
     }
     
@@ -365,22 +357,12 @@ private:
      * @return true if connection successful
      */
     bool connectToWiFi() {
-        if (!takeMutex()) {
-            return false;
-        }
-        
         bool success = true;
         
         // Set up WiFi Manager
-        giveMutex();  // Release mutex before setupWiFiManager
         if (!setupWiFiManager()) {
             logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED, "Failed to set up WiFi Manager", "NetworkManager::connectToWiFi");
             success = false;
-        }
-        
-        // Re-acquire mutex for WiFi connection
-        if (!takeMutex()) {
-            return false;
         }
         
         if (success) {
@@ -391,7 +373,6 @@ private:
             }
         }
         
-        giveMutex();
         return success;
     }
     
@@ -564,21 +545,19 @@ public:
     NetworkManager(FirebaseData& fbdo, FirebaseAuth& fa, FirebaseConfig& fc,
                   LightManager& lm, WiFiManager& wm)
         : fbdo(fbdo), auth(fa), config(fc), lightManager(lm), wifiManager(wm),
-          reconnectAttempts(0), wasConnected(false), currentBackoffDelay(1000),
+          initialized(false), reconnectAttempts(0), wasConnected(false), currentBackoffDelay(0),
           lastReconnectAttempt(0), lastConnectionCheckMillis(0),
           lastFirmwareCheckMillis(0), previousHeartbeatMillis(0),
-          lastHeapCheckMillis(0), minHeapSeen(UINT32_MAX),
+          lastHeapCheckMillis(0), minHeapSeen(0),
           lastConnectionCheck(0), lastFirebaseCheck(0),
-          custom_email(nullptr), custom_password(nullptr),
-          initialized(false) {
+          custom_email(nullptr), custom_password(nullptr) {
         
         Serial.println("[NetworkManager] Starting constructor");
         
-        // Create mutex first, before any other operations
-        Serial.println("[NetworkManager] Creating mutex");
+        // Create mutex first
         mutex = xSemaphoreCreateMutex();
         if (mutex == NULL) {
-            Serial.println("[NetworkManager] ERROR: Failed to create mutex");
+            Serial.println("[NetworkManager] CRITICAL ERROR: Failed to create mutex");
             ErrorManager::mutexError(
                 ErrorManager::ErrorCode::MUTEX_CREATE_FAILED,
                 "Failed to create NetworkManager mutex",
@@ -640,8 +619,10 @@ public:
      * @return true if initialization successful
      */
     bool begin() {
+        Serial.println("[NetworkManager] Starting begin()");
+        
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in begin");
+            Serial.println("[NetworkManager] Failed to take mutex in begin");
             return false;
         }
         
@@ -649,7 +630,7 @@ public:
         
         // Load Firebase credentials first
         if (!loadFirebaseCredentials()) {
-            Serial.println("No Firebase credentials found. Will use default configuration.");
+            Serial.println("[NetworkManager] No Firebase credentials found. Will use default configuration.");
         }
         
         // Clean up old parameters
@@ -674,13 +655,14 @@ public:
         giveMutex();
         
         // Try to connect to WiFi with timeout and yield
-        Serial.println("Attempting to connect to WiFi...");
+        Serial.println("[NetworkManager] Attempting to connect to WiFi...");
         unsigned long startTime = millis();
         unsigned long lastYieldTime = startTime;
         
-        while (!connectToWiFi()) {
+        // Try to connect to WiFi without holding the mutex
+        while (!wifiManager.autoConnect(AP_NAME, AP_PASSWORD)) {
             if (millis() - startTime > WIFI_TIMEOUT) {
-                Serial.println("WiFi connection timeout");
+                Serial.println("[NetworkManager] WiFi connection timeout");
                 success = false;
                 break;
             }
@@ -697,27 +679,28 @@ public:
         
         // Re-acquire mutex for remaining initialization
         if (!takeMutex()) {
+            Serial.println("[NetworkManager] Failed to re-acquire mutex after WiFi connection");
             return false;
         }
         
         if (success) {
             // Initialize time with timeout
-            Serial.println("Initializing time...");
+            Serial.println("[NetworkManager] Initializing time...");
             if (!initializeTime()) {
-                Serial.println("Time initialization failed");
+                Serial.println("[NetworkManager] Time initialization failed");
                 success = false;
             } else {
-                Serial.println("Time initialized successfully");
+                Serial.println("[NetworkManager] Time initialized successfully");
             }
             
             // Initialize Firebase with timeout
             if (success) {
-                Serial.println("Initializing Firebase...");
+                Serial.println("[NetworkManager] Initializing Firebase...");
                 if (!initializeFirebase()) {
-                    Serial.println("Firebase initialization failed");
+                    Serial.println("[NetworkManager] Firebase initialization failed");
                     success = false;
                 } else {
-                    Serial.println("Firebase initialized successfully");
+                    Serial.println("[NetworkManager] Firebase initialized successfully");
                 }
             }
         }
@@ -725,6 +708,9 @@ public:
         if (success) {
             initialized = true;
             wasConnected = true;
+            Serial.println("[NetworkManager] Network initialization completed successfully");
+        } else {
+            Serial.println("[NetworkManager] Network initialization failed");
         }
         
         giveMutex();
