@@ -120,6 +120,7 @@ private:
     
     // System state
     bool initialized;
+    bool timeSet;  // Track if time has been synchronized
     
     /**
      * Logs an error to the ring buffer and ErrorManager
@@ -206,10 +207,6 @@ private:
      * @return true if credentials were loaded successfully
      */
     bool loadFirebaseCredentials() {
-        if (!takeMutex()) {
-            return false;
-        }
-        
         // Initialize Preferences
         Preferences preferences;
         preferences.begin(PREF_NAMESPACE, true);  // Read-only mode
@@ -230,7 +227,6 @@ private:
             logError(ErrorManager::ErrorCode::NETWORK_INVALID_CREDENTIALS, errorMsgBuffer, errorLocBuffer);
         }
         
-        giveMutex();
         return valid;
     }
     
@@ -267,10 +263,6 @@ private:
      * @return true if credentials were saved successfully
      */
     bool saveFirebaseCredentials(const String& newEmail, const String& newPassword) {
-        if (!takeMutex()) {
-            return false;
-        }
-        
         // Initialize Preferences
         Preferences preferences;
         preferences.begin(PREF_NAMESPACE, false);  // Read-write mode
@@ -291,7 +283,6 @@ private:
             logError(ErrorManager::ErrorCode::NETWORK_INVALID_CREDENTIALS, errorMsgBuffer, errorLocBuffer);
         }
         
-        giveMutex();
         return success;
     }
     
@@ -382,34 +373,33 @@ private:
      */
     bool initializeTime() {
         if (!takeMutex()) {
-            Serial.println("Failed to take mutex in initializeTime");
+            Serial.println("[NetworkManager] ERROR: Failed to take mutex in initializeTime");
             return false;
         }
         
+        bool success = true;
+        timeSet = false;
+        
+        // Configure NTP
         configTime(0, 0, "pool.ntp.org", "time.nist.gov");
         
         // Wait for time to be set
-        unsigned long startTime = millis();
+        int retries = 0;
         time_t now;
         time(&now);
-        while (now < 1000000000 && millis() - startTime < WIFI_TIMEOUT) { // Check if time is set (after year 2000)
-            delay(100);
+        
+        while (now < 1000000000 && retries < 10) {  // Check if time is set (after year 2000)
+            delay(1000);
             time(&now);
+            retries++;
         }
         
-        bool success = (now >= 1000000000);
-        if (!success) {
-            Serial.println("Failed to initialize time");
+        if (now < 1000000000) {
+            Serial.println("[NetworkManager] Failed to set time");
+            success = false;
         } else {
-            // Set timeValid to true only after successful NTP sync
-            struct tm timeinfo;
-            if (getLocalTime(&timeinfo)) {
-                lightManager.setTimeValid(true);
-                Serial.println("Time synchronized successfully");
-            } else {
-                Serial.println("Failed to get local time after NTP sync");
-                success = false;
-            }
+            timeSet = true;
+            Serial.println("[NetworkManager] Time set successfully");
         }
         
         giveMutex();
@@ -550,7 +540,8 @@ public:
           lastFirmwareCheckMillis(0), previousHeartbeatMillis(0),
           lastHeapCheckMillis(0), minHeapSeen(0),
           lastConnectionCheck(0), lastFirebaseCheck(0),
-          custom_email(nullptr), custom_password(nullptr) {
+          custom_email(nullptr), custom_password(nullptr),
+          timeSet(false) {
         
         Serial.println("[NetworkManager] Starting constructor");
         
@@ -686,11 +677,18 @@ public:
         if (success) {
             // Initialize time with timeout
             Serial.println("[NetworkManager] Initializing time...");
+            giveMutex();  // Release mutex before time initialization
             if (!initializeTime()) {
                 Serial.println("[NetworkManager] Time initialization failed");
                 success = false;
             } else {
                 Serial.println("[NetworkManager] Time initialized successfully");
+            }
+            
+            // Re-acquire mutex for Firebase initialization
+            if (!takeMutex()) {
+                Serial.println("[NetworkManager] Failed to re-acquire mutex after time initialization");
+                return false;
             }
             
             // Initialize Firebase with timeout
