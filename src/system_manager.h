@@ -647,6 +647,22 @@ public:
     const String& getSystemName() const { 
         return systemName; 
     }
+
+    /**
+     * Resets WiFi Manager settings if enabled in config
+     * Thread-safe: Yes
+     * @return true if reset was successful
+     */
+    bool resetWiFiManager() {
+        if (!takeMutex()) {
+            return false;
+        }
+
+        bool success = networkManager.resetWiFiManager();
+        
+        giveMutex();
+        return success;
+    }
 };
 
 #endif // SYSTEM_MANAGER_H 

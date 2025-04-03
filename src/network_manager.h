@@ -263,13 +263,27 @@ private:
      * @return true if credentials were saved successfully
      */
     bool saveFirebaseCredentials(const String& newEmail, const String& newPassword) {
+        Serial.println("[NetworkManager] Starting to save Firebase credentials");
+        
         // Initialize Preferences
         Preferences preferences;
-        preferences.begin(PREF_NAMESPACE, false);  // Read-write mode
+        if (!preferences.begin(PREF_NAMESPACE, false)) {  // Read-write mode
+            Serial.println("[NetworkManager] ERROR: Failed to begin Preferences");
+            return false;
+        }
         
         // Save credentials
-        bool success = preferences.putString(PREF_EMAIL_KEY, newEmail) &&
-                      preferences.putString(PREF_PASSWORD_KEY, newPassword);
+        bool success = true;
+        
+        if (!preferences.putString(PREF_EMAIL_KEY, newEmail)) {
+            Serial.println("[NetworkManager] ERROR: Failed to save email");
+            success = false;
+        }
+        
+        if (!preferences.putString(PREF_PASSWORD_KEY, newPassword)) {
+            Serial.println("[NetworkManager] ERROR: Failed to save password");
+            success = false;
+        }
         
         // Close Preferences
         preferences.end();
@@ -277,7 +291,9 @@ private:
         if (success) {
             email = newEmail;
             password = newPassword;
+            Serial.println("[NetworkManager] Successfully saved Firebase credentials to Preferences");
         } else {
+            Serial.println("[NetworkManager] ERROR: Failed to save Firebase credentials");
             snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Failed to save Firebase credentials");
             snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::saveFirebaseCredentials");
             logError(ErrorManager::ErrorCode::NETWORK_INVALID_CREDENTIALS, errorMsgBuffer, errorLocBuffer);
@@ -312,6 +328,8 @@ private:
         
         // Set up callback for saving credentials
         wifiManager.setSaveConfigCallback([this]() {
+            Serial.println("[NetworkManager] WiFi Manager save callback triggered");
+            
             if (!takeMutex()) {
                 logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, "Failed to take mutex in callback", "NetworkManager::setupWiFiManager");
                 return;
@@ -322,9 +340,16 @@ private:
                 String newEmail = custom_email->getValue();
                 String newPassword = custom_password->getValue();
                 
+                Serial.printf("[NetworkManager] Saving new credentials - Email: %s\n", newEmail.c_str());
+                
                 if (!saveFirebaseCredentials(newEmail, newPassword)) {
                     logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED, "Failed to save Firebase credentials", "NetworkManager::setupWiFiManager");
+                } else {
+                    Serial.println("[NetworkManager] Successfully saved Firebase credentials");
                 }
+            } else {
+                Serial.println("[NetworkManager] ERROR: Custom parameters are null in save callback");
+                logError(ErrorManager::ErrorCode::SYSTEM_INIT_FAILED, "Custom parameters are null in save callback", "NetworkManager::setupWiFiManager");
             }
             
             giveMutex();
@@ -361,6 +386,8 @@ private:
             if (!wifiManager.autoConnect(AP_NAME, AP_PASSWORD)) {
                 logError(ErrorManager::ErrorCode::NETWORK_CONNECTION_FAILED, "Failed to connect to WiFi", "NetworkManager::connectToWiFi");
                 success = false;
+            } else {
+                Serial.printf("[NetworkManager] Connected to WiFi network: %s\n", WiFi.SSID().c_str());
             }
         }
         
@@ -412,36 +439,40 @@ private:
      */
     bool initializeFirebase() {
         if (!takeMutex()) {
-            snprintf(errorMsgBuffer, ERROR_BUFFER_SIZE, "Failed to initialize Firebase");
-            snprintf(errorLocBuffer, ERROR_LOCATION_SIZE, "NetworkManager::initializeFirebase");
-            logError(ErrorManager::ErrorCode::MUTEX_TIMEOUT, errorMsgBuffer, errorLocBuffer);
+            Serial.println("[NetworkManager] ERROR: Failed to take mutex in initializeFirebase");
             return false;
         }
+        
+        bool success = true;
         
         // Load credentials from Preferences
         if (!loadFirebaseCredentials()) {
-            giveMutex();
-            return false;
+            Serial.println("[NetworkManager] Failed to load Firebase credentials");
+            success = false;
         }
         
-        // Configure Firebase
-        config.api_key = apiKey;
-        config.database_url = SystemConfig::FIREBASE_PROJECT_ID;
-        
-        // Sign in with email/password
-        auth.user.email = email.c_str();
-        auth.user.password = password.c_str();
-        
-        // Initialize Firebase
-        Firebase.begin(&config, &auth);
-        Firebase.reconnectWiFi(true);
-        
-        // Set timeouts and buffer sizes
-        fbdo.setResponseSize(SystemConfig::FIREBASE_PATH_BUFFER_SIZE);
-        fbdo.setBSSLBufferSize(512, 2048);
+        if (success) {
+            // Configure Firebase
+            config.api_key = apiKey;
+            config.database_url = SystemConfig::FIREBASE_PROJECT_ID;
+            
+            // Sign in with email/password
+            auth.user.email = email.c_str();
+            auth.user.password = password.c_str();
+            
+            // Initialize Firebase
+            Firebase.begin(&config, &auth);
+            Firebase.reconnectWiFi(true);
+            
+            // Set timeouts and buffer sizes
+            fbdo.setResponseSize(SystemConfig::FIREBASE_PATH_BUFFER_SIZE);
+            fbdo.setBSSLBufferSize(512, 2048);
+            
+            Serial.println("[NetworkManager] Firebase configuration completed");
+        }
         
         giveMutex();
-        return true;
+        return success;
     }
     
     /**
@@ -595,7 +626,6 @@ public:
             delete custom_password;
             custom_password = nullptr;
         }
-        wifiManager.resetSettings();
         
         // Clean up credentials
         Serial.println("[NetworkManager] Cleaning up credentials");
@@ -694,11 +724,18 @@ public:
             // Initialize Firebase with timeout
             if (success) {
                 Serial.println("[NetworkManager] Initializing Firebase...");
+                giveMutex();  // Release mutex before Firebase initialization
                 if (!initializeFirebase()) {
                     Serial.println("[NetworkManager] Firebase initialization failed");
                     success = false;
                 } else {
                     Serial.println("[NetworkManager] Firebase initialized successfully");
+                }
+                
+                // Re-acquire mutex for final state update
+                if (!takeMutex()) {
+                    Serial.println("[NetworkManager] Failed to re-acquire mutex after Firebase initialization");
+                    return false;
                 }
             }
         }
@@ -826,6 +863,36 @@ public:
         
         giveMutex();
         return success;
+    }
+
+    /**
+     * Resets WiFi Manager settings if enabled in config
+     * Thread-safe: Yes
+     * @return true if reset was successful
+     */
+    bool resetWiFiManager() {
+        if (!SystemConfig::WIFI_MANAGER_RESET_ENABLED) {
+            Serial.println("[NetworkManager] WiFi Manager reset disabled in config");
+            return false;
+        }
+
+        if (!takeMutex()) {
+            Serial.println("[NetworkManager] Failed to take mutex for WiFi Manager reset");
+            return false;
+        }
+
+        Serial.println("[NetworkManager] Resetting WiFi Manager settings...");
+        Serial.flush();  // Ensure message is sent
+        
+        wifiManager.resetSettings();
+        
+        Serial.println("[NetworkManager] WiFi Manager settings reset successfully");
+        Serial.flush();  // Ensure message is sent
+        
+        delay(1000);  // Give time for serial output to be sent
+        
+        giveMutex();
+        return true;
     }
 };
 

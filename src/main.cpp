@@ -117,18 +117,21 @@ void saveSettingsToStorage() {
  * 4. Initialize system (network, Firebase, etc.)
  */
 void setup() {
+    // Initialize serial first, before any other operations
+    Serial.begin(115200);
+    delay(1000);  // Give serial time to initialize
+    Serial.println("\n\nStarting Skyboard initialization...");
+    Serial.println("Debug: Serial communication initialized");
+    Serial.flush();  // Force the message to be sent
+    
     // Disable watchdog timers during initialization
     disableCore0WDT();
     disableCore1WDT();
     disableLoopWDT();
     
-    // Initialize serial first, before any other operations
-    Serial.begin(115200);
-    delay(1000);  // Give serial time to initialize
-    Serial.println("\n\nStarting Skyboard initialization...");
-    
     // Initialize NVS first
     Serial.println("Initializing NVS...");
+    Serial.flush();  // Force the message to be sent
     esp_err_t ret = nvs_flash_init();
     if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
         // NVS partition was truncated and needs to be erased
@@ -264,6 +267,22 @@ void setup() {
         ESP.restart();
     }
     Serial.println("System initialization completed successfully");
+
+    // Reset WiFi Manager settings if enabled
+    if (SystemConfig::WIFI_MANAGER_RESET_ENABLED) {
+        Serial.println("Resetting WiFi Manager settings...");
+        Serial.flush();  // Ensure message is sent
+        
+        if (systemManager->resetWiFiManager()) {
+            Serial.println("WiFi Manager settings reset successfully");
+            Serial.flush();  // Ensure message is sent
+            delay(1000);  // Give time for serial output to be sent
+            ESP.restart();  // Restart to apply changes
+        } else {
+            Serial.println("Failed to reset WiFi Manager settings");
+            Serial.flush();  // Ensure message is sent
+        }
+    }
     
     // Re-enable watchdog timers after initialization
     enableCore0WDT();

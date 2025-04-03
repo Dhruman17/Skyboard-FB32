@@ -151,6 +151,7 @@ namespace SystemConfig {
     // WiFi Manager Configuration
     static constexpr uint32_t CONFIG_PORTAL_TIMEOUT = 180;  // 3 minutes timeout for config portal
     static constexpr int MIN_SIGNAL_QUALITY = 30;  // Minimum WiFi signal quality in dBm
+    static constexpr bool WIFI_MANAGER_RESET_ENABLED = true;  // Enable/disable WiFi Manager reset functionality through web interface
     
     // Water Level Sensor Configuration
     enum class WaterLevelSensorType {
