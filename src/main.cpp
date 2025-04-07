@@ -546,7 +546,6 @@ void sendHeartbeat()
     }
 }
 
-unsigned long lastFirmwareCheckMillis = 0;
 unsigned long lastRestartMillis = 0;  // Track last restart time
 const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000;  // 24 hours in milliseconds
 

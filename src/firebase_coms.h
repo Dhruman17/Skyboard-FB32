@@ -38,7 +38,7 @@ void fetchFirebaseSystemData(FirebaseData *pFBDO, String *pSystemName, time_t *p
         FirebaseJsonData jsonData;
         Serial.println("Got payload");
 
-        if (json.get(jsonData, "fields/systeName/stringValue"))
+        if (json.get(jsonData, "fields/systemName/stringValue"))
         {
             String systemName = jsonData.stringValue;
             *pSystemName = systemName;
