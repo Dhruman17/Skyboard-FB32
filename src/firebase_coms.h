@@ -44,7 +44,7 @@ void fetchFirebaseSystemData(FirebaseData *pFBDO, String *pSystemName, time_t *p
             *pSystemName = systemName;
             for (int i = 0; i < NUMBER_OF_UNITS; i++)
             {
-                String unitName = systemName + "-" + String(i + 1);
+                String unitName = String(i + 1);
                 unitNames[i] = unitName;
             }
             Serial.println("The System name from Fetch System Name is: " + *pSystemName);
