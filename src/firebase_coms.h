@@ -138,6 +138,15 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
             {
                 atomizerOffIntervals[i] = jsonData.intValue * 1000;
             }
+            // Fetch sensor mode preference
+if (json.get(jsonData, "fields/useCapacitive/booleanValue")) {
+    useCapacitiveSensor[i] = jsonData.boolValue;
+    Serial.print("Unit ");
+    Serial.print(i);
+    Serial.print(" sensor mode: ");
+    Serial.println(useCapacitiveSensor[i] ? "Capacitive" : "Float");
+}
+
             // 🧼 Free memory to prevent leaks
             json.clear();
             jsonData.clear();
@@ -190,6 +199,19 @@ void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, flo
         Serial.println("Failed to update water level for " + unitName + ": " + pFBDO->errorReason());
     }
     content.clear();
+}
+void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWet) {
+    String documentPath = systemPath + "/units/" + unitName;
+
+    FirebaseJson content;
+    content.set("fields/Float_Water_State/booleanValue", isWet);
+    content.set("fields/Float_Updated/timestampValue", formatTimestamp());
+
+    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "Float_Water_State,Float_Updated")) {
+        Serial.println("Float state updated for " + unitName);
+    } else {
+        Serial.println("Failed to update Float state for " + unitName);
+    }
 }
 
 #endif //

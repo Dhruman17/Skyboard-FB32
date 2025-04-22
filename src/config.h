@@ -34,6 +34,7 @@ extern String serialNumber;
 bool unitsEnabled[NUMBER_OF_UNITS] = {false, false, false}; 
 bool previousWaterLevelStates[3] = {false, false, false};
 bool waterLevelStates[3] = {false, false, false};
+bool useCapacitiveSensor[NUMBER_OF_UNITS] = {true, true, true}; // Default to capacitive
 long atomizerOnIntervals[NUMBER_OF_UNITS] = {5000, 5000, 5000};
 long atomizerOffIntervals[3] = {5000, 5000, 5000};
 bool atomStates[3] = {false, false, false};
