@@ -139,28 +139,53 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
                 atomizerOffIntervals[i] = jsonData.intValue * 1000;
             }
             // Fetch sensor mode preference
-            if (!json.get(jsonData, "fields/useCapacitive/booleanValue")) {
-                bool defaultCapSetting = (i == 1); // Default Unit 1 to capacitive
-                useCapacitiveSensor[i] = defaultCapSetting;
-            
-                Serial.println("useCapacitive field not found. Creating...");
-            
-                FirebaseJson initContent;
-                initContent.set("fields/useCapacitive/booleanValue", defaultCapSetting);
-            
-                if (Firebase.Firestore.patchDocument(
-                        pFBDO,
-                        FIREBASE_PROJECT_ID,
-                        "", 
-                        documentPath.c_str(), 
-                        initContent.raw()  // ✅ No update mask = MERGE
-                    )) {
-                    Serial.println("Initialized useCapacitive field without overwriting.");
-                } else {
-                    Serial.println("Failed to initialize useCapacitive field: " + pFBDO->errorReason());
-                }
-            }
-            
+            // Fetch sensor mode preference
+// Fetch sensor mode preference
+if (json.get(jsonData, "fields/useCapacitive/booleanValue")) {
+    useCapacitiveSensor[i] = jsonData.boolValue;
+    Serial.print("Unit ");
+    Serial.print(i);
+    Serial.print(" sensor mode: ");
+    Serial.println(useCapacitiveSensor[i] ? "Capacitive" : "Float");
+} else {
+    bool defaultCapSetting = (i == 1); // Unit 1 default = capacitive
+    useCapacitiveSensor[i] = defaultCapSetting;
+
+    Serial.println("useCapacitive field missing. Merging field into document...");
+
+    FirebaseJson currentData;
+currentData.setJsonData(pFBDO->payload());
+
+FirebaseJsonData rawFieldsData;
+if (currentData.get(rawFieldsData, "fields")) {
+    FirebaseJson fields;
+    fields.setJsonData(rawFieldsData.stringValue);
+
+    fields.set("useCapacitive/booleanValue", defaultCapSetting);
+
+    FirebaseJson finalContent;
+    finalContent.set("fields", fields);
+
+    bool success = Firebase.Firestore.patchDocument(
+        pFBDO,
+        FIREBASE_PROJECT_ID,
+        "",
+        documentPath.c_str(),
+        finalContent.raw(),
+        "", "", ""
+    );
+
+    if (success) {
+        Serial.println("✅ useCapacitive added to document without deleting others.");
+    } else {
+        Serial.println("❌ Failed to patch merged doc: " + pFBDO->errorReason());
+    }
+} else {
+    Serial.println("❌ Couldn't extract 'fields' from Firestore document.");
+}
+
+
+        }
 
             // 🧼 Free memory to prevent leaks
             json.clear();
@@ -173,6 +198,7 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
         }
     }
 }
+    
 void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, float ecValue)
 {
     String documentPath;
