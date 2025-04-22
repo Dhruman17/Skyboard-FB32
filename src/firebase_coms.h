@@ -139,13 +139,28 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
                 atomizerOffIntervals[i] = jsonData.intValue * 1000;
             }
             // Fetch sensor mode preference
-if (json.get(jsonData, "fields/useCapacitive/booleanValue")) {
-    useCapacitiveSensor[i] = jsonData.boolValue;
-    Serial.print("Unit ");
-    Serial.print(i);
-    Serial.print(" sensor mode: ");
-    Serial.println(useCapacitiveSensor[i] ? "Capacitive" : "Float");
-}
+            if (json.get(jsonData, "fields/useCapacitive/booleanValue")) {
+                useCapacitiveSensor[i] = jsonData.boolValue;
+                Serial.print("Unit ");
+                Serial.print(i);
+                Serial.print(" sensor mode: ");
+                Serial.println(useCapacitiveSensor[i] ? "Capacitive" : "Float");
+            } else {
+                // Field not present: initialize to true by default (or false if needed)
+                useCapacitiveSensor[i] = true;
+            
+                Serial.println("useCapacitive field not found. Defaulting to true and storing to Firebase...");
+            
+                FirebaseJson initContent;
+                initContent.set("fields/useCapacitive/booleanValue", true);
+            
+                if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), initContent.raw(), "useCapacitive")) {
+                    Serial.println("Initialized useCapacitive field in Firebase.");
+                } else {
+                    Serial.println("Failed to initialize useCapacitive field: " + pFBDO->errorReason());
+                }
+            }
+            
 
             // 🧼 Free memory to prevent leaks
             json.clear();
