@@ -2,6 +2,7 @@
 #define CONFIG_H
 #include <addons/TokenHelper.h>
 #include <time.h>
+extern bool useCapacitiveSensor;  // declared in config.h
 
 const double firmware_version = 1.52;
 
@@ -34,7 +35,7 @@ extern String serialNumber;
 bool unitsEnabled[NUMBER_OF_UNITS] = {false, false, false}; 
 bool previousWaterLevelStates[3] = {false, false, false};
 bool waterLevelStates[3] = {false, false, false};
-bool useCapacitiveSensor[NUMBER_OF_UNITS] = {true, true, true}; // Default to capacitive
+bool useCapacitiveSensor = true;  //New system-wide flag
 long atomizerOnIntervals[NUMBER_OF_UNITS] = {5000, 5000, 5000};
 long atomizerOffIntervals[3] = {5000, 5000, 5000};
 bool atomStates[3] = {false, false, false};

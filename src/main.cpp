@@ -136,7 +136,8 @@ void readWaterLevel()
 
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
-        if (useCapacitiveSensor[i])
+        if (useCapacitiveSensor)  // new system-wide flag
+
         {
             tcaselect(tcaChannels[i]);
             FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdacs[i]);
@@ -546,7 +547,7 @@ void setup()
         Serial.print("Sensor Mode Unit ");
         Serial.print(i);
         Serial.print(": ");
-        Serial.println(useCapacitiveSensor[i] ? "Capacitive" : "Float");
+        Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
     }
     if (systemName != "")
     { // Set the hostname to the system name
@@ -611,7 +612,7 @@ void loop()
                     Serial.print("Sensor Mode Unit ");
                     Serial.print(i);
                     Serial.print(": ");
-                    Serial.println(useCapacitiveSensor[i] ? "Capacitive" : "Float");
+                    Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
                 }
             }
         }

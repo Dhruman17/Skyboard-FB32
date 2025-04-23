@@ -93,6 +93,50 @@ void fetchFirebaseSystemData(FirebaseData *pFBDO, String *pSystemName, time_t *p
         {
             Serial.println("Light_Time_Cycle_Switch not found or not a boolean");
         }
+        // Fetch system-level useCapacitive
+// Check for system-level useCapacitive
+if (json.get(jsonData, "fields/useCapacitive/booleanValue")) {
+    useCapacitiveSensor = jsonData.boolValue;
+    Serial.print("System-wide sensor mode: ");
+    Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
+} else {
+    useCapacitiveSensor = true;
+    Serial.println("useCapacitive field missing. Setting default = true");
+
+    // 1. Parse existing Firestore document
+    FirebaseJson currentData;
+    currentData.setJsonData(pFBDO->payload());
+
+    FirebaseJsonData fieldsData;
+    if (currentData.get(fieldsData, "fields")) {
+        FirebaseJson fields;
+        fields.setJsonData(fieldsData.stringValue); // all current fields
+
+        // 2. Merge new field
+        fields.set("useCapacitive/booleanValue", true);
+
+        FirebaseJson mergedContent;
+        mergedContent.set("fields", fields);
+
+        // 3. Send full merged content back to Firestore
+        bool success = Firebase.Firestore.patchDocument(
+            pFBDO,
+            FIREBASE_PROJECT_ID,
+            "",
+            systemPath.c_str(),
+            mergedContent.raw(),
+            "", "", ""
+        );
+
+        if (success) {
+            Serial.println("useCapacitive added to system doc without overwriting.");
+        } else {
+            Serial.println("Failed to merge useCapacitive: " + pFBDO->errorReason());
+        }
+    }
+}
+
+
         json.clear();
         jsonData.clear();
     }
@@ -137,54 +181,6 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
             if (json.get(jsonData, "fields/Interval_Off/integerValue"))
             {
                 atomizerOffIntervals[i] = jsonData.intValue * 1000;
-            }
-            // Fetch sensor mode preference
-            // Fetch sensor mode preference
-// Fetch sensor mode preference
-if (json.get(jsonData, "fields/useCapacitive/booleanValue")) {
-    useCapacitiveSensor[i] = jsonData.boolValue;
-    Serial.print("Unit ");
-    Serial.print(i);
-    Serial.print(" sensor mode: ");
-    Serial.println(useCapacitiveSensor[i] ? "Capacitive" : "Float");
-} else {
-    bool defaultCapSetting = (i == 1); // Unit 1 default = capacitive
-    useCapacitiveSensor[i] = defaultCapSetting;
-
-    Serial.println("useCapacitive field missing. Merging field into document...");
-
-    FirebaseJson currentData;
-currentData.setJsonData(pFBDO->payload());
-
-FirebaseJsonData rawFieldsData;
-if (currentData.get(rawFieldsData, "fields")) {
-    FirebaseJson fields;
-    fields.setJsonData(rawFieldsData.stringValue);
-
-    fields.set("useCapacitive/booleanValue", defaultCapSetting);
-
-    FirebaseJson finalContent;
-    finalContent.set("fields", fields);
-
-    bool success = Firebase.Firestore.patchDocument(
-        pFBDO,
-        FIREBASE_PROJECT_ID,
-        "",
-        documentPath.c_str(),
-        finalContent.raw(),
-        "", "", ""
-    );
-
-    if (success) {
-        Serial.println("✅ useCapacitive added to document without deleting others.");
-    } else {
-        Serial.println("❌ Failed to patch merged doc: " + pFBDO->errorReason());
-    }
-} else {
-    Serial.println("❌ Couldn't extract 'fields' from Firestore document.");
-}
-
-
         }
 
             // 🧼 Free memory to prevent leaks
