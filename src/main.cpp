@@ -131,112 +131,66 @@ void systemLights()
 }
 void readWaterLevel()
 {
-    tcaselect(0);
-    FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
-    FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+    int capdacs[NUMBER_OF_UNITS] = {0, 0, 0};
+    int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
 
-    // wait for completion
-    delay(100);
-    uint16_t value[2];
-    if (!FDC.readMeasurement(MEASURMENT, value))
+    for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
-        int16_t msb = (int16_t)value[0];
-        int32_t capacitance = ((int32_t)457) * ((int32_t)msb); // in attofarads
-        capacitance /= 1000;                                   // in femtofarads
-        capacitance += ((int32_t)3028) * ((int32_t)capdac);
-        measuredCap = (float)capacitance / 1000; // in pF
-        // Blynk.virtualWrite(V23, measuredCap);
-        Serial.print((((float)capacitance / 1000)), 4);
-        Serial.print("  pf, ");
-        waterLevel = (measuredCap - 1.58) / 0.107;
-        // Blynk.virtualWrite(V24, waterLevel);
-        Serial.print(" |L = ");
-        Serial.print(waterLevel);
-        if (!unitNames[0].isEmpty())
-        {
-            sendUnitCapValueToFirebase(&fbdo, unitNames[0], measuredCap);
-        }
-        if (msb > UPPER_BOUND) // adjust capdac accordingly
-        {
-            if (capdac < FDC1004_CAPDAC_MAX)
-                capdac++;
-        }
-        else if (msb < LOWER_BOUND)
-        {
-            if (capdac > 0)
-                capdac--;
-        }
-    }
+        if (useCapacitiveSensor) // new system-wide flag
 
-    tcaselect(2);
-    FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
-    FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+        {
+            tcaselect(tcaChannels[i]);
+            FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdacs[i]);
+            FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+            delay(100);
 
-    // wait for completion
-    delay(100);
-    if (!FDC.readMeasurement(MEASURMENT, value))
-    {
-        int16_t msb = (int16_t)value[0];
-        int32_t capacitance = ((int32_t)457) * ((int32_t)msb); // in attofarads
-        capacitance /= 1000;                                   // in femtofarads
-        capacitance += ((int32_t)3028) * ((int32_t)capdac);
-        measuredCap = (float)capacitance / 1000; // in pF
-        // Blynk.virtualWrite(V23, measuredCap);
-        Serial.print((((float)capacitance / 1000)), 4);
-        Serial.print("  pf, ");
-        waterLevel = (measuredCap - 1.58) / 0.107;
-        // Blynk.virtualWrite(V24, waterLevel);
-        Serial.print(" |L = ");
-        Serial.print(waterLevel);
-        if (!unitNames[1].isEmpty())
-        {
-            sendUnitCapValueToFirebase(&fbdo, unitNames[1], measuredCap);
-        }
-        if (msb > UPPER_BOUND) // adjust capdac accordingly
-        {
-            if (capdac < FDC1004_CAPDAC_MAX)
-                capdac++;
-        }
-        else if (msb < LOWER_BOUND)
-        {
-            if (capdac > 0)
-                capdac--;
-        }
-    }
+            uint16_t value[2];
+            if (!FDC.readMeasurement(MEASURMENT, value))
+            {
+                int16_t msb = (int16_t)value[0];
+                int32_t capacitance = ((int32_t)457) * msb;
+                capacitance /= 1000;
+                capacitance += ((int32_t)3028) * capdacs[i];
+                measuredCap = (float)capacitance / 1000;
+                waterLevel = (measuredCap - 1.58) / 0.107;
 
-    tcaselect(4);
-    FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdac);
-    FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+                Serial.print("Unit ");
+                Serial.print(i);
+                Serial.print(" | Capacitance: ");
+                Serial.print(measuredCap, 4);
+                Serial.print(" pf | Water Level: ");
+                Serial.println(waterLevel);
 
-    // wait for completion
-    delay(100);
-    if (!FDC.readMeasurement(MEASURMENT, value))
-    {
-        int16_t msb = (int16_t)value[0];
-        int32_t capacitance = ((int32_t)457) * ((int32_t)msb); // in attofarads
-        capacitance /= 1000;                                   // in femtofarads
-        capacitance += ((int32_t)3028) * ((int32_t)capdac);
-        measuredCap = (float)capacitance / 1000; // in pF
-        // Blynk.virtualWrite(V23, measuredCap);
-        Serial.print((((float)capacitance / 1000)), 4);
-        Serial.print("  pf, ");
-        waterLevel = (measuredCap - 1.58) / 0.107;
-        // Blynk.virtualWrite(V24, waterLevel);
-        Serial.print(" |L = ");
-        Serial.print(waterLevel);
-        if (!unitNames[2].isEmpty())
-        {
-            sendUnitCapValueToFirebase(&fbdo, unitNames[2], measuredCap);
+                if (!unitNames[i].isEmpty())
+                {
+                    sendUnitCapValueToFirebase(&fbdo, unitNames[i], waterLevel);
+                }
+
+                // Auto-calibrate capdac
+                if (msb > UPPER_BOUND && capdacs[i] < FDC1004_CAPDAC_MAX)
+                    capdacs[i]++;
+                else if (msb < LOWER_BOUND && capdacs[i] > 0)
+                    capdacs[i]--;
+            }
         }
-        if (msb > UPPER_BOUND) // adjust capdac accordingly
+        else
         {
-            if (capdac < FDC1004_CAPDAC_MAX)
-                capdac++;
-        }
-        else if (msb < LOWER_BOUND)
-        {
-            if (capdac > 0)
-                capdac--;
+            // :white_check_mark: New ADC-based float sensor reading
+            int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4}; // Channels you use for MCP3021 per unit
+            tcaselect(tcaChannels[i]);
+            delay(100);
+            uint16_t result = mcp3021.read();
+            float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
+            bool floatState = (floatSignal > 0.5); // Above 0.5V means water present
+            waterLevelStates[i] = floatState;
+            Serial.print("Unit ");
+            Serial.print(i);
+            Serial.print(" | Float Sensor (via ADC): ");
+            Serial.println(floatState ? "WATER PRESENT" : "DRY");
+            if (!unitNames[i].isEmpty())
+            {
+                sendFloatSensorState(&fbdo, unitNames[i], floatState);
+            }
         }
     }
 }
@@ -283,7 +237,7 @@ void updateUnits()
                 if (!atomStates[0] && !atomStates[1] && !atomStates[2])
                 {
                     // updateWaterLevelStates();
-                    // readWaterLevel();
+                    readWaterLevel();
                     readECSensorValue();
                 } // read the water level state only if the atomizers are off
                 previousMillis[i] = currentMillis; // reset the time counter
@@ -546,8 +500,8 @@ void sendHeartbeat()
     }
 }
 
-unsigned long lastRestartMillis = 0;  // Track last restart time
-const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000;  // 24 hours in milliseconds
+unsigned long lastRestartMillis = 0;                              // Track last restart time
+const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
 void setup()
 {
@@ -592,7 +546,13 @@ void setup()
     digitalWrite(SYSTEM_12V_POWER_PIN, HIGH); // Turn on the 12V power
     pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);       // Set the light pin to output
     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);     // Make sure lights are off for now
-
+    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    {
+        Serial.print("Sensor Mode Unit ");
+        Serial.print(i);
+        Serial.print(": ");
+        Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
+    }
     if (systemName != "")
     { // Set the hostname to the system name
         if (!MDNS.begin(systemName.c_str()))
@@ -633,7 +593,7 @@ void loop()
         if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
         {
             Serial.println("Performing daily restart to clear memory...");
-            delay(1000);  // Give time for the message to be sent
+            delay(1000); // Give time for the message to be sent
             ESP.restart();
         }
 
@@ -648,10 +608,17 @@ void loop()
                 fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
                 Serial.println(unitsEnabled[0]);
                 sendHeartbeat();
-                readECSensorValue(); // This already sends to Firebase
-                readWaterLevel();
+                // readECSensorValue(); // This already sends to Firebase
+                // readWaterLevel();
                 previousHeartbeatMillis = currentMillis;
                 ArduinoOTA.handle();
+                for (int i = 0; i < NUMBER_OF_UNITS; i++)
+                {
+                    Serial.print("Sensor Mode Unit ");
+                    Serial.print(i);
+                    Serial.print(": ");
+                    Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
+                }
             }
         }
 

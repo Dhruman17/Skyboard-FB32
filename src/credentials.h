@@ -1,13 +1,14 @@
 #ifndef CREDENTIALS_H
 #define CREDENTIALS_H
 
-//Serial number and delays for system
+// Serial number and delays for system
 String serialNumber = "123456789123456789"; // Unique serial number for each system
 
 // Known Wi-Fi Networks
-struct WiFiCredentials {
-    const char* ssid;
-    const char* password;
+struct WiFiCredentials
+{
+    const char *ssid;
+    const char *password;
 };
 
 String setupWifiName = "SkyAcres Setup " + serialNumber;

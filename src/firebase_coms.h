@@ -93,6 +93,55 @@ void fetchFirebaseSystemData(FirebaseData *pFBDO, String *pSystemName, time_t *p
         {
             Serial.println("Light_Time_Cycle_Switch not found or not a boolean");
         }
+        // Fetch system-level useCapacitive
+        // Check for system-level useCapacitive
+        if (json.get(jsonData, "fields/useCapacitive/booleanValue"))
+        {
+            useCapacitiveSensor = jsonData.boolValue;
+            Serial.print("System-wide sensor mode: ");
+            Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
+        }
+        else
+        {
+            useCapacitiveSensor = true;
+            Serial.println("useCapacitive field missing. Setting default = true");
+
+            // 1. Parse existing Firestore document
+            FirebaseJson currentData;
+            currentData.setJsonData(pFBDO->payload());
+
+            FirebaseJsonData fieldsData;
+            if (currentData.get(fieldsData, "fields"))
+            {
+                FirebaseJson fields;
+                fields.setJsonData(fieldsData.stringValue); // all current fields
+
+                // 2. Merge new field
+                fields.set("useCapacitive/booleanValue", true);
+
+                FirebaseJson mergedContent;
+                mergedContent.set("fields", fields);
+
+                // 3. Send full merged content back to Firestore
+                bool success = Firebase.Firestore.patchDocument(
+                    pFBDO,
+                    FIREBASE_PROJECT_ID,
+                    "",
+                    systemPath.c_str(),
+                    mergedContent.raw(),
+                    "", "", "");
+
+                if (success)
+                {
+                    Serial.println("useCapacitive added to system doc without overwriting.");
+                }
+                else
+                {
+                    Serial.println("Failed to merge useCapacitive: " + pFBDO->errorReason());
+                }
+            }
+        }
+
         json.clear();
         jsonData.clear();
     }
@@ -108,7 +157,7 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
         String documentPath;
-        documentPath.reserve(100);  // Prevent fragmentation
+        documentPath.reserve(100); // Prevent fragmentation
         documentPath = systemPath + "/units/";
         documentPath += unitNames[i];
 
@@ -138,6 +187,7 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
             {
                 atomizerOffIntervals[i] = jsonData.intValue * 1000;
             }
+
             // 🧼 Free memory to prevent leaks
             json.clear();
             jsonData.clear();
@@ -149,6 +199,7 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
         }
     }
 }
+
 void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, float ecValue)
 {
     String documentPath;
@@ -190,6 +241,23 @@ void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, flo
         Serial.println("Failed to update water level for " + unitName + ": " + pFBDO->errorReason());
     }
     content.clear();
+}
+void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWet)
+{
+    String documentPath = systemPath + "/units/" + unitName;
+
+    FirebaseJson content;
+    content.set("fields/Float_Water_State/booleanValue", isWet);
+    content.set("fields/Float_Updated/timestampValue", formatTimestamp());
+
+    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "Float_Water_State,Float_Updated"))
+    {
+        Serial.println("Float state updated for " + unitName);
+    }
+    else
+    {
+        Serial.println("Failed to update Float state for " + unitName);
+    }
 }
 
 #endif //
