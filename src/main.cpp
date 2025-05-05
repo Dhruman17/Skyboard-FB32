@@ -284,29 +284,29 @@ void updateSystemVersion()
         Serial.println("System path is not defined. Cannot update version.");
     }
 }
-float fetchLatestVersion()
-{
+float fetchLatestVersion() {
     HTTPClient http;
-    String versionUrl = "https://firebasestorage.googleapis.com/v0/b/" + String(FIREBASE_PROJECT_ID) +
-                        ".appspot.com/o/Version_" + serialNumber + ".txt?alt=media";
+
+    String versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
+    versionUrl += FIREBASE_PROJECT_ID;
+    versionUrl += ".appspot.com/o/";
+    versionUrl += serialNumber + "%2FVersion.txt?alt=media"; // %2F = "/"
 
     http.begin(versionUrl);
     int httpCode = http.GET();
 
-    if (httpCode == HTTP_CODE_OK)
-    {
-        String versionString = http.getString(); // Read version from file
+    if (httpCode == HTTP_CODE_OK) {
+        String versionString = http.getString();
         http.end();
-        return versionString.toFloat(); // Convert to float and return
-    }
-    else
-    {
-        Serial.println("Failed to fetch latest firmware version.");
+        return versionString.toFloat();
+    } else {
+        Serial.println("Failed to fetch Version.txt");
         Serial.println(http.errorToString(httpCode));
         http.end();
-        return firmware_version; // If failed, return current firmware version
+        return firmware_version; // fallback
     }
 }
+
 void updateFirmwareVersionInFirestore(float newVersion)
 {
     if (systemPath != "")
@@ -465,9 +465,9 @@ void checkForFirmwareUpdate()
             firmwareUrl.reserve(200);
             firmwareUrl = "https://firebasestorage.googleapis.com/v0/b/";
             firmwareUrl += FIREBASE_PROJECT_ID;
-            firmwareUrl += ".appspot.com/o/firmware_";
-            firmwareUrl += serialNumber;
-            firmwareUrl += ".bin?alt=media";
+            firmwareUrl += ".appspot.com/o/";
+            firmwareUrl += serialNumber + "%2Ffirmware.bin?alt=media";  // %2F is URL-encoded "/"
+            
 
             performOTAUpdate(firmwareUrl, storageVersion);
         }
