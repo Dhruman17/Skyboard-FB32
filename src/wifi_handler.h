@@ -18,7 +18,7 @@ bool firebaseWasConnected = false;
 bool tryInitialWiFiConnect(const String& setupWifiName)
 {
     WiFi.begin();
-    Serial.println("\u{1F4E1} Attempting to connect to saved WiFi...");
+   Serial.println("[WiFi] Attempting to connect to saved WiFi...");
 
     unsigned long start = millis();
     while (WiFi.status() != WL_CONNECTED && millis() - start < 10000) {
@@ -55,7 +55,7 @@ void checkWiFiFailsafe()
         if (wifiLostSince == 0) wifiLostSince = millis();
 
         if (millis() - wifiLostSince > WIFI_OFFLINE_TIMEOUT) {
-            Serial.println("\u{1F6D1} WiFi offline too long. Rebooting device...");
+Serial.println("[FAILSAFE] WiFi offline too long. Rebooting...");
             ESP.restart();
         }
     } else {
@@ -92,9 +92,19 @@ void registerWiFiEventHandler()
 {
     WiFi.onEvent([](WiFiEvent_t event) {
         if (event == SYSTEM_EVENT_STA_DISCONNECTED) {
-            Serial.println("\u{1F4F6} WiFi disconnected (event handler).");
+Serial.println("[WiFi] Disconnected (event handler).");
+
         }
     });
+}
+IPAddress deriveStaticIP(const String& serial) {
+    String suffix = serial.substring(serial.length() - 3);  // Last 3 digits
+    int host = suffix.toInt();
+
+    // Safety check: avoid 0, 1 (reserved), and >254
+    if (host <= 1 || host > 254) host = 200;
+
+    return IPAddress(192, 168, 1, host);
 }
 
 #endif // WIFI_HANDLER_H

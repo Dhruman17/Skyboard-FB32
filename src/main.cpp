@@ -4,6 +4,7 @@
 #include <addons/RTDBHelper.h>
 #include <time.h>
 #include <credentials.h>
+#include <wifi_handler.h>
 #include <config.h>
 #include <sensor_coms.h>
 #include <firebase_coms.h>
@@ -503,82 +504,110 @@ void sendHeartbeat()
 unsigned long lastRestartMillis = 0;                              // Track last restart time
 const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
-void setup()
-{
+void setup() {
     Serial.begin(9600);
     randomSeed(analogRead(0));
-    randomDelay = random(100, 10000);
-    connectionOffset = 1000 + randomDelay;
-    delay(connectionOffset);
 
-    // Attempt to connect to known Wi-Fi networks
-    wm.setConnectTimeout(20);
-    wm.setConfigPortalTimeout(60);
-    if (!wm.autoConnect(setupWifiName.c_str()))
-    {
-        Serial.println("Failed to configure WiFi. Restarting...");
-        delay(3000);
-        ESP.restart();
+    // === Derive Static IP from serial number ===
+    IPAddress staticIP = deriveStaticIP(serialNumber);  // last 3 digits used
+    IPAddress gateway(192, 168, 1, 1);                   // your router's IP
+    IPAddress subnet(255, 255, 255, 0);                  // standard /24 subnet
+    IPAddress dns1(192, 168, 1, 254);  // Assuming your router IP
+                        // Google DNS
+    IPAddress dns2(8, 8, 4, 4);                          // Optional backup DNS
+
+    // Apply static IP configuration (MUST include DNS to avoid SSL issues)
+    // WiFi.config(staticIP, gateway, subnet, dns1, dns2);
+
+    // === Attempt to connect using WiFiManager ===
+wm.setConnectTimeout(20);
+wm.setConfigPortalTimeout(60);
+if (!wm.autoConnect(setupWifiName.c_str())) {
+    Serial.println("❌ WiFiManager failed. Restarting...");
+    delay(3000);
+    ESP.restart();
+}
+Serial.println("WiFi connected!");
+Serial.print("IP: "); Serial.println(WiFi.localIP());
+Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
+
+
+    // === Confirm network status ===
+    if (WiFi.status() == WL_CONNECTED) {
+        Serial.println("✅ WiFi connected.");
+        Serial.print("IP Address: ");
+        Serial.println(WiFi.localIP());
+        Serial.print("DNS Server: ");
+        Serial.println(WiFi.dnsIP());
+    } else {
+        Serial.println("❌ WiFi not connected.");
     }
-    // Initialize Firebase and other components
+
+    // === Initialize Firebase ===
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
     auth.user.password = USER_PASSWORD;
     Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
-    // Other initialization code...
-    initializeTime();
-    while (!Firebase.ready())
-    {
+
+    // Wait for Firebase to be ready
+    initializeTime();  // NTP sync
+    while (!Firebase.ready()) {
         delay(100);
     }
+
+    // === Sync data and setup system ===
     fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
     fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
-    Serial.println(unitsEnabled[0]);
     updateSystemVersion();
-    for (int i = 0; i < NUMBER_OF_UNITS; i++)
-    {                                                                  // Loop across all of the pins
-        pinMode(waterLevelPins[i], INPUT_PULLUP);                      // set the pinmode of the i-th water level pin to input and use an internal pullup resistor (because this is an electrical switch)
-        ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER); // Setup the PWM generator with the atomizer frequency and resolution on the i-th channel
-        ledcAttachPin(atomizerPins[i], i);                             // Attach the i-th PWM generator channel with the i-th atomizer pin
+
+    // === Pin setup ===
+    for (int i = 0; i < NUMBER_OF_UNITS; i++) {
+        pinMode(waterLevelPins[i], INPUT_PULLUP);
+        ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER);
+        ledcAttachPin(atomizerPins[i], i);
     }
-    pinMode(SYSTEM_12V_POWER_PIN, OUTPUT);    // set the 12V power enabler pin to Output
-    digitalWrite(SYSTEM_12V_POWER_PIN, HIGH); // Turn on the 12V power
-    pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);       // Set the light pin to output
-    digitalWrite(SYSTEM_LIGHTS_PIN, LOW);     // Make sure lights are off for now
-    for (int i = 0; i < NUMBER_OF_UNITS; i++)
-    {
+
+    pinMode(SYSTEM_12V_POWER_PIN, OUTPUT);
+    digitalWrite(SYSTEM_12V_POWER_PIN, HIGH);
+    pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);
+    digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+
+    for (int i = 0; i < NUMBER_OF_UNITS; i++) {
         Serial.print("Sensor Mode Unit ");
         Serial.print(i);
         Serial.print(": ");
         Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
     }
-    if (systemName != "")
-    { // Set the hostname to the system name
-        if (!MDNS.begin(systemName.c_str()))
-        {
-            Serial.println("Error setting up MDNS responder!");
+
+    // === mDNS Setup ===
+    if (systemName != "") {
+        if (!MDNS.begin(systemName.c_str())) {
+            Serial.println("Error setting up mDNS.");
             delay(1000);
         }
     }
-    // Initialize OTA
+
+    // === OTA Setup ===
     ArduinoOTA.setHostname(systemName.c_str());
-    ArduinoOTA.onStart([]()
-                       {
+    ArduinoOTA.onStart([]() {
         String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
-        Serial.println("Start updating " + type); });
-    ArduinoOTA.onEnd([]()
-                     { Serial.println("\nUpdate Complete!"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-                          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
-    ArduinoOTA.onError([](ota_error_t error)
-                       {
+        Serial.println("Start updating " + type);
+    });
+    ArduinoOTA.onEnd([]() { Serial.println("\nUpdate Complete!"); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
         Serial.printf("Error[%u]: ", error);
         if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
         else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
         else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
         else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-        else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
+        else if (error == OTA_END_ERROR) Serial.println("End Failed");
+    });
+
+    // === I2C Init for sensors ===
     Wire.begin(SDA, SCL);
     mcp3021.init(&Wire);
 }
