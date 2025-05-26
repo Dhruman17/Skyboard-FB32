@@ -49,4 +49,8 @@ unsigned long lastResetMillis = 0;
 unsigned long startTime = 0; // Variable to store the start time of the delay
 bool isConnected = false;    // Flag to track Wi-Fi connection status
 
+//mod-mutex declaration
+extern SemaphoreHandle_t sensorMutex;
+extern SemaphoreHandle_t firebaseMutex;
+
 #endif // CONFIG_H

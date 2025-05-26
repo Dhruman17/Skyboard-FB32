@@ -2,6 +2,8 @@
 #define FIREBASE_COMS
 #include <Firebase_ESP_Client.h>
 #include <credentials.h>
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include <config.h>
 #define FIREBASEJSON_USE_PSRAM
 
@@ -31,6 +33,7 @@ String formatTimestamp()
 void fetchFirebaseSystemData(FirebaseData *pFBDO, String *pSystemName, time_t *plightOnTime, time_t *plightOffTime, bool *plightMasterSwitch,
                              bool *ptimeCycleEnabled, String unitNames[NUMBER_OF_UNITS])
 {
+       if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     if (Firebase.Firestore.getDocument(pFBDO, FIREBASE_PROJECT_ID, "", systemPath.c_str()))
     {
         FirebaseJson json;
@@ -150,6 +153,8 @@ void fetchFirebaseSystemData(FirebaseData *pFBDO, String *pSystemName, time_t *p
         Serial.println("Failed to fetch data.");
         Serial.println(pFBDO->errorReason());
     }
+    xSemaphoreGive(firebaseMutex);
+    }
 }
 
 void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNITS], long rAtomizerOnIntervals[NUMBER_OF_UNITS], long rAtomizerOffIntervals[NUMBER_OF_UNITS], String unitNames[NUMBER_OF_UNITS])
@@ -202,6 +207,10 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
 
 void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, float ecValue)
 {
+    Serial.println("[Mutex] Taking firebaseMutex...");
+
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+        
     String documentPath;
     documentPath.reserve(100);
     documentPath = systemPath + "/units/";
@@ -220,6 +229,10 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
         Serial.println("Failed to update EC value for " + unitName + ": " + pFBDO->errorReason());
     }
     content.clear();
+      xSemaphoreGive(firebaseMutex);
+      Serial.println("[Mutex] Released firebaseMutex.");
+
+    }
 }
 void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, float waterLevel)
 {

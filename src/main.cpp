@@ -17,7 +17,9 @@
 #include "MCP3X21.h" // ADC library for float sensor
 #include "esp_ota_ops.h"
 #include <Protocentral_FDC1004.h>
-
+#include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
+#include "mutex_handler.h"  // if you created this
 #define FIREBASEJSON_USE_PSRAM
 
 FirebaseData fbdo;
@@ -47,6 +49,11 @@ FDC1004 FDC;
 MCP3021 mcp3021;
 double measuredCap;
 double waterLevel;
+//mod-mutex inititalization
+SemaphoreHandle_t sensorMutex = xSemaphoreCreateMutex();
+SemaphoreHandle_t firebaseMutex = xSemaphoreCreateMutex();
+
+
 // Function to initialize NTP
 void initializeTime()
 {
@@ -132,6 +139,7 @@ void systemLights()
 }
 void readWaterLevel()
 {
+    if (xSemaphoreTake(sensorMutex, portMAX_DELAY)) {
     int capdacs[NUMBER_OF_UNITS] = {0, 0, 0};
     int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
 
@@ -194,11 +202,15 @@ void readWaterLevel()
             }
         }
     }
+      xSemaphoreGive(sensorMutex);
+    }
+
 }
 
 // Function to read EC sensor value from MCP3021 ADC
 void readECSensorValue()
 {
+    if (xSemaphoreTake(sensorMutex, portMAX_DELAY)) {
     float calibratedECs[NUMBER_OF_UNITS];
     int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
 
@@ -219,6 +231,8 @@ void readECSensorValue()
         {
             sendUnitECValueToFirebase(&fbdo, unitNames[i], calibratedEC);
         }
+    }
+       xSemaphoreGive(sensorMutex);
     }
 }
 
@@ -431,6 +445,7 @@ void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 
 void checkForFirmwareUpdate()
 {
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     String documentPath = systemPath;
 
     if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
@@ -481,6 +496,8 @@ void checkForFirmwareUpdate()
     {
         Serial.println("Failed to check Firestore for firmware update.");
         Serial.println(fbdo.errorReason());
+    }
+       xSemaphoreGive(firebaseMutex);
     }
 }
 
