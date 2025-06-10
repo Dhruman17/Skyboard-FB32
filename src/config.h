@@ -4,12 +4,12 @@
 #include <time.h>
 extern bool useCapacitiveSensor; // declared in config.h
 
-const double firmware_version = 1.52;
+const double firmware_version = 1.55;
 
 // Variables to track timing
 // Pin Definitions
 #define NUMBER_OF_UNITS 3
-#define SYSTEM_LIGHTS_PIN 26    // GPIO 26 for Lights
+#define SYSTEM_LIGHTS_PIN 7    // GPIO 26 for Lights //Changes the lights pin to GPIO 7
 #define SYSTEM_12V_POWER_PIN 12 // GPIO for 12V Power
 
 // Pin Arrays:
@@ -26,7 +26,7 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 const unsigned long INTERVAL_30_SECONDS = 30000;
 const unsigned long WIFI_RESET_INTERVAL = 60000;
 unsigned long lastFirmwareCheckMillis = 0;
-const unsigned long FIRMWARE_CHECK_INTERVAL = 5000; // Check every hour
+const unsigned long FIRMWARE_CHECK_INTERVAL = 600000; // Check every hour
 
 // Serial number
 extern String serialNumber;
