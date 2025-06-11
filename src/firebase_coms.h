@@ -272,5 +272,31 @@ void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWe
         Serial.println("Failed to update Float state for " + unitName);
     }
 }
+void sendEnvironmentalReadingsToFirebase(FirebaseData *pFBDO, float temperature, float humidity, float co2ppm)
+{
+    if (isnan(temperature) || isnan(humidity) || co2ppm < 0)
+    {
+        Serial.println("⚠️ Skipping invalid sensor values. Not sending to Firestore.");
+        return;
+    }
+
+    String documentPath = systemPath;
+    FirebaseJson content;
+
+    content.set("fields/temperature/doubleValue", temperature);
+    content.set("fields/humidity/doubleValue", humidity);
+    content.set("fields/co2/doubleValue", co2ppm);
+    content.set("fields/environmental_updated/timestampValue", formatTimestamp());
+
+    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(),
+                                         content.raw(), "temperature,humidity,co2,environmental_updated"))
+    {
+        Serial.println("✅ Environmental readings sent to Firestore.");
+    }
+    else
+    {
+        Serial.println("❌ Failed to send environmental data: " + pFBDO->errorReason());
+    }
+}
 
 #endif //

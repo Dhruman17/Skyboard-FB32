@@ -172,7 +172,7 @@ void readWaterLevel()
 
                 if (!unitNames[i].isEmpty())
                 {
-                    sendUnitCapValueToFirebase(&fbdo, unitNames[i], waterLevel);
+                    sendUnitCapValueToFirebase(&fbdo, unitNames[i], measuredCap);
                 }
 
                 // Auto-calibrate capdac
@@ -252,8 +252,6 @@ void updateUnits()
                 if (!atomStates[0] && !atomStates[1] && !atomStates[2])
                 {
                     // updateWaterLevelStates();
-                    readWaterLevel();
-                    readECSensorValue();
                 } // read the water level state only if the atomizers are off
                 previousMillis[i] = currentMillis; // reset the time counter
             }
@@ -517,9 +515,26 @@ void sendHeartbeat()
         Serial.println(fbdo.errorReason());
     }
 }
-
+void scanI2C()
+{
+    Serial.println("🔍 Scanning I2C bus...");
+    byte count = 0;
+    for (byte i = 1; i < 127; ++i)
+    {
+        Wire.beginTransmission(i);
+        if (Wire.endTransmission() == 0)
+        {
+            Serial.print("✅ Found I2C device at 0x");
+            Serial.println(i, HEX);
+            count++;
+        }
+    }
+    if (count == 0)
+        Serial.println("❌ No I2C devices found!");
+}
 unsigned long lastRestartMillis = 0;                              // Track last restart time
 const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+
 
 void setup() {
     Serial.begin(9600);
@@ -623,10 +638,18 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
         else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
         else if (error == OTA_END_ERROR) Serial.println("End Failed");
     });
+    // === I2C Init (must come BEFORE any sensor init or scan) ===
+    Wire.begin(SDA, SCL); // Initialize the I2C bus only ONCE
+    mcp3021.init(&Wire);  // MCP3021 ADC init
+    Serial.println("✅ Serial ready. Starting I2C init...");
+    delay(200); // Give USB host time to open terminal
 
-    // === I2C Init for sensors ===
-    Wire.begin(SDA, SCL);
-    mcp3021.init(&Wire);
+    // === Safe I2C Scan (optional but now safe) ===
+    scanI2C(); // make sure it uses sensorMutex internally
+
+    // === Sensor initialization AFTER I2C is ready ===
+    sensors::initSensors(); // Now it's safe to talk to sensors
+
 }
 
 void loop()
@@ -643,7 +666,7 @@ void loop()
             ESP.restart();
         }
 
-        if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS + connectionOffset)
+        if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
         {
             if (Firebase.ready())
             {
@@ -654,8 +677,11 @@ void loop()
                 fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
                 Serial.println(unitsEnabled[0]);
                 sendHeartbeat();
-                // readECSensorValue(); // This already sends to Firebase
-                // readWaterLevel();
+                readECSensorValue();
+                readWaterLevel(); // Read water level states
+                sensors::readTHSensors();
+                sensors::readCO2Sensor();
+                sendEnvironmentalReadingsToFirebase(&fbdo, sensors::temperature, sensors::humidity, sensors::co2ppm);
                 previousHeartbeatMillis = currentMillis;
                 ArduinoOTA.handle();
                 for (int i = 0; i < NUMBER_OF_UNITS; i++)
@@ -668,7 +694,7 @@ void loop()
             }
         }
 
-        if (currentMillis - lastConnectionCheckMillis >= connectionOffset)
+        if (currentMillis - lastConnectionCheckMillis >= connectionOffset) // Check every 10 minutes
         {
             if (Firebase.ready())
             {
