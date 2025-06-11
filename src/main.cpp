@@ -49,6 +49,7 @@ FDC1004 FDC;
 MCP3021 mcp3021;
 double measuredCap;
 double waterLevel;
+double temp;
 //mod-mutex inititalization
 SemaphoreHandle_t sensorMutex = xSemaphoreCreateMutex();
 SemaphoreHandle_t firebaseMutex = xSemaphoreCreateMutex();
@@ -205,6 +206,77 @@ void readWaterLevel()
       xSemaphoreGive(sensorMutex);
     }
 
+}
+uint32_t getAbsoluteHumidity(float temperature, float humidity) {
+    // approximation formula from Sensirion SGP30 Driver Integration chapter 3.15
+    const float absoluteHumidity = 216.7f * ((humidity / 100.0f) * 6.112f * exp((17.62f * temperature) / (243.12f + temperature)) / (273.15f + temperature)); // [g/m^3]
+    const uint32_t absoluteHumidityScaled = static_cast<uint32_t>(1000.0f * absoluteHumidity); // [mg/m^3]
+    return absoluteHumidityScaled;
+}
+void readSensors() {
+    int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
+    hdc1080.begin(0x40);  // Only needs to be called once outside loop
+
+  //  for (int i = 0; i < NUMBER_OF_UNITS; i++) {// Kept is multiple sensor boards are connected change all 0 values to i if incorporating the loop
+        tcaselect(tcaChannels[0]);
+
+        float temp = hdc1080.readTemperature();
+        float hum = hdc1080.readHumidity();
+
+        Serial.print("Unit ");
+        Serial.print(0);
+        Serial.print(" | Temp: ");
+        Serial.print(temp);
+        Serial.print(" °C, Humidity: ");
+        Serial.print(hum);
+        Serial.println(" %");
+
+        // Optionally, store per-unit data
+        // Or compute average if needed
+    // }
+
+    // If you're storing one set of values globally for Firebase:
+    temperature = hdc1080.readTemperature();  // Optionally pick from channel 0 again
+    humidity = hdc1080.readHumidity();
+}
+
+void readCO2() {
+    int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
+    int sum = 0;
+    int validReadings = 0;
+
+    // for (int i = 0; i < NUMBER_OF_UNITS; i++) {  // Kept is multiple sensor boards are connected change all 0 values to i if incorporating the loop
+        tcaselect(tcaChannels[0]);
+
+        if (!sgp.begin()) {
+            Serial.print("SGP30 init failed on channel ");
+            Serial.println(tcaChannels[0]);
+            // continue;
+        }
+
+        sgp.setHumidity(getAbsoluteHumidity(temperature, humidity));
+
+        if (sgp.IAQmeasure()) {
+            Serial.print("Unit ");
+            Serial.print(0);
+            Serial.print(" | eCO2: ");
+            Serial.println(sgp.eCO2);
+            sum += sgp.eCO2;
+            validReadings++;
+        } else {
+            Serial.print("Failed CO2 read on unit ");
+            Serial.println(0);
+        }
+    // }
+
+    if (validReadings > 0) {
+        co2ppm = sum / validReadings;
+        Serial.print("Averaged CO2 ppm: ");
+        Serial.println(co2ppm);
+    } else {
+        Serial.println("No valid CO2 readings.");
+        co2ppm = 0;
+    }
 }
 
 // Function to read EC sensor value from MCP3021 ADC
@@ -648,7 +720,7 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
     scanI2C(); // make sure it uses sensorMutex internally
 
     // === Sensor initialization AFTER I2C is ready ===
-    sensors::initSensors(); // Now it's safe to talk to sensors
+   // sensors::initSensors(); // Now it's safe to talk to sensors
 
 }
 
@@ -679,9 +751,13 @@ void loop()
                 sendHeartbeat();
                 readECSensorValue();
                 readWaterLevel(); // Read water level states
-                sensors::readTHSensors();
-                sensors::readCO2Sensor();
-                sendEnvironmentalReadingsToFirebase(&fbdo, sensors::temperature, sensors::humidity, sensors::co2ppm);
+                readSensors();
+                readCO2();
+                updateEnvironmentalData(&fbdo, temperature, humidity, raw);  // 'raw' holds CO2 average
+
+                // sensors::readTHSensors();
+                // sensors::readCO2Sensor();
+                // sendEnvironmentalReadingsToFirebase(&fbdo, sensors::temperature, sensors::humidity, sensors::co2ppm);
                 previousHeartbeatMillis = currentMillis;
                 ArduinoOTA.handle();
                 for (int i = 0; i < NUMBER_OF_UNITS; i++)

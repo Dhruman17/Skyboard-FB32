@@ -272,30 +272,30 @@ void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWe
         Serial.println("Failed to update Float state for " + unitName);
     }
 }
-void sendEnvironmentalReadingsToFirebase(FirebaseData *pFBDO, float temperature, float humidity, float co2ppm)
-{
-    if (isnan(temperature) || isnan(humidity) || co2ppm < 0)
-    {
-        Serial.println("⚠️ Skipping invalid sensor values. Not sending to Firestore.");
-        return;
-    }
+void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2) {
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+        String documentPath = systemPath;  // e.g., Systems/123456789123456789
+        FirebaseJson content;
+        content.set("fields/temperature/doubleValue", temp);
+        content.set("fields/humidity/doubleValue", hum);
+        content.set("fields/co2/doubleValue", co2);
+        content.set("fields/environmental_updated/timestampValue", formatTimestamp());
 
-    String documentPath = systemPath;
-    FirebaseJson content;
+        if (Firebase.Firestore.patchDocument(
+            pFBDO,
+            FIREBASE_PROJECT_ID,
+            "",
+            documentPath.c_str(),
+            content.raw(),
+            "temperature,humidity,co2,environmental_updated"))
+        {
+            Serial.println("✅ Environmental data updated in Firestore (root system doc).");
+        } else {
+            Serial.println("❌ Failed to update environmental data: " + pFBDO->errorReason());
+        }
 
-    content.set("fields/temperature/doubleValue", temperature);
-    content.set("fields/humidity/doubleValue", humidity);
-    content.set("fields/co2/doubleValue", co2ppm);
-    content.set("fields/environmental_updated/timestampValue", formatTimestamp());
-
-    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(),
-                                         content.raw(), "temperature,humidity,co2,environmental_updated"))
-    {
-        Serial.println("✅ Environmental readings sent to Firestore.");
-    }
-    else
-    {
-        Serial.println("❌ Failed to send environmental data: " + pFBDO->errorReason());
+        content.clear();
+        xSemaphoreGive(firebaseMutex);
     }
 }
 

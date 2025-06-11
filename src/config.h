@@ -6,10 +6,11 @@ extern bool useCapacitiveSensor; // declared in config.h
 
 const double firmware_version = 1.55;
 
+
 // Variables to track timing
 // Pin Definitions
 #define NUMBER_OF_UNITS 3
-#define SYSTEM_LIGHTS_PIN 7     // GPIO 26 for Lights
+#define SYSTEM_LIGHTS_PIN 7    // GPIO 26 for Lights
 #define SYSTEM_12V_POWER_PIN 12 // GPIO for 12V Power
 #define SDA 13                  // GPIO 21 for I2C SDA
 #define SCL 14                  // GPIO 22 for I2C SCL
