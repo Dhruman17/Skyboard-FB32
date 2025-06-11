@@ -38,6 +38,8 @@ void tcaselect(uint8_t i)
 }
 
 // Device constants
+
+// Device constants
 namespace device
 {
     float aref = 3.3;
