@@ -5,7 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <config.h>
-#define FIREBASEJSON_USE_PSRAM
+#define FIREBASEJSON_USE_PSRAM;
 
 const String systemPath = "Systems/" + serialNumber;
 
@@ -289,9 +289,9 @@ void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2
             content.raw(),
             "temperature,humidity,co2,environmental_updated"))
         {
-            Serial.println("✅ Environmental data updated in Firestore (root system doc).");
+            Serial.println("Environmental data updated in Firestore (root system doc).");
         } else {
-            Serial.println("❌ Failed to update environmental data: " + pFBDO->errorReason());
+            Serial.println("Failed to update environmental data: " + pFBDO->errorReason());
         }
 
         content.clear();
