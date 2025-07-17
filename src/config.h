@@ -5,7 +5,7 @@
 #include <time.h>
 
 // === Firmware Version ===
-const double firmware_version = 1.56;
+const double firmware_version = 1.55;
 
 // === Select Board Type via build_flags ===
 // Use -DESP32_THREE_PORT or -DESP32_S3 in platformio.ini
@@ -21,8 +21,6 @@ const double firmware_version = 1.56;
   #define SYSTEM_LIGHTS_PIN 7
   #define SDA 13
   #define SCL 14
-#elif defined(OLD_FLOAT_BOARD)
-  #define SYSTEM_LIGHTS_PIN 26
 #else
   #error "Please define either ESP32_THREE_PORT or ESP32_S3 in build_flags."
 #endif
@@ -31,7 +29,7 @@ const double firmware_version = 1.56;
 
 // === Pin Arrays ===
 const int atomizerPins[NUMBER_OF_UNITS] = {4, 5, 2};
-const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13}; //Changes based on board mostly same
+const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 
 // === PWM Configuration ===
 #define PWM_FREQUENCY_ATOMIZER 108000
