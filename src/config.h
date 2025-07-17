@@ -5,7 +5,7 @@
 #include <time.h>
 
 // === Firmware Version ===
-const double firmware_version = 1.55;
+const double firmware_version = 1.56;
 
 // === Select Board Type via build_flags ===
 // Use -DESP32_THREE_PORT or -DESP32_S3 in platformio.ini
