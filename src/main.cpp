@@ -146,6 +146,22 @@ void readWaterLevel()
 
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
+        #if defined(OLD_FLOAT_BOARD)
+
+            // 🔵 Digital float sensor via digitalRead for old board
+            bool isWet = digitalRead(waterLevelPins[i]) == LOW; // LOW = wet
+            if (waterLevelStates[i] != isWet) {
+                waterLevelStates[i] = isWet;
+                Serial.print("Unit ");
+                Serial.print(i);
+                Serial.print(" | Float Sensor (Digital): ");
+                Serial.println(isWet ? "WATER PRESENT" : "DRY");
+                if (!unitNames[i].isEmpty()) {
+                    sendFloatSensorState(&fbdo, unitNames[i], isWet);
+                }
+            }
+
+        
         if (useCapacitiveSensor) // new system-wide flag
 
         {
@@ -202,6 +218,7 @@ void readWaterLevel()
                 sendFloatSensorState(&fbdo, unitNames[i], floatState);
             }
         }
+        #endif
     }
       xSemaphoreGive(sensorMutex);
     }
@@ -671,6 +688,11 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
         ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER);
         ledcAttachPin(atomizerPins[i], i);
     }
+#ifdef OLD_FLOAT_BOARD
+for (int i = 0; i < NUMBER_OF_UNITS; i++) {
+    pinMode(waterLevelPins[i], INPUT_PULLUP);
+}
+#endif
 
     pinMode(SYSTEM_12V_POWER_PIN, OUTPUT);
     digitalWrite(SYSTEM_12V_POWER_PIN, HIGH);

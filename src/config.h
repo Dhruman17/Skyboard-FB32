@@ -21,6 +21,8 @@ const double firmware_version = 1.55;
   #define SYSTEM_LIGHTS_PIN 7
   #define SDA 13
   #define SCL 14
+#elif defined(OLD_FLOAT_BOARD)
+  #define SYSTEM_LIGHTS_PIN 26
 #else
   #error "Please define either ESP32_THREE_PORT or ESP32_S3 in build_flags."
 #endif
@@ -29,7 +31,7 @@ const double firmware_version = 1.55;
 
 // === Pin Arrays ===
 const int atomizerPins[NUMBER_OF_UNITS] = {4, 5, 2};
-const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
+const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13}; //Changes based on board mostly same
 
 // === PWM Configuration ===
 #define PWM_FREQUENCY_ATOMIZER 108000
