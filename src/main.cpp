@@ -146,22 +146,6 @@ void readWaterLevel()
 
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
-        #if defined(OLD_FLOAT_BOARD)
-
-            // 🔵 Digital float sensor via digitalRead for old board
-            bool isWet = digitalRead(waterLevelPins[i]) == LOW; // LOW = wet
-            if (waterLevelStates[i] != isWet) {
-                waterLevelStates[i] = isWet;
-                Serial.print("Unit ");
-                Serial.print(i);
-                Serial.print(" | Float Sensor (Digital): ");
-                Serial.println(isWet ? "WATER PRESENT" : "DRY");
-                if (!unitNames[i].isEmpty()) {
-                    sendFloatSensorState(&fbdo, unitNames[i], isWet);
-                }
-            }
-
-        
         if (useCapacitiveSensor) // new system-wide flag
 
         {
@@ -218,7 +202,6 @@ void readWaterLevel()
                 sendFloatSensorState(&fbdo, unitNames[i], floatState);
             }
         }
-        #endif
     }
       xSemaphoreGive(sensorMutex);
     }
@@ -644,7 +627,7 @@ void setup() {
 wm.setConnectTimeout(20);
 wm.setConfigPortalTimeout(60);
 if (!wm.autoConnect(setupWifiName.c_str())) {
-    Serial.println("❌ WiFiManager failed. Restarting...");
+    Serial.println(" WiFiManager failed. Restarting...");
     delay(3000);
     ESP.restart();
 }
@@ -661,7 +644,7 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
         Serial.print("DNS Server: ");
         Serial.println(WiFi.dnsIP());
     } else {
-        Serial.println("❌ WiFi not connected.");
+        Serial.println("WiFi not connected.");
     }
 
     // === Initialize Firebase ===
@@ -688,11 +671,6 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
         ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER);
         ledcAttachPin(atomizerPins[i], i);
     }
-#ifdef OLD_FLOAT_BOARD
-for (int i = 0; i < NUMBER_OF_UNITS; i++) {
-    pinMode(waterLevelPins[i], INPUT_PULLUP);
-}
-#endif
 
     pinMode(SYSTEM_12V_POWER_PIN, OUTPUT);
     digitalWrite(SYSTEM_12V_POWER_PIN, HIGH);
@@ -732,6 +710,8 @@ for (int i = 0; i < NUMBER_OF_UNITS; i++) {
         else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
         else if (error == OTA_END_ERROR) Serial.println("End Failed");
     });
+
+    ArduinoOTA.begin();  // ✅ Start the OTA server
     // === I2C Init (must come BEFORE any sensor init or scan) ===
     Wire.begin(SDA, SCL); // Initialize the I2C bus only ONCE
     mcp3021.init(&Wire);  // MCP3021 ADC init
@@ -748,6 +728,7 @@ for (int i = 0; i < NUMBER_OF_UNITS; i++) {
 
 void loop()
 {
+    ArduinoOTA.handle();
     if (WiFi.status() == WL_CONNECTED)
     {
         unsigned long currentMillis = millis();
@@ -781,7 +762,7 @@ void loop()
                 // sensors::readCO2Sensor();
                 // sendEnvironmentalReadingsToFirebase(&fbdo, sensors::temperature, sensors::humidity, sensors::co2ppm);
                 previousHeartbeatMillis = currentMillis;
-                ArduinoOTA.handle();
+                
                 for (int i = 0; i < NUMBER_OF_UNITS; i++)
                 {
                     Serial.print("Sensor Mode Unit ");
