@@ -620,7 +620,7 @@ void scanI2C()
         Serial.println("❌ No I2C devices found!");
 }
 unsigned long lastRestartMillis = 0;                              // Track last restart time
-const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
+const unsigned long DAILY_RESTART_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
 
 void setup()
 {
@@ -761,7 +761,7 @@ void loop()
     checkWiFiFailsafe();
     // Log heap every 1 minute
     static unsigned long lastHeapLogTime = 0;
-    if (millis() - lastHeapLogTime >= 3000)
+    if (millis() - lastHeapLogTime >= 60000)
     {
         Serial.print("[MEM] Free Heap: ");
         Serial.print(ESP.getFreeHeap());
@@ -793,6 +793,7 @@ void loop()
                 fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
                 Serial.println(unitsEnabled[0]);
                 sendHeartbeat();
+                previousHeartbeatMillis = currentMillis;
                 if (ENABLE_I2C_SENSORS)
                 {
                     readECSensorValue();
@@ -805,20 +806,7 @@ void loop()
                     Serial.println("🔒 I2C sensors disabled by flag. Skipping read.");
                     return;
                 }
-                if (millis() - startupTime >= SCHEDULED_RESTART_INTERVAL)
-                {
-                    Serial.println("♻️ Scheduled restart triggered to reset heap and clear memory.");
-                    delay(1000);
-                    Serial.print("Free heap before scheduled restart: ");
-                    Serial.println(ESP.getFreeHeap());
-
-                    ESP.restart();
-                }
-
-                // sensors::readTHSensors();
-                // sensors::readCO2Sensor();
-                // sendEnvironmentalReadingsToFirebase(&fbdo, sensors::temperature, sensors::humidity, sensors::co2ppm);
-                previousHeartbeatMillis = currentMillis;
+               
 
                 for (int i = 0; i < NUMBER_OF_UNITS; i++)
                 {
@@ -829,7 +817,7 @@ void loop()
                 }
             }
         }
-
+    
         if (currentMillis - lastConnectionCheckMillis >= connectionOffset) // Check every 10 minutes
         {
             if (Firebase.ready())
