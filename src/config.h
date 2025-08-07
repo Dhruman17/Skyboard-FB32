@@ -49,6 +49,7 @@ const unsigned long resetInterval = 21600000; // 6 hours
 // === Global State Variables ===
 extern String serialNumber;
 extern bool useCapacitiveSensor;
+extern bool ENABLE_I2C_SENSORS;
 
 bool unitsEnabled[NUMBER_OF_UNITS] = {false, false, false};
 bool previousWaterLevelStates[NUMBER_OF_UNITS] = {false, false, false};
@@ -67,6 +68,7 @@ unsigned long lastResetMillis = 0;
 unsigned long lastFirmwareCheckMillis = 0;
 unsigned long startTime = 0;
 bool isConnected = false;
+bool ENABLE_I2C_SENSORS = false;  // default off
 
 // === Mutex Declarations ===
 extern SemaphoreHandle_t sensorMutex;

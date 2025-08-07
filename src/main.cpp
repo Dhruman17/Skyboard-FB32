@@ -19,7 +19,7 @@
 #include <Protocentral_FDC1004.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
-#include "mutex_handler.h"  // if you created this
+#include "mutex_handler.h" // if you created this
 #define FIREBASEJSON_USE_PSRAM
 
 FirebaseData fbdo;
@@ -34,6 +34,7 @@ bool lightMasterSwitch = false; // The master light switch from Firebase
 bool timeCycleEnabled = false;
 bool lightState = false;
 String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes
+unsigned long startupTime = 0;
 
 // Generate the random delays
 int randomDelay;
@@ -50,10 +51,9 @@ MCP3021 mcp3021;
 double measuredCap;
 double waterLevel;
 double temp;
-//mod-mutex inititalization
+// mod-mutex inititalization
 SemaphoreHandle_t sensorMutex = xSemaphoreCreateMutex();
 SemaphoreHandle_t firebaseMutex = xSemaphoreCreateMutex();
-
 
 // Function to initialize NTP
 void initializeTime()
@@ -140,140 +140,150 @@ void systemLights()
 }
 void readWaterLevel()
 {
-    if (xSemaphoreTake(sensorMutex, portMAX_DELAY)) {
-    int capdacs[NUMBER_OF_UNITS] = {0, 0, 0};
-    int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
-
-    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    if (xSemaphoreTake(sensorMutex, portMAX_DELAY))
     {
-        if (useCapacitiveSensor) // new system-wide flag
+        int capdacs[NUMBER_OF_UNITS] = {0, 0, 0};
+        int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
 
+        for (int i = 0; i < NUMBER_OF_UNITS; i++)
         {
-            tcaselect(tcaChannels[i]);
-            FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdacs[i]);
-            FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
-            delay(100);
+            if (useCapacitiveSensor) // new system-wide flag
 
-            uint16_t value[2];
-            if (!FDC.readMeasurement(MEASURMENT, value))
             {
-                int16_t msb = (int16_t)value[0];
-                int32_t capacitance = ((int32_t)457) * msb;
-                capacitance /= 1000;
-                capacitance += ((int32_t)3028) * capdacs[i];
-                measuredCap = (float)capacitance / 1000;
-                waterLevel = (measuredCap - 1.58) / 0.107;
+                tcaselect(tcaChannels[i]);
+                FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdacs[i]);
+                FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+                delay(100);
 
+                uint16_t value[2];
+                if (!FDC.readMeasurement(MEASURMENT, value))
+                {
+                    int16_t msb = (int16_t)value[0];
+                    int32_t capacitance = ((int32_t)457) * msb;
+                    capacitance /= 1000;
+                    capacitance += ((int32_t)3028) * capdacs[i];
+                    measuredCap = (float)capacitance / 1000;
+                    waterLevel = (measuredCap - 1.58) / 0.107;
+
+                    Serial.print("Unit ");
+                    Serial.print(i);
+                    Serial.print(" | Capacitance: ");
+                    Serial.print(measuredCap, 4);
+                    Serial.print(" pf | Water Level: ");
+                    Serial.println(waterLevel);
+
+                    if (!unitNames[i].isEmpty())
+                    {
+                        sendUnitCapValueToFirebase(&fbdo, unitNames[i], measuredCap);
+                    }
+
+                    // Auto-calibrate capdac
+                    if (msb > UPPER_BOUND && capdacs[i] < FDC1004_CAPDAC_MAX)
+                        capdacs[i]++;
+                    else if (msb < LOWER_BOUND && capdacs[i] > 0)
+                        capdacs[i]--;
+                }
+            }
+            else
+            {
+                // :white_check_mark: New ADC-based float sensor reading
+                int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4}; // Channels you use for MCP3021 per unit
+                tcaselect(tcaChannels[i]);
+                delay(100);
+                uint16_t result = mcp3021.read();
+                float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
+                bool floatState = (floatSignal > 0.5); // Above 0.5V means water present
+                waterLevelStates[i] = floatState;
                 Serial.print("Unit ");
                 Serial.print(i);
-                Serial.print(" | Capacitance: ");
-                Serial.print(measuredCap, 4);
-                Serial.print(" pf | Water Level: ");
-                Serial.println(waterLevel);
-
+                Serial.print(" | Float Sensor (via ADC): ");
+                Serial.println(floatState ? "WATER PRESENT" : "DRY");
                 if (!unitNames[i].isEmpty())
                 {
-                    sendUnitCapValueToFirebase(&fbdo, unitNames[i], measuredCap);
+                    sendFloatSensorState(&fbdo, unitNames[i], floatState);
                 }
-
-                // Auto-calibrate capdac
-                if (msb > UPPER_BOUND && capdacs[i] < FDC1004_CAPDAC_MAX)
-                    capdacs[i]++;
-                else if (msb < LOWER_BOUND && capdacs[i] > 0)
-                    capdacs[i]--;
             }
         }
-        else
-        {
-            // :white_check_mark: New ADC-based float sensor reading
-            int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4}; // Channels you use for MCP3021 per unit
-            tcaselect(tcaChannels[i]);
-            delay(100);
-            uint16_t result = mcp3021.read();
-            float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-            bool floatState = (floatSignal > 0.5); // Above 0.5V means water present
-            waterLevelStates[i] = floatState;
-            Serial.print("Unit ");
-            Serial.print(i);
-            Serial.print(" | Float Sensor (via ADC): ");
-            Serial.println(floatState ? "WATER PRESENT" : "DRY");
-            if (!unitNames[i].isEmpty())
-            {
-                sendFloatSensorState(&fbdo, unitNames[i], floatState);
-            }
-        }
+        xSemaphoreGive(sensorMutex);
     }
-      xSemaphoreGive(sensorMutex);
-    }
-
 }
-uint32_t getAbsoluteHumidity(float temperature, float humidity) {
+uint32_t getAbsoluteHumidity(float temperature, float humidity)
+{
     // approximation formula from Sensirion SGP30 Driver Integration chapter 3.15
     const float absoluteHumidity = 216.7f * ((humidity / 100.0f) * 6.112f * exp((17.62f * temperature) / (243.12f + temperature)) / (273.15f + temperature)); // [g/m^3]
-    const uint32_t absoluteHumidityScaled = static_cast<uint32_t>(1000.0f * absoluteHumidity); // [mg/m^3]
+    const uint32_t absoluteHumidityScaled = static_cast<uint32_t>(1000.0f * absoluteHumidity);                                                                // [mg/m^3]
     return absoluteHumidityScaled;
 }
-void readSensors() {
+void readSensors()
+{
     int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
-    hdc1080.begin(0x40);  // Only needs to be called once outside loop
+    hdc1080.begin(0x40); // Only needs to be called once outside loop
 
-  //  for (int i = 0; i < NUMBER_OF_UNITS; i++) {// Kept is multiple sensor boards are connected change all 0 values to i if incorporating the loop
-        tcaselect(tcaChannels[0]);
+    //  for (int i = 0; i < NUMBER_OF_UNITS; i++) {// Kept is multiple sensor boards are connected change all 0 values to i if incorporating the loop
+    tcaselect(tcaChannels[0]);
 
-        float temp = hdc1080.readTemperature();
-        float hum = hdc1080.readHumidity();
+    float temp = hdc1080.readTemperature();
+    float hum = hdc1080.readHumidity();
 
-        Serial.print("Unit ");
-        Serial.print(0);
-        Serial.print(" | Temp: ");
-        Serial.print(temp);
-        Serial.print(" °C, Humidity: ");
-        Serial.print(hum);
-        Serial.println(" %");
+    Serial.print("Unit ");
+    Serial.print(0);
+    Serial.print(" | Temp: ");
+    Serial.print(temp);
+    Serial.print(" °C, Humidity: ");
+    Serial.print(hum);
+    Serial.println(" %");
 
-        // Optionally, store per-unit data
-        // Or compute average if needed
+    // Optionally, store per-unit data
+    // Or compute average if needed
     // }
 
     // If you're storing one set of values globally for Firebase:
-    temperature = hdc1080.readTemperature();  // Optionally pick from channel 0 again
+    temperature = hdc1080.readTemperature(); // Optionally pick from channel 0 again
     humidity = hdc1080.readHumidity();
 }
 
-void readCO2() {
+void readCO2()
+{
     int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
     int sum = 0;
     int validReadings = 0;
 
     // for (int i = 0; i < NUMBER_OF_UNITS; i++) {  // Kept is multiple sensor boards are connected change all 0 values to i if incorporating the loop
-        tcaselect(tcaChannels[0]);
+    tcaselect(tcaChannels[0]);
 
-        if (!sgp.begin()) {
-            Serial.print("SGP30 init failed on channel ");
-            Serial.println(tcaChannels[0]);
-            // continue;
-        }
+    if (!sgp.begin())
+    {
+        Serial.print("SGP30 init failed on channel ");
+        Serial.println(tcaChannels[0]);
+        // continue;
+    }
 
-        sgp.setHumidity(getAbsoluteHumidity(temperature, humidity));
+    sgp.setHumidity(getAbsoluteHumidity(temperature, humidity));
 
-        if (sgp.IAQmeasure()) {
-            Serial.print("Unit ");
-            Serial.print(0);
-            Serial.print(" | eCO2: ");
-            Serial.println(sgp.eCO2);
-            sum += sgp.eCO2;
-            validReadings++;
-        } else {
-            Serial.print("Failed CO2 read on unit ");
-            Serial.println(0);
-        }
+    if (sgp.IAQmeasure())
+    {
+        Serial.print("Unit ");
+        Serial.print(0);
+        Serial.print(" | eCO2: ");
+        Serial.println(sgp.eCO2);
+        sum += sgp.eCO2;
+        validReadings++;
+    }
+    else
+    {
+        Serial.print("Failed CO2 read on unit ");
+        Serial.println(0);
+    }
     // }
 
-    if (validReadings > 0) {
+    if (validReadings > 0)
+    {
         co2ppm = sum / validReadings;
         Serial.print("Averaged CO2 ppm: ");
         Serial.println(co2ppm);
-    } else {
+    }
+    else
+    {
         Serial.println("No valid CO2 readings.");
         co2ppm = 0;
     }
@@ -282,29 +292,30 @@ void readCO2() {
 // Function to read EC sensor value from MCP3021 ADC
 void readECSensorValue()
 {
-    if (xSemaphoreTake(sensorMutex, portMAX_DELAY)) {
-    float calibratedECs[NUMBER_OF_UNITS];
-    int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
-
-    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    if (xSemaphoreTake(sensorMutex, portMAX_DELAY))
     {
-        tcaselect(tcaChannels[i]);
-        uint16_t result = mcp3021.read();
-        float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.0);
-        float calibratedEC = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
-        calibratedECs[i] = calibratedEC;
+        float calibratedECs[NUMBER_OF_UNITS];
+        int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
 
-        Serial.print("EC sensor ");
-        Serial.print(i + 1);
-        Serial.print(" reading: ");
-        Serial.println(calibratedEC);
-
-        if (!unitNames[i].isEmpty())
+        for (int i = 0; i < NUMBER_OF_UNITS; i++)
         {
-            sendUnitECValueToFirebase(&fbdo, unitNames[i], calibratedEC);
+            tcaselect(tcaChannels[i]);
+            uint16_t result = mcp3021.read();
+            float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.0);
+            float calibratedEC = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
+            calibratedECs[i] = calibratedEC;
+
+            Serial.print("EC sensor ");
+            Serial.print(i + 1);
+            Serial.print(" reading: ");
+            Serial.println(calibratedEC);
+
+            if (!unitNames[i].isEmpty())
+            {
+                sendUnitECValueToFirebase(&fbdo, unitNames[i], calibratedEC);
+            }
         }
-    }
-       xSemaphoreGive(sensorMutex);
+        xSemaphoreGive(sensorMutex);
     }
 }
 
@@ -369,7 +380,8 @@ void updateSystemVersion()
         Serial.println("System path is not defined. Cannot update version.");
     }
 }
-float fetchLatestVersion() {
+float fetchLatestVersion()
+{
     HTTPClient http;
 
     String versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
@@ -380,11 +392,14 @@ float fetchLatestVersion() {
     http.begin(versionUrl);
     int httpCode = http.GET();
 
-    if (httpCode == HTTP_CODE_OK) {
+    if (httpCode == HTTP_CODE_OK)
+    {
         String versionString = http.getString();
         http.end();
         return versionString.toFloat();
-    } else {
+    }
+    else
+    {
         Serial.println("Failed to fetch Version.txt");
         Serial.println(http.errorToString(httpCode));
         http.end();
@@ -515,59 +530,59 @@ void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 
 void checkForFirmwareUpdate()
 {
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
-    String documentPath = systemPath;
-
-    if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
     {
-        FirebaseJson json;
-        json.setJsonData(fbdo.payload());
-        FirebaseJsonData jsonData;
+        String documentPath = systemPath;
 
-        // Fetch the version from Firestore
-        float cloudVersion = firmware_version;
-        if (json.get(jsonData, "fields/version/doubleValue"))
+        if (Firebase.Firestore.getDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str()))
         {
-            cloudVersion = jsonData.floatValue;
-            Serial.print("Cloud Firmware Version: ");
-            Serial.println(cloudVersion);
+            FirebaseJson json;
+            json.setJsonData(fbdo.payload());
+            FirebaseJsonData jsonData;
+
+            // Fetch the version from Firestore
+            float cloudVersion = firmware_version;
+            if (json.get(jsonData, "fields/version/doubleValue"))
+            {
+                cloudVersion = jsonData.floatValue;
+                Serial.print("Cloud Firmware Version: ");
+                Serial.println(cloudVersion);
+            }
+            else
+            {
+                Serial.println("Failed to get firmware version from Firestore.");
+            }
+
+            // Fetch the latest version from Firebase Storage
+            float storageVersion = fetchLatestVersion();
+            Serial.print("Storage Firmware Version: ");
+            Serial.println(storageVersion);
+
+            // Compare versions
+            if (storageVersion > cloudVersion)
+            {
+                Serial.println("New firmware available. Proceeding with update...");
+
+                String firmwareUrl;
+                firmwareUrl.reserve(200);
+                firmwareUrl = "https://firebasestorage.googleapis.com/v0/b/";
+                firmwareUrl += FIREBASE_PROJECT_ID;
+                firmwareUrl += ".appspot.com/o/";
+                firmwareUrl += serialNumber + "%2Ffirmware.bin?alt=media"; // %2F is URL-encoded "/"
+
+                performOTAUpdate(firmwareUrl, storageVersion);
+            }
+            else
+            {
+                Serial.println("Firmware is up to date. No update needed.");
+            }
         }
         else
         {
-            Serial.println("Failed to get firmware version from Firestore.");
+            Serial.println("Failed to check Firestore for firmware update.");
+            Serial.println(fbdo.errorReason());
         }
-
-        // Fetch the latest version from Firebase Storage
-        float storageVersion = fetchLatestVersion();
-        Serial.print("Storage Firmware Version: ");
-        Serial.println(storageVersion);
-
-        // Compare versions
-        if (storageVersion > cloudVersion)
-        {
-            Serial.println("New firmware available. Proceeding with update...");
-
-            String firmwareUrl;
-            firmwareUrl.reserve(200);
-            firmwareUrl = "https://firebasestorage.googleapis.com/v0/b/";
-            firmwareUrl += FIREBASE_PROJECT_ID;
-            firmwareUrl += ".appspot.com/o/";
-            firmwareUrl += serialNumber + "%2Ffirmware.bin?alt=media";  // %2F is URL-encoded "/"
-            
-
-            performOTAUpdate(firmwareUrl, storageVersion);
-        }
-        else
-        {
-            Serial.println("Firmware is up to date. No update needed.");
-        }
-    }
-    else
-    {
-        Serial.println("Failed to check Firestore for firmware update.");
-        Serial.println(fbdo.errorReason());
-    }
-       xSemaphoreGive(firebaseMutex);
+        xSemaphoreGive(firebaseMutex);
     }
 }
 
@@ -607,46 +622,56 @@ void scanI2C()
 unsigned long lastRestartMillis = 0;                              // Track last restart time
 const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds
 
-
-void setup() {
+void setup()
+{
+    // 🔍 Log last reset cause
+    esp_reset_reason_t reason = esp_reset_reason();
+    Serial.print("🔁 Last reset reason: ");
+    Serial.println(reason);
     Serial.begin(9600);
     randomSeed(analogRead(0));
-
+    config.token_status_callback = tokenStatusCallback;
     // === Derive Static IP from serial number ===
-    IPAddress staticIP = deriveStaticIP(serialNumber);  // last 3 digits used
-    IPAddress gateway(192, 168, 1, 1);                   // your router's IP
-    IPAddress subnet(255, 255, 255, 0);                  // standard /24 subnet
-    IPAddress dns1(192, 168, 1, 254);  // Assuming your router IP
-                        // Google DNS
-    IPAddress dns2(8, 8, 4, 4);                          // Optional backup DNS
+    IPAddress staticIP = deriveStaticIP(serialNumber); // last 3 digits used
+    IPAddress gateway(192, 168, 1, 1);                 // your router's IP
+    IPAddress subnet(255, 255, 255, 0);                // standard /24 subnet
+    IPAddress dns1(192, 168, 1, 254);                  // Assuming your router IP
+                                                       // Google DNS
+    IPAddress dns2(8, 8, 4, 4);                        // Optional backup DNS
 
     // Apply static IP configuration (MUST include DNS to avoid SSL issues)
     // WiFi.config(staticIP, gateway, subnet, dns1, dns2);
 
     // === Attempt to connect using WiFiManager ===
-wm.setConnectTimeout(20);
-wm.setConfigPortalTimeout(60);
-if (!wm.autoConnect(setupWifiName.c_str())) {
-    Serial.println(" WiFiManager failed. Restarting...");
-    delay(3000);
-    ESP.restart();
-}
-Serial.println("WiFi connected!");
-Serial.print("IP: "); Serial.println(WiFi.localIP());
-Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
-
+    wm.setConnectTimeout(20);
+    wm.setConfigPortalTimeout(60);
+    if (!wm.autoConnect(setupWifiName.c_str()))
+    {
+        Serial.println(" WiFiManager failed. Restarting...");
+        delay(3000);
+        ESP.restart();
+    }
+    Serial.println("WiFi connected!");
+    Serial.print("IP: ");
+    Serial.println(WiFi.localIP());
+    Serial.print("DNS: ");
+    Serial.println(WiFi.dnsIP());
+    startupTime = millis();
 
     // === Confirm network status ===
-    if (WiFi.status() == WL_CONNECTED) {
+    if (WiFi.status() == WL_CONNECTED)
+    {
         Serial.println("✅ WiFi connected.");
         Serial.print("IP Address: ");
         Serial.println(WiFi.localIP());
         Serial.print("DNS Server: ");
         Serial.println(WiFi.dnsIP());
-    } else {
+    }
+    else
+    {
         Serial.println("WiFi not connected.");
     }
-
+    Serial.println("➡️ Next: Starting Firebase...");
     // === Initialize Firebase ===
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
@@ -655,8 +680,9 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
     Firebase.reconnectWiFi(true);
 
     // Wait for Firebase to be ready
-    initializeTime();  // NTP sync
-    while (!Firebase.ready()) {
+    initializeTime(); // NTP sync
+    while (!Firebase.ready())
+    {
         delay(100);
     }
 
@@ -664,9 +690,10 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
     fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
     fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
     updateSystemVersion();
-
+    Serial.println("➡️ Setting up sensors...");
     // === Pin setup ===
-    for (int i = 0; i < NUMBER_OF_UNITS; i++) {
+    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    {
         pinMode(waterLevelPins[i], INPUT_PULLUP);
         ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER);
         ledcAttachPin(atomizerPins[i], i);
@@ -677,7 +704,8 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
     pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);
     digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
 
-    for (int i = 0; i < NUMBER_OF_UNITS; i++) {
+    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+    {
         Serial.print("Sensor Mode Unit ");
         Serial.print(i);
         Serial.print(": ");
@@ -685,8 +713,10 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
     }
 
     // === mDNS Setup ===
-    if (systemName != "") {
-        if (!MDNS.begin(systemName.c_str())) {
+    if (systemName != "")
+    {
+        if (!MDNS.begin(systemName.c_str()))
+        {
             Serial.println("Error setting up mDNS.");
             delay(1000);
         }
@@ -694,24 +724,24 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
 
     // === OTA Setup ===
     ArduinoOTA.setHostname(systemName.c_str());
-    ArduinoOTA.onStart([]() {
+    ArduinoOTA.onStart([]()
+                       {
         String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
-        Serial.println("Start updating " + type);
-    });
-    ArduinoOTA.onEnd([]() { Serial.println("\nUpdate Complete!"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
-        Serial.printf("Progress: %u%%\r", (progress / (total / 100)));
-    });
-    ArduinoOTA.onError([](ota_error_t error) {
+        Serial.println("Start updating " + type); });
+    ArduinoOTA.onEnd([]()
+                     { Serial.println("\nUpdate Complete!"); });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+                          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+    ArduinoOTA.onError([](ota_error_t error)
+                       {
         Serial.printf("Error[%u]: ", error);
         if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
         else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
         else if (error == OTA_CONNECT_ERROR) Serial.println("Connect Failed");
         else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
-        else if (error == OTA_END_ERROR) Serial.println("End Failed");
-    });
+        else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
 
-    ArduinoOTA.begin();  // ✅ Start the OTA server
+    ArduinoOTA.begin(); // ✅ Start the OTA server
     // === I2C Init (must come BEFORE any sensor init or scan) ===
     Wire.begin(SDA, SCL); // Initialize the I2C bus only ONCE
     mcp3021.init(&Wire);  // MCP3021 ADC init
@@ -720,15 +750,26 @@ Serial.print("DNS: "); Serial.println(WiFi.dnsIP());
 
     // === Safe I2C Scan (optional but now safe) ===
     scanI2C(); // make sure it uses sensorMutex internally
-
+    Serial.println("➡️ Setup done.");
     // === Sensor initialization AFTER I2C is ready ===
-   // sensors::initSensors(); // Now it's safe to talk to sensors
-
+    // sensors::initSensors(); // Now it's safe to talk to sensors
 }
 
 void loop()
 {
     ArduinoOTA.handle();
+    checkWiFiFailsafe();
+    // Log heap every 1 minute
+    static unsigned long lastHeapLogTime = 0;
+    if (millis() - lastHeapLogTime >= 3000)
+    {
+        Serial.print("[MEM] Free Heap: ");
+        Serial.print(ESP.getFreeHeap());
+        Serial.print(" | Min Heap: ");
+        Serial.println(ESP.getMinFreeHeap());
+        lastHeapLogTime = millis();
+    }
+
     if (WiFi.status() == WL_CONNECTED)
     {
         unsigned long currentMillis = millis();
@@ -752,17 +793,33 @@ void loop()
                 fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
                 Serial.println(unitsEnabled[0]);
                 sendHeartbeat();
-                readECSensorValue();
-                readWaterLevel(); // Read water level states
-                readSensors();
-                readCO2();
-                updateEnvironmentalData(&fbdo, temperature, humidity, raw);  // 'raw' holds CO2 average
+                if (ENABLE_I2C_SENSORS)
+                {
+                    readECSensorValue();
+                    readWaterLevel(); // Read water level states
+                    readSensors();
+                    readCO2();
+                }
+                else
+                {
+                    Serial.println("🔒 I2C sensors disabled by flag. Skipping read.");
+                    return;
+                }
+                if (millis() - startupTime >= SCHEDULED_RESTART_INTERVAL)
+                {
+                    Serial.println("♻️ Scheduled restart triggered to reset heap and clear memory.");
+                    delay(1000);
+                    Serial.print("Free heap before scheduled restart: ");
+                    Serial.println(ESP.getFreeHeap());
+
+                    ESP.restart();
+                }
 
                 // sensors::readTHSensors();
                 // sensors::readCO2Sensor();
                 // sendEnvironmentalReadingsToFirebase(&fbdo, sensors::temperature, sensors::humidity, sensors::co2ppm);
                 previousHeartbeatMillis = currentMillis;
-                
+
                 for (int i = 0; i < NUMBER_OF_UNITS; i++)
                 {
                     Serial.print("Sensor Mode Unit ");

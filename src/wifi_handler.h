@@ -51,15 +51,32 @@ void handleWiFiReconnect()
 // ===== FUNCTION: Reboot device if WiFi is down too long =====
 void checkWiFiFailsafe()
 {
-    if (WiFi.status() != WL_CONNECTED) {
-        if (wifiLostSince == 0) wifiLostSince = millis();
+    static unsigned long wifiLostSince = 0;
+    const unsigned long MAX_DISCONNECTED_TIME = 5 * 60 * 1000;  // 5 min
 
-        if (millis() - wifiLostSince > WIFI_OFFLINE_TIMEOUT) {
-Serial.println("[FAILSAFE] WiFi offline too long. Rebooting...");
+    if (WiFi.status() != WL_CONNECTED) {
+        if (wifiLostSince == 0) {
+            wifiLostSince = millis();
+            Serial.println("📡 WiFi lost. Starting failsafe timer.");
+        }
+
+        if (millis() - wifiLostSince > MAX_DISCONNECTED_TIME) {
+            Serial.println("❌ WiFi offline too long. Rebooting...");
             ESP.restart();
         }
+
+        // Try reconnecting
+        Serial.println("🔁 Attempting WiFi reconnect...");
+        WiFi.disconnect();
+        WiFi.begin();
+        delay(1000);
     } else {
-        wifiLostSince = 0; // Reset timer when WiFi is back
+        // Reset timer and enable I2C sensors again
+        if (wifiLostSince != 0) {
+            Serial.println("✅ WiFi reconnected. Re-enabling I2C sensors.");
+            ENABLE_I2C_SENSORS = true;
+        }
+        wifiLostSince = 0;
     }
 }
 
