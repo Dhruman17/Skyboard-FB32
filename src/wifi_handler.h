@@ -1,6 +1,6 @@
 #ifndef WIFI_HANDLER_H
 #define WIFI_HANDLER_H
-
+#include <config.h>
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <Firebase_ESP_Client.h>

@@ -24,6 +24,7 @@ const double firmware_version = 1.56;
 #else
   #error "Please define either ESP32_THREE_PORT or ESP32_S3 in build_flags."
 #endif
+const unsigned long SCHEDULED_RESTART_INTERVAL = 2UL * 60 * 60 * 1000; // 2 hours in ms
 
 #define SYSTEM_12V_POWER_PIN 12
 
