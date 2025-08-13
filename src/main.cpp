@@ -320,8 +320,10 @@ void readECSensorValue()
 }
 
 void updateUnits()
+
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
 {
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     unsigned long currentMillis = millis();
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
@@ -338,8 +340,8 @@ void updateUnits()
                 } // read the water level state only if the atomizers are off
                 previousMillis[i] = currentMillis; // reset the time counter
             }
-        }
-    }
+    } xSemaphoreGive(firebaseMutex);
+  }}
 }
 void printPartitionInfo()
 {
@@ -382,6 +384,7 @@ void updateSystemVersion()
 }
 float fetchLatestVersion()
 {
+     if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     HTTPClient http;
 
     String versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
@@ -404,11 +407,14 @@ float fetchLatestVersion()
         Serial.println(http.errorToString(httpCode));
         http.end();
         return firmware_version; // fallback
+           xSemaphoreGive(firebaseMutex);
+  }
     }
 }
 
 void updateFirmwareVersionInFirestore(float newVersion)
 {
+if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     if (systemPath != "")
     {
         String documentPath = systemPath;
@@ -428,6 +434,8 @@ void updateFirmwareVersionInFirestore(float newVersion)
             Serial.println(fbdo.errorReason());
         }
     }
+       xSemaphoreGive(firebaseMutex);
+  }
 }
 void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 {
@@ -587,7 +595,7 @@ void checkForFirmwareUpdate()
 }
 
 void sendHeartbeat()
-{
+{ if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     String documentPath = systemPath;
     FirebaseJson content;
     content.set("fields/lastSeen/timestampValue", formatTimestamp());
@@ -600,7 +608,8 @@ void sendHeartbeat()
     {
         Serial.println("Failed to send heartbeat.");
         Serial.println(fbdo.errorReason());
-    }
+    } xSemaphoreGive(firebaseMutex);
+  }
 }
 void scanI2C()
 {
@@ -657,6 +666,7 @@ void setup()
     Serial.print("DNS: ");
     Serial.println(WiFi.dnsIP());
     startupTime = millis();
+    lastRestartMillis = millis();
 
     // === Confirm network status ===
     if (WiFi.status() == WL_CONNECTED)
@@ -697,6 +707,7 @@ void setup()
         pinMode(waterLevelPins[i], INPUT_PULLUP);
         ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER);
         ledcAttachPin(atomizerPins[i], i);
+        Serial.printf("Attached atomizer pin %d to PWM channel %d\n", atomizerPins[i], i);
     }
 
     pinMode(SYSTEM_12V_POWER_PIN, OUTPUT);
@@ -711,6 +722,7 @@ void setup()
         Serial.print(": ");
         Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
     }
+
 
     // === mDNS Setup ===
     if (systemName != "")
@@ -758,6 +770,7 @@ void setup()
 void loop()
 {
     ArduinoOTA.handle();
+    updateUnits();
     checkWiFiFailsafe();
     // Log heap every 1 minute
     static unsigned long lastHeapLogTime = 0;
@@ -793,6 +806,8 @@ void loop()
                 fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
                 Serial.println(unitsEnabled[0]);
                 sendHeartbeat();
+                
+                systemLights();
                 previousHeartbeatMillis = currentMillis;
                 if (ENABLE_I2C_SENSORS)
                 {
@@ -804,7 +819,6 @@ void loop()
                 else
                 {
                     Serial.println("🔒 I2C sensors disabled by flag. Skipping read.");
-                    return;
                 }
                
 
@@ -818,18 +832,9 @@ void loop()
             }
         }
     
-        if (currentMillis - lastConnectionCheckMillis >= connectionOffset) // Check every 10 minutes
-        {
-            if (Firebase.ready())
-            {
+ 
 
-                updateUnits();
-                systemLights();
-                lastConnectionCheckMillis = currentMillis;
-            }
-        }
-
-        // 🔹 **Check for Firmware Update Every Hour**
+        // 🔹 **Check for Firmware Update Every 6 Hour**
         if (currentMillis - lastFirmwareCheckMillis >= FIRMWARE_CHECK_INTERVAL)
         {
             Serial.println("Checking for firmware updates...");

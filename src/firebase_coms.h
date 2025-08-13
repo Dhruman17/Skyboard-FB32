@@ -184,14 +184,20 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
                     }
                 }
             }
-            if (json.get(jsonData, "fields/Interval_On/integerValue"))
-            {
-                atomizerOnIntervals[i] = jsonData.intValue * 1000;
-            }
-            if (json.get(jsonData, "fields/Interval_Off/integerValue"))
-            {
-                atomizerOffIntervals[i] = jsonData.intValue * 1000;
-            }
+  if (json.get(jsonData, "fields/Interval_On/integerValue")) {
+    atomizerOnIntervals[i] = jsonData.intValue * 1000;
+    Serial.printf("✅ Interval_On for unit %s: %ld ms\n", unitNames[i].c_str(), atomizerOnIntervals[i]);
+} else {
+    Serial.printf("⚠️ Interval_On not found for unit %s\n", unitNames[i].c_str());
+}
+if (json.get(jsonData, "fields/Interval_Off/integerValue")) {
+    atomizerOffIntervals[i] = jsonData.intValue * 1000;
+    Serial.printf("✅ Interval_Off for unit %s: %ld ms\n", unitNames[i].c_str(), atomizerOffIntervals[i]);
+} else {
+    Serial.printf("⚠️ Interval_Off not found for unit %s\n", unitNames[i].c_str());
+}
+Serial.printf("➡️ unitState for %s: %s\n", unitNames[i].c_str(), unitsEnabled[i] ? "ENABLED" : "DISABLED");
+
 
             // 🧼 Free memory to prevent leaks
             json.clear();
@@ -201,6 +207,7 @@ void fetchFirebaseUnitData(FirebaseData *pFBDO, bool runitsEnabled[NUMBER_OF_UNI
         {
             Serial.println("Failed to get document for " + String(unitNames[i]));
             Serial.println(pFBDO->errorReason());
+            
         }
     }
 }
@@ -223,10 +230,13 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
     if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "EC_Sensor_Value, EC_Updated"))
     {
         Serial.println("EC value updated for " + unitName);
+        
     }
     else
     {
         Serial.println("Failed to update EC value for " + unitName + ": " + pFBDO->errorReason());
+         
+        
     }
     content.clear();
       xSemaphoreGive(firebaseMutex);
@@ -266,10 +276,12 @@ void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWe
     if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "Float_Water_State,Float_Updated"))
     {
         Serial.println("Float state updated for " + unitName);
+        
     }
     else
     {
         Serial.println("Failed to update Float state for " + unitName);
+       
     }
 }
 void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2) {
@@ -290,6 +302,7 @@ void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2
             "temperature,humidity,co2,environmental_updated"))
         {
             Serial.println("Environmental data updated in Firestore (root system doc).");
+             
         } else {
             Serial.println("Failed to update environmental data: " + pFBDO->errorReason());
         }
