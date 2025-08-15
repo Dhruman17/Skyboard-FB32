@@ -33,7 +33,7 @@ String formatTimestamp()
 void fetchFirebaseSystemData(FirebaseData *pFBDO, String *pSystemName, time_t *plightOnTime, time_t *plightOffTime, bool *plightMasterSwitch,
                              bool *ptimeCycleEnabled, String unitNames[NUMBER_OF_UNITS])
 {
-       if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+       if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
     if (Firebase.Firestore.getDocument(pFBDO, FIREBASE_PROJECT_ID, "", systemPath.c_str()))
     {
         FirebaseJson json;
@@ -216,7 +216,7 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
 {
     Serial.println("[Mutex] Taking firebaseMutex...");
 
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
         
     String documentPath;
     documentPath.reserve(100);
@@ -285,7 +285,7 @@ void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWe
     }
 }
 void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2) {
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
         String documentPath = systemPath;  // e.g., Systems/123456789123456789
         FirebaseJson content;
         content.set("fields/temperature/doubleValue", temp);

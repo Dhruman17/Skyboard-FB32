@@ -140,7 +140,7 @@ void systemLights()
 }
 void readWaterLevel()
 {
-    if (xSemaphoreTake(sensorMutex, portMAX_DELAY))
+    if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(1000)))
     {
         int capdacs[NUMBER_OF_UNITS] = {0, 0, 0};
         int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
@@ -292,7 +292,7 @@ void readCO2()
 // Function to read EC sensor value from MCP3021 ADC
 void readECSensorValue()
 {
-    if (xSemaphoreTake(sensorMutex, portMAX_DELAY))
+    if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(1000)))
     {
         float calibratedECs[NUMBER_OF_UNITS];
         int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
@@ -323,7 +323,7 @@ void updateUnits()
 
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
 {
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
     unsigned long currentMillis = millis();
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
@@ -384,7 +384,7 @@ void updateSystemVersion()
 }
 float fetchLatestVersion()
 {
-     if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+     if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
     HTTPClient http;
 
     String versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
@@ -414,7 +414,7 @@ float fetchLatestVersion()
 
 void updateFirmwareVersionInFirestore(float newVersion)
 {
-if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
     if (systemPath != "")
     {
         String documentPath = systemPath;
@@ -538,7 +538,7 @@ void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 
 void checkForFirmwareUpdate()
 {
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000)))
     {
         String documentPath = systemPath;
 
@@ -595,7 +595,7 @@ void checkForFirmwareUpdate()
 }
 
 void sendHeartbeat()
-{ if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+{ if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
     String documentPath = systemPath;
     FirebaseJson content;
     content.set("fields/lastSeen/timestampValue", formatTimestamp());
@@ -681,6 +681,7 @@ void setup()
     {
         Serial.println("WiFi not connected.");
     }
+    initializeTime(); // NTP sync
     Serial.println("➡️ Next: Starting Firebase...");
     // === Initialize Firebase ===
     config.api_key = API_KEY;
@@ -690,7 +691,7 @@ void setup()
     Firebase.reconnectWiFi(true);
 
     // Wait for Firebase to be ready
-    initializeTime(); // NTP sync
+    
     while (!Firebase.ready())
     {
         delay(100);
@@ -787,13 +788,13 @@ void loop()
     {
         unsigned long currentMillis = millis();
 
-        // Check for daily restart
-        if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
-        {
-            Serial.println("Performing daily restart to clear memory...");
-            delay(1000); // Give time for the message to be sent
-            ESP.restart();
-        }
+        // // Check for daily restart
+        // if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
+        // {
+        //     Serial.println("Performing daily restart to clear memory...");
+        //     delay(1000); // Give time for the message to be sent
+        //     ESP.restart();
+        // }
 
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
         {
