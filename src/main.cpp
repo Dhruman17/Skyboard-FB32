@@ -140,7 +140,7 @@ void systemLights()
 }
 void readWaterLevel()
 {
-    if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(1000)))
+    if (xSemaphoreTake(sensorMutex, portMAX_DELAY))
     {
         int capdacs[NUMBER_OF_UNITS] = {0, 0, 0};
         int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
@@ -292,7 +292,7 @@ void readCO2()
 // Function to read EC sensor value from MCP3021 ADC
 void readECSensorValue()
 {
-    if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(1000)))
+    if (xSemaphoreTake(sensorMutex, portMAX_DELAY))
     {
         float calibratedECs[NUMBER_OF_UNITS];
         int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
@@ -323,7 +323,7 @@ void updateUnits()
 
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
 {
-    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     unsigned long currentMillis = millis();
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
@@ -384,7 +384,7 @@ void updateSystemVersion()
 }
 float fetchLatestVersion()
 {
-     if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
+     if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     HTTPClient http;
 
     String versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
@@ -414,7 +414,7 @@ float fetchLatestVersion()
 
 void updateFirmwareVersionInFirestore(float newVersion)
 {
-if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
+if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     if (systemPath != "")
     {
         String documentPath = systemPath;
@@ -538,7 +538,7 @@ void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 
 void checkForFirmwareUpdate()
 {
-    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000)))
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
     {
         String documentPath = systemPath;
 
@@ -595,7 +595,7 @@ void checkForFirmwareUpdate()
 }
 
 void sendHeartbeat()
-{ if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(1000))) {
+{ if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     String documentPath = systemPath;
     FirebaseJson content;
     content.set("fields/lastSeen/timestampValue", formatTimestamp());
