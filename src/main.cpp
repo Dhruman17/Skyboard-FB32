@@ -323,7 +323,7 @@ void updateUnits()
 
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
 {
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+   
     unsigned long currentMillis = millis();
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
@@ -340,7 +340,7 @@ void updateUnits()
                 } // read the water level state only if the atomizers are off
                 previousMillis[i] = currentMillis; // reset the time counter
             }
-    } xSemaphoreGive(firebaseMutex);
+    
   }}
 }
 void printPartitionInfo()
@@ -384,7 +384,7 @@ void updateSystemVersion()
 }
 float fetchLatestVersion()
 {
-     if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+   
     HTTPClient http;
 
     String versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
@@ -409,12 +409,12 @@ float fetchLatestVersion()
         return firmware_version; // fallback
            xSemaphoreGive(firebaseMutex);
   }
-    }
+    
 }
 
 void updateFirmwareVersionInFirestore(float newVersion)
 {
-if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+
     if (systemPath != "")
     {
         String documentPath = systemPath;
@@ -436,7 +436,7 @@ if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
     }
        xSemaphoreGive(firebaseMutex);
   }
-}
+
 void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 {
     HTTPClient http;
@@ -538,7 +538,7 @@ void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 
 void checkForFirmwareUpdate()
 {
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
+   
     {
         String documentPath = systemPath;
 
@@ -592,10 +592,10 @@ void checkForFirmwareUpdate()
         }
         xSemaphoreGive(firebaseMutex);
     }
-}
+
 
 void sendHeartbeat()
-{ if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+{ 
     String documentPath = systemPath;
     FirebaseJson content;
     content.set("fields/lastSeen/timestampValue", formatTimestamp());
@@ -608,9 +608,9 @@ void sendHeartbeat()
     {
         Serial.println("Failed to send heartbeat.");
         Serial.println(fbdo.errorReason());
-    } xSemaphoreGive(firebaseMutex);
+    } 
   }
-}
+
 void scanI2C()
 {
     Serial.println("🔍 Scanning I2C bus...");
@@ -788,13 +788,13 @@ void loop()
     {
         unsigned long currentMillis = millis();
 
-        // // Check for daily restart
-        // if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
-        // {
-        //     Serial.println("Performing daily restart to clear memory...");
-        //     delay(1000); // Give time for the message to be sent
-        //     ESP.restart();
-        // }
+        // Check for daily restart
+        if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
+        {
+            Serial.println("Performing daily restart to clear memory...");
+            delay(1000); // Give time for the message to be sent
+            ESP.restart();
+        }
 
         if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
         {
