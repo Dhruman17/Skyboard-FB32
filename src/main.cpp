@@ -681,6 +681,10 @@ void setup()
     {
         Serial.println("WiFi not connected.");
     }
+        // 🔹 Add a random stagger delay (1–10 seconds)
+    int randomDelayMs = random(1000, 10000);
+    Serial.printf("⏳ Random startup delay: %d ms\n", randomDelayMs);
+    delay(randomDelayMs);
     initializeTime(); // NTP sync
     Serial.println("➡️ Next: Starting Firebase...");
     // === Initialize Firebase ===
