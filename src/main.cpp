@@ -323,7 +323,7 @@ void updateUnits()
 
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
 {
-   
+
     unsigned long currentMillis = millis();
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
@@ -340,8 +340,8 @@ void updateUnits()
                 } // read the water level state only if the atomizers are off
                 previousMillis[i] = currentMillis; // reset the time counter
             }
-    
-  }}
+        }
+    }
 }
 void printPartitionInfo()
 {
@@ -384,7 +384,7 @@ void updateSystemVersion()
 }
 float fetchLatestVersion()
 {
-   
+
     HTTPClient http;
 
     String versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
@@ -407,9 +407,8 @@ float fetchLatestVersion()
         Serial.println(http.errorToString(httpCode));
         http.end();
         return firmware_version; // fallback
-           xSemaphoreGive(firebaseMutex);
-  }
-    
+        xSemaphoreGive(firebaseMutex);
+    }
 }
 
 void updateFirmwareVersionInFirestore(float newVersion)
@@ -434,8 +433,8 @@ void updateFirmwareVersionInFirestore(float newVersion)
             Serial.println(fbdo.errorReason());
         }
     }
-       xSemaphoreGive(firebaseMutex);
-  }
+    xSemaphoreGive(firebaseMutex);
+}
 
 void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 {
@@ -538,7 +537,7 @@ void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 
 void checkForFirmwareUpdate()
 {
-   
+
     {
         String documentPath = systemPath;
 
@@ -592,6 +591,7 @@ void checkForFirmwareUpdate()
         }
         xSemaphoreGive(firebaseMutex);
     }
+<<<<<<< HEAD
 
 }
 void sendHeartbeat()
@@ -627,35 +627,13 @@ void scanI2C()
     }
     if (count == 0)
         Serial.println("❌ No I2C devices found!");
+=======
+>>>>>>> 99d53a90567bfefde5bdcafb4d84260405429fe3
 }
-unsigned long lastRestartMillis = 0;                              // Track last restart time
-const unsigned long DAILY_RESTART_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
 
-void setup()
-{
-    // 🔍 Log last reset cause
-    esp_reset_reason_t reason = esp_reset_reason();
-    Serial.print("🔁 Last reset reason: ");
-    Serial.println(reason);
-    Serial.begin(9600);
-    randomSeed(analogRead(0));
-    config.token_status_callback = tokenStatusCallback;
-    // === Derive Static IP from serial number ===
-    IPAddress staticIP = deriveStaticIP(serialNumber); // last 3 digits used
-    IPAddress gateway(192, 168, 1, 1);                 // your router's IP
-    IPAddress subnet(255, 255, 255, 0);                // standard /24 subnet
-    IPAddress dns1(192, 168, 1, 254);                  // Assuming your router IP
-                                                       // Google DNS
-    IPAddress dns2(8, 8, 4, 4);                        // Optional backup DNS
-
-    // Apply static IP configuration (MUST include DNS to avoid SSL issues)
-    // WiFi.config(staticIP, gateway, subnet, dns1, dns2);
-
-    // === Attempt to connect using WiFiManager ===
-    wm.setConnectTimeout(20);
-    wm.setConfigPortalTimeout(60);
-    if (!wm.autoConnect(setupWifiName.c_str()))
+    void sendHeartbeat()
     {
+<<<<<<< HEAD
         Serial.println(" WiFiManager failed. Restarting...");
         delay(3000);
         ESP.restart();
@@ -734,24 +712,158 @@ void setup()
     if (systemName != "")
     {
         if (!MDNS.begin(systemName.c_str()))
+=======
+        String documentPath = systemPath;
+        FirebaseJson content;
+        content.set("fields/lastSeen/timestampValue", formatTimestamp());
+        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "lastSeen"))
+>>>>>>> 99d53a90567bfefde5bdcafb4d84260405429fe3
         {
-            Serial.println("Error setting up mDNS.");
-            delay(1000);
+            Serial.println("Heartbeat sent.");
+            Serial.println(formatTimestamp());
+        }
+        else
+        {
+            Serial.println("Failed to send heartbeat.");
+            Serial.println(fbdo.errorReason());
         }
     }
 
-    // === OTA Setup ===
-    ArduinoOTA.setHostname(systemName.c_str());
-    ArduinoOTA.onStart([]()
-                       {
+    void scanI2C()
+    {
+        Serial.println("🔍 Scanning I2C bus...");
+        byte count = 0;
+        for (byte i = 1; i < 127; ++i)
+        {
+            Wire.beginTransmission(i);
+            if (Wire.endTransmission() == 0)
+            {
+                Serial.print("✅ Found I2C device at 0x");
+                Serial.println(i, HEX);
+                count++;
+            }
+        }
+        if (count == 0)
+            Serial.println("❌ No I2C devices found!");
+    }
+    unsigned long lastRestartMillis = 0;                             // Track last restart time
+    const unsigned long DAILY_RESTART_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+
+    void setup()
+    {
+        // 🔍 Log last reset cause
+        esp_reset_reason_t reason = esp_reset_reason();
+        Serial.print("🔁 Last reset reason: ");
+        Serial.println(reason);
+        Serial.begin(9600);
+        randomSeed(analogRead(0));
+        config.token_status_callback = tokenStatusCallback;
+        // === Derive Static IP from serial number ===
+        IPAddress staticIP = deriveStaticIP(serialNumber); // last 3 digits used
+        IPAddress gateway(192, 168, 1, 1);                 // your router's IP
+        IPAddress subnet(255, 255, 255, 0);                // standard /24 subnet
+        IPAddress dns1(192, 168, 1, 254);                  // Assuming your router IP
+                                                           // Google DNS
+        IPAddress dns2(8, 8, 4, 4);                        // Optional backup DNS
+
+        // Apply static IP configuration (MUST include DNS to avoid SSL issues)
+        // WiFi.config(staticIP, gateway, subnet, dns1, dns2);
+
+        // === Attempt to connect using WiFiManager ===
+        wm.setConnectTimeout(20);
+        wm.setConfigPortalTimeout(60);
+        if (!wm.autoConnect(setupWifiName.c_str()))
+        {
+            Serial.println(" WiFiManager failed. Restarting...");
+            delay(3000);
+            ESP.restart();
+        }
+        Serial.println("WiFi connected!");
+        Serial.print("IP: ");
+        Serial.println(WiFi.localIP());
+        Serial.print("DNS: ");
+        Serial.println(WiFi.dnsIP());
+        startupTime = millis();
+        lastRestartMillis = millis();
+
+        // === Confirm network status ===
+        if (WiFi.status() == WL_CONNECTED)
+        {
+            Serial.println("✅ WiFi connected.");
+            Serial.print("IP Address: ");
+            Serial.println(WiFi.localIP());
+            Serial.print("DNS Server: ");
+            Serial.println(WiFi.dnsIP());
+        }
+        else
+        {
+            Serial.println("WiFi not connected.");
+        }
+        initializeTime(); // NTP sync
+        Serial.println("➡️ Next: Starting Firebase...");
+        // === Initialize Firebase ===
+        config.api_key = API_KEY;
+        auth.user.email = USER_EMAIL;
+        auth.user.password = USER_PASSWORD;
+        Firebase.begin(&config, &auth);
+        Firebase.reconnectWiFi(true);
+
+        // Wait for Firebase to be ready
+
+        while (!Firebase.ready())
+        {
+            delay(100);
+        }
+
+        // === Sync data and setup system ===
+        fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
+        fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
+        updateSystemVersion();
+        Serial.println("➡️ Setting up sensors...");
+        // === Pin setup ===
+        for (int i = 0; i < NUMBER_OF_UNITS; i++)
+        {
+            pinMode(waterLevelPins[i], INPUT_PULLUP);
+            ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER);
+            ledcAttachPin(atomizerPins[i], i);
+            Serial.printf("Attached atomizer pin %d to PWM channel %d\n", atomizerPins[i], i);
+        }
+
+        pinMode(SYSTEM_12V_POWER_PIN, OUTPUT);
+        digitalWrite(SYSTEM_12V_POWER_PIN, HIGH);
+        pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);
+        digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
+
+        for (int i = 0; i < NUMBER_OF_UNITS; i++)
+        {
+            Serial.print("Sensor Mode Unit ");
+            Serial.print(i);
+            Serial.print(": ");
+            Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
+        }
+
+        // === mDNS Setup ===
+        if (systemName != "")
+        {
+            if (!MDNS.begin(systemName.c_str()))
+            {
+                Serial.println("Error setting up mDNS.");
+                delay(1000);
+            }
+        }
+
+        // === OTA Setup ===
+        ArduinoOTA.setHostname(systemName.c_str());
+        ArduinoOTA.onStart([]()
+                           {
         String type = ArduinoOTA.getCommand() == U_FLASH ? "sketch" : "filesystem";
         Serial.println("Start updating " + type); });
-    ArduinoOTA.onEnd([]()
-                     { Serial.println("\nUpdate Complete!"); });
-    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
-                          { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
-    ArduinoOTA.onError([](ota_error_t error)
-                       {
+        ArduinoOTA.onEnd([]()
+                         { Serial.println("\nUpdate Complete!"); });
+        ArduinoOTA.onProgress([](unsigned int progress, unsigned int total)
+                              { Serial.printf("Progress: %u%%\r", (progress / (total / 100))); });
+        ArduinoOTA.onError([](ota_error_t error)
+                           {
         Serial.printf("Error[%u]: ", error);
         if (error == OTA_AUTH_ERROR) Serial.println("Auth Failed");
         else if (error == OTA_BEGIN_ERROR) Serial.println("Begin Failed");
@@ -759,120 +871,121 @@ void setup()
         else if (error == OTA_RECEIVE_ERROR) Serial.println("Receive Failed");
         else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
 
-    ArduinoOTA.begin(); // ✅ Start the OTA server
-    // === I2C Init (must come BEFORE any sensor init or scan) ===
-    Wire.begin(SDA, SCL); // Initialize the I2C bus only ONCE
-    mcp3021.init(&Wire);  // MCP3021 ADC init
-    Serial.println("✅ Serial ready. Starting I2C init...");
-    delay(200); // Give USB host time to open terminal
+        ArduinoOTA.begin(); // ✅ Start the OTA server
+        // === I2C Init (must come BEFORE any sensor init or scan) ===
+        Wire.begin(SDA, SCL); // Initialize the I2C bus only ONCE
+        mcp3021.init(&Wire);  // MCP3021 ADC init
+        Serial.println("✅ Serial ready. Starting I2C init...");
+        delay(200); // Give USB host time to open terminal
 
-    // === Safe I2C Scan (optional but now safe) ===
-    scanI2C(); // make sure it uses sensorMutex internally
-    Serial.println("➡️ Setup done.");
-    // === Sensor initialization AFTER I2C is ready ===
-    // sensors::initSensors(); // Now it's safe to talk to sensors
-}
-
-void loop()
-{
-    ArduinoOTA.handle();
-    updateUnits();
-    checkWiFiFailsafe();
-    // Log heap every 1 minute
-    static unsigned long lastHeapLogTime = 0;
-    if (millis() - lastHeapLogTime >= 60000)
-    {
-        Serial.print("[MEM] Free Heap: ");
-        Serial.print(ESP.getFreeHeap());
-        Serial.print(" | Min Heap: ");
-        Serial.println(ESP.getMinFreeHeap());
-        lastHeapLogTime = millis();
+        // === Safe I2C Scan (optional but now safe) ===
+        scanI2C(); // make sure it uses sensorMutex internally
+        Serial.println("➡️ Setup done.");
+        // === Sensor initialization AFTER I2C is ready ===
+        // sensors::initSensors(); // Now it's safe to talk to sensors
     }
 
-    if (WiFi.status() == WL_CONNECTED)
+    void loop()
     {
-        unsigned long currentMillis = millis();
-
-        // Check for daily restart
-        if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
+        ArduinoOTA.handle();
+        updateUnits();
+        checkWiFiFailsafe();
+        // Log heap every 1 minute
+        static unsigned long lastHeapLogTime = 0;
+        if (millis() - lastHeapLogTime >= 60000)
         {
-            Serial.println("Performing daily restart to clear memory...");
-            delay(1000); // Give time for the message to be sent
-            ESP.restart();
+            Serial.print("[MEM] Free Heap: ");
+            Serial.print(ESP.getFreeHeap());
+            Serial.print(" | Min Heap: ");
+            Serial.println(ESP.getMinFreeHeap());
+            lastHeapLogTime = millis();
         }
 
-        if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
+        if (WiFi.status() == WL_CONNECTED)
         {
-            if (Firebase.ready())
+            unsigned long currentMillis = millis();
+
+            // Check for daily restart
+            if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
             {
-                // float currentEC = readECSensorValue();   // Read EC value
-                // Serial.println(currentEC);
-                // sendECValueToFirebase(&fbdo, currentEC); // Send EC value to Firebase
-                fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
-                fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
-                Serial.println(unitsEnabled[0]);
-                sendHeartbeat();
-                
-                systemLights();
-                previousHeartbeatMillis = currentMillis;
-                if (ENABLE_I2C_SENSORS)
-                {
-                    readECSensorValue();
-                    readWaterLevel(); // Read water level states
-                    readSensors();
-                    readCO2();
-                }
-                else
-                {
-                    Serial.println("🔒 I2C sensors disabled by flag. Skipping read.");
-                }
-               
-
-                for (int i = 0; i < NUMBER_OF_UNITS; i++)
-                {
-                    Serial.print("Sensor Mode Unit ");
-                    Serial.print(i);
-                    Serial.print(": ");
-                    Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
-                }
-            }
-        }
-    
- 
-
-        // 🔹 **Check for Firmware Update Every 6 Hour**
-        if (currentMillis - lastFirmwareCheckMillis >= FIRMWARE_CHECK_INTERVAL)
-        {
-            Serial.println("Checking for firmware updates...");
-            checkForFirmwareUpdate();
-            lastFirmwareCheckMillis = currentMillis;
-        }
-    }
-    else
-    {
-        Serial.println("Wi-Fi disconnected. Retrying...");
-        unsigned long wifiTimeoutCheck = millis();
-        unsigned long currentMillisWiFi;
-
-        while (WiFi.status() != WL_CONNECTED)
-        {
-            currentMillisWiFi = millis();
-            delay(1000); // Retry every second
-            if (!wm.autoConnect(setupWifiName.c_str()))
-            {
-                Serial.println("Failed to configure WiFi. Restarting...");
-                delay(3000);
+                Serial.println("Performing daily restart to clear memory...");
+                delay(1000); // Give time for the message to be sent
                 ESP.restart();
             }
+
+            if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
+            {
+                if (Firebase.ready())
+                {
+                    // float currentEC = readECSensorValue();   // Read EC value
+                    // Serial.println(currentEC);
+                    // sendECValueToFirebase(&fbdo, currentEC); // Send EC value to Firebase
+                    fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
+                    fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
+                    Serial.println(unitsEnabled[0]);
+                    sendHeartbeat();
+
+                    systemLights();
+                    previousHeartbeatMillis = currentMillis;
+                    if (ENABLE_I2C_SENSORS)
+                    {
+                        readECSensorValue();
+                        readWaterLevel(); // Read water level states
+                        readSensors();
+                        readCO2();
+                    }
+                    else
+                    {
+                        Serial.println("🔒 I2C sensors disabled by flag. Skipping read.");
+                    }
+
+                    for (int i = 0; i < NUMBER_OF_UNITS; i++)
+                    {
+                        Serial.print("Sensor Mode Unit ");
+                        Serial.print(i);
+                        Serial.print(": ");
+                        Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
+                    }
+                }
+            }
+
+            // 🔹 **Check for Firmware Update Every 6 Hour**
+            if (currentMillis - lastFirmwareCheckMillis >= FIRMWARE_CHECK_INTERVAL)
+            {
+                Serial.println("Checking for firmware updates...");
+                checkForFirmwareUpdate();
+                lastFirmwareCheckMillis = currentMillis;
+            }
         }
+        else
+        {
+            Serial.println("Wi-Fi disconnected. Retrying...");
+            unsigned long wifiTimeoutCheck = millis();
+            unsigned long currentMillisWiFi;
 
-        Serial.println("Wi-Fi reconnected. Reinitializing Firebase...");
-        config.api_key = API_KEY;
-        auth.user.email = USER_EMAIL;
-        auth.user.password = USER_PASSWORD;
-        Firebase.begin(&config, &auth);
-        Firebase.reconnectWiFi(true);
+            while (WiFi.status() != WL_CONNECTED)
+            {
+                currentMillisWiFi = millis();
+                delay(1000); // Retry every second
+                if (!wm.autoConnect(setupWifiName.c_str()))
+                {
+                    Serial.println("Failed to configure WiFi. Restarting...");
+                    delay(3000);
+                    ESP.restart();
+                }
+            }
 
-        initializeTime(); // Reinitialize time after reconnection
+            Serial.println("Wi-Fi reconnected. Reinitializing Firebase...");
+            config.api_key = API_KEY;
+            auth.user.email = USER_EMAIL;
+            auth.user.password = USER_PASSWORD;
+            Firebase.begin(&config, &auth);
+            Firebase.reconnectWiFi(true);
+
+            initializeTime(); // Reinitialize time after reconnection
+        }
     }
+<<<<<<< HEAD
 }
+=======
+>>>>>>> 99d53a90567bfefde5bdcafb4d84260405429fe3
