@@ -593,7 +593,7 @@ void checkForFirmwareUpdate()
         xSemaphoreGive(firebaseMutex);
     }
 
-
+}
 void sendHeartbeat()
 { 
     String documentPath = systemPath;
@@ -681,11 +681,12 @@ void setup()
     {
         Serial.println("WiFi not connected.");
     }
+    initializeTime(); // NTP sync
         // 🔹 Add a random stagger delay (1–10 seconds)
     int randomDelayMs = random(1000, 10000);
     Serial.printf("⏳ Random startup delay: %d ms\n", randomDelayMs);
     delay(randomDelayMs);
-    initializeTime(); // NTP sync
+
     Serial.println("➡️ Next: Starting Firebase...");
     // === Initialize Firebase ===
     config.api_key = API_KEY;
