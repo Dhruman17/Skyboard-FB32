@@ -591,7 +591,6 @@ void checkForFirmwareUpdate()
         }
         xSemaphoreGive(firebaseMutex);
     }
-<<<<<<< HEAD
 
 }
 void sendHeartbeat()
@@ -611,123 +610,6 @@ void sendHeartbeat()
     } 
   }
 
-void scanI2C()
-{
-    Serial.println("🔍 Scanning I2C bus...");
-    byte count = 0;
-    for (byte i = 1; i < 127; ++i)
-    {
-        Wire.beginTransmission(i);
-        if (Wire.endTransmission() == 0)
-        {
-            Serial.print("✅ Found I2C device at 0x");
-            Serial.println(i, HEX);
-            count++;
-        }
-    }
-    if (count == 0)
-        Serial.println("❌ No I2C devices found!");
-=======
->>>>>>> 99d53a90567bfefde5bdcafb4d84260405429fe3
-}
-
-    void sendHeartbeat()
-    {
-<<<<<<< HEAD
-        Serial.println(" WiFiManager failed. Restarting...");
-        delay(3000);
-        ESP.restart();
-    }
-    Serial.println("WiFi connected!");
-    Serial.print("IP: ");
-    Serial.println(WiFi.localIP());
-    Serial.print("DNS: ");
-    Serial.println(WiFi.dnsIP());
-    startupTime = millis();
-    lastRestartMillis = millis();
-
-    // === Confirm network status ===
-    if (WiFi.status() == WL_CONNECTED)
-    {
-        Serial.println("✅ WiFi connected.");
-        Serial.print("IP Address: ");
-        Serial.println(WiFi.localIP());
-        Serial.print("DNS Server: ");
-        Serial.println(WiFi.dnsIP());
-    }
-    else
-    {
-        Serial.println("WiFi not connected.");
-    }
-    initializeTime(); // NTP sync
-        // 🔹 Add a random stagger delay (1–10 seconds)
-    int randomDelayMs = random(1000, 10000);
-    Serial.printf("⏳ Random startup delay: %d ms\n", randomDelayMs);
-    delay(randomDelayMs);
-
-    Serial.println("➡️ Next: Starting Firebase...");
-    // === Initialize Firebase ===
-    config.api_key = API_KEY;
-    auth.user.email = USER_EMAIL;
-    auth.user.password = USER_PASSWORD;
-    Firebase.begin(&config, &auth);
-    Firebase.reconnectWiFi(true);
-
-    // Wait for Firebase to be ready
-    
-    while (!Firebase.ready())
-    {
-        delay(100);
-    }
-
-    // === Sync data and setup system ===
-    fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
-    fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
-    updateSystemVersion();
-    Serial.println("➡️ Setting up sensors...");
-    // === Pin setup ===
-    for (int i = 0; i < NUMBER_OF_UNITS; i++)
-    {
-        pinMode(waterLevelPins[i], INPUT_PULLUP);
-        ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER);
-        ledcAttachPin(atomizerPins[i], i);
-        Serial.printf("Attached atomizer pin %d to PWM channel %d\n", atomizerPins[i], i);
-    }
-
-    pinMode(SYSTEM_12V_POWER_PIN, OUTPUT);
-    digitalWrite(SYSTEM_12V_POWER_PIN, HIGH);
-    pinMode(SYSTEM_LIGHTS_PIN, OUTPUT);
-    digitalWrite(SYSTEM_LIGHTS_PIN, LOW);
-
-    for (int i = 0; i < NUMBER_OF_UNITS; i++)
-    {
-        Serial.print("Sensor Mode Unit ");
-        Serial.print(i);
-        Serial.print(": ");
-        Serial.println(useCapacitiveSensor ? "Capacitive" : "Float");
-    }
-
-
-    // === mDNS Setup ===
-    if (systemName != "")
-    {
-        if (!MDNS.begin(systemName.c_str()))
-=======
-        String documentPath = systemPath;
-        FirebaseJson content;
-        content.set("fields/lastSeen/timestampValue", formatTimestamp());
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "lastSeen"))
->>>>>>> 99d53a90567bfefde5bdcafb4d84260405429fe3
-        {
-            Serial.println("Heartbeat sent.");
-            Serial.println(formatTimestamp());
-        }
-        else
-        {
-            Serial.println("Failed to send heartbeat.");
-            Serial.println(fbdo.errorReason());
-        }
-    }
 
     void scanI2C()
     {
@@ -799,14 +681,19 @@ void scanI2C()
         {
             Serial.println("WiFi not connected.");
         }
-        initializeTime(); // NTP sync
-        Serial.println("➡️ Next: Starting Firebase...");
-        // === Initialize Firebase ===
-        config.api_key = API_KEY;
-        auth.user.email = USER_EMAIL;
-        auth.user.password = USER_PASSWORD;
-        Firebase.begin(&config, &auth);
-        Firebase.reconnectWiFi(true);
+    initializeTime(); // NTP sync
+        // 🔹 Add a random stagger delay (1–10 seconds)
+    int randomDelayMs = random(1000, 10000);
+    Serial.printf("⏳ Random startup delay: %d ms\n", randomDelayMs);
+    delay(randomDelayMs);
+
+    Serial.println("➡️ Next: Starting Firebase...");
+    // === Initialize Firebase ===
+    config.api_key = API_KEY;
+    auth.user.email = USER_EMAIL;
+    auth.user.password = USER_PASSWORD;
+    Firebase.begin(&config, &auth);
+    Firebase.reconnectWiFi(true);
 
         // Wait for Firebase to be ready
 
@@ -982,10 +869,7 @@ void scanI2C()
             Firebase.begin(&config, &auth);
             Firebase.reconnectWiFi(true);
 
-            initializeTime(); // Reinitialize time after reconnection
-        }
+        initializeTime(); // Reinitialize time after reconnection
     }
-<<<<<<< HEAD
 }
-=======
->>>>>>> 99d53a90567bfefde5bdcafb4d84260405429fe3
+         
