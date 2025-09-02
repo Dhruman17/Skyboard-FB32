@@ -407,33 +407,34 @@ float fetchLatestVersion()
         Serial.println(http.errorToString(httpCode));
         http.end();
         return firmware_version; // fallback
-        xSemaphoreGive(firebaseMutex);
     }
 }
 
 void updateFirmwareVersionInFirestore(float newVersion)
 {
-
-    if (systemPath != "")
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
     {
-        String documentPath = systemPath;
-        FirebaseJson content;
-
-        // Update Firestore with the new firmware version
-        content.set("fields/version/doubleValue", newVersion);
-
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version"))
+        if (systemPath != "")
         {
-            Serial.print("Updated Firestore firmware version to: ");
-            Serial.println(newVersion);
+            String documentPath = systemPath;
+            FirebaseJson content;
+
+            // Update Firestore with the new firmware version
+            content.set("fields/version/doubleValue", newVersion);
+
+            if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version"))
+            {
+                Serial.print("Updated Firestore firmware version to: ");
+                Serial.println(newVersion);
+            }
+            else
+            {
+                Serial.println("Failed to update firmware version in Firestore.");
+                Serial.println(fbdo.errorReason());
+            }
         }
-        else
-        {
-            Serial.println("Failed to update firmware version in Firestore.");
-            Serial.println(fbdo.errorReason());
-        }
+        xSemaphoreGive(firebaseMutex);
     }
-    xSemaphoreGive(firebaseMutex);
 }
 
 void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
@@ -589,7 +590,6 @@ void checkForFirmwareUpdate()
             Serial.println("Failed to check Firestore for firmware update.");
             Serial.println(fbdo.errorReason());
         }
-        xSemaphoreGive(firebaseMutex);
     }
 
 }

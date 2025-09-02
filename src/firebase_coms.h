@@ -245,42 +245,60 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
 }
 void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, float waterLevel)
 {
-    String documentPath;
-    documentPath.reserve(100);
-    documentPath = systemPath + "/units/";
-    documentPath += unitName;
-
-    FirebaseJson content;
-    content.set("fields/Cap_Water_Level/doubleValue", waterLevel);
-    content.set("fields/Cap_Water_Updated/timestampValue", formatTimestamp());
-
-    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "Cap_Water_Level,Cap_Water_Updated"))
+    Serial.println("[Mutex] Taking firebaseMutex for Cap value...");
+    
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
     {
-        Serial.println("Water level updated for " + unitName);
+        String documentPath;
+        documentPath.reserve(100);
+        documentPath = systemPath + "/units/";
+        documentPath += unitName;
+
+        FirebaseJson content;
+        content.set("fields/Cap_Water_Level/doubleValue", waterLevel);
+        content.set("fields/Cap_Water_Updated/timestampValue", formatTimestamp());
+
+        if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "Cap_Water_Level,Cap_Water_Updated"))
+        {
+            Serial.println("Water level updated for " + unitName);
+        }
+        else
+        {
+            Serial.println("Failed to update water level for " + unitName + ": " + pFBDO->errorReason());
+        }
+        content.clear();
+        
+        xSemaphoreGive(firebaseMutex);
+        Serial.println("[Mutex] Released firebaseMutex.");
     }
-    else
-    {
-        Serial.println("Failed to update water level for " + unitName + ": " + pFBDO->errorReason());
-    }
-    content.clear();
 }
 void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWet)
 {
-    String documentPath = systemPath + "/units/" + unitName;
-
-    FirebaseJson content;
-    content.set("fields/Float_Water_State/booleanValue", isWet);
-    content.set("fields/Float_Updated/timestampValue", formatTimestamp());
-
-    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "Float_Water_State,Float_Updated"))
+    Serial.println("[Mutex] Taking firebaseMutex for Float state...");
+    
+    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
     {
-        Serial.println("Float state updated for " + unitName);
+        String documentPath;
+        documentPath.reserve(100);
+        documentPath = systemPath + "/units/";
+        documentPath += unitName;
+
+        FirebaseJson content;
+        content.set("fields/Float_Water_State/booleanValue", isWet);
+        content.set("fields/Float_Updated/timestampValue", formatTimestamp());
+
+        if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "Float_Water_State,Float_Updated"))
+        {
+            Serial.println("Float state updated for " + unitName);
+        }
+        else
+        {
+            Serial.println("Failed to update Float state for " + unitName + ": " + pFBDO->errorReason());
+        }
+        content.clear();
         
-    }
-    else
-    {
-        Serial.println("Failed to update Float state for " + unitName);
-       
+        xSemaphoreGive(firebaseMutex);
+        Serial.println("[Mutex] Released firebaseMutex.");
     }
 }
 void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2) {
