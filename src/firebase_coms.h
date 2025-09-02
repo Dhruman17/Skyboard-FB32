@@ -5,6 +5,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <config.h>
+#include "memory_manager.h"
 #define FIREBASEJSON_USE_PSRAM
 
 const String systemPath = "Systems/" + serialNumber;

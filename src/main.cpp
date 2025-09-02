@@ -20,6 +20,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "mutex_handler.h" // if you created this
+#include "memory_manager.h" // Memory management utilities
 #define FIREBASEJSON_USE_PSRAM
 
 FirebaseData fbdo;
@@ -384,10 +385,17 @@ void updateSystemVersion()
 }
 float fetchLatestVersion()
 {
-
+    if (!MemoryManager::canPerformFirebaseOperation()) {
+        Serial.println("[VERSION] Check skipped - low memory");
+        return firmware_version;
+    }
+    
     HTTPClient http;
-
-    String versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
+    http.setTimeout(10000); // 10 second timeout
+    
+    String versionUrl;
+    versionUrl.reserve(200); // Reserve memory upfront
+    versionUrl = "https://firebasestorage.googleapis.com/v0/b/";
     versionUrl += FIREBASE_PROJECT_ID;
     versionUrl += ".appspot.com/o/";
     versionUrl += serialNumber + "%2FVersion.txt?alt=media"; // %2F = "/"
@@ -399,6 +407,7 @@ float fetchLatestVersion()
     {
         String versionString = http.getString();
         http.end();
+        versionUrl = ""; // Free string memory
         return versionString.toFloat();
     }
     else
@@ -406,6 +415,7 @@ float fetchLatestVersion()
         Serial.println("Failed to fetch Version.txt");
         Serial.println(http.errorToString(httpCode));
         http.end();
+        versionUrl = ""; // Free string memory
         return firmware_version; // fallback
     }
 }
@@ -439,7 +449,15 @@ void updateFirmwareVersionInFirestore(float newVersion)
 
 void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
 {
+    // Check memory before OTA
+    if (ESP.getFreeHeap() < 50000) {
+        Serial.println("[OTA] Insufficient memory for update. Restarting first...");
+        ESP.restart();
+        return;
+    }
+    
     HTTPClient http;
+    http.setTimeout(30000); // 30 second timeout for OTA
     Serial.println("Connecting to firmware URL...");
     http.begin(firmwareUrl);
     int httpCode = http.GET();
@@ -534,6 +552,9 @@ void performOTAUpdate(String firmwareUrl, float newFirmwareVersion)
     }
 
     http.end();
+    
+    // Clear firmware URL from memory
+    firmwareUrl = "";
 }
 
 void checkForFirmwareUpdate()
@@ -595,9 +616,15 @@ void checkForFirmwareUpdate()
 }
 void sendHeartbeat()
 { 
+    if (!MemoryManager::canPerformFirebaseOperation()) {
+        Serial.println("[HEARTBEAT] Skipped - low memory");
+        return;
+    }
+    
     String documentPath = systemPath;
     FirebaseJson content;
     content.set("fields/lastSeen/timestampValue", formatTimestamp());
+    
     if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "lastSeen"))
     {
         Serial.println("Heartbeat sent.");
@@ -607,7 +634,9 @@ void sendHeartbeat()
     {
         Serial.println("Failed to send heartbeat.");
         Serial.println(fbdo.errorReason());
-    } 
+    }
+    
+    content.clear(); // Ensure cleanup
   }
 
 
@@ -629,15 +658,19 @@ void sendHeartbeat()
             Serial.println("❌ No I2C devices found!");
     }
     unsigned long lastRestartMillis = 0;                             // Track last restart time
-    const unsigned long DAILY_RESTART_INTERVAL = 2 * 60 * 60 * 1000; // 2 hours in milliseconds
+    const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds (daily restart)
 
     void setup()
     {
+        Serial.begin(9600);
         // 🔍 Log last reset cause
         esp_reset_reason_t reason = esp_reset_reason();
         Serial.print("🔁 Last reset reason: ");
         Serial.println(reason);
-        Serial.begin(9600);
+        
+        // Initialize memory manager
+        MemoryManager::init();
+        MemoryManager::logMemoryStatus();
         randomSeed(analogRead(0));
         config.token_status_callback = tokenStatusCallback;
         // === Derive Static IP from serial number ===
@@ -778,15 +811,20 @@ void sendHeartbeat()
         ArduinoOTA.handle();
         updateUnits();
         checkWiFiFailsafe();
-        // Log heap every 1 minute
-        static unsigned long lastHeapLogTime = 0;
-        if (millis() - lastHeapLogTime >= 60000)
+        // Memory health check every 30 seconds
+        static unsigned long lastMemoryCheckTime = 0;
+        if (millis() - lastMemoryCheckTime >= 30000)
         {
-            Serial.print("[MEM] Free Heap: ");
-            Serial.print(ESP.getFreeHeap());
-            Serial.print(" | Min Heap: ");
-            Serial.println(ESP.getMinFreeHeap());
-            lastHeapLogTime = millis();
+            MemoryManager::checkMemoryHealth();
+            lastMemoryCheckTime = millis();
+        }
+        
+        // Detailed memory log every 5 minutes
+        static unsigned long lastDetailedLogTime = 0;
+        if (millis() - lastDetailedLogTime >= 300000)
+        {
+            MemoryManager::logMemoryStatus();
+            lastDetailedLogTime = millis();
         }
 
         if (WiFi.status() == WL_CONNECTED)
@@ -796,14 +834,16 @@ void sendHeartbeat()
             // Check for daily restart
             if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
             {
-                Serial.println("Performing daily restart to clear memory...");
-                delay(1000); // Give time for the message to be sent
+                Serial.println("[RESTART] Performing scheduled daily restart...");
+                MemoryManager::logMemoryStatus();
+                sendHeartbeat(); // Send final heartbeat before restart
+                delay(2000); // Give time for operations to complete
                 ESP.restart();
             }
 
             if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
             {
-                if (Firebase.ready())
+                if (Firebase.ready() && MemoryManager::canPerformFirebaseOperation())
                 {
                     // float currentEC = readECSensorValue();   // Read EC value
                     // Serial.println(currentEC);
