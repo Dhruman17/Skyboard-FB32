@@ -216,7 +216,7 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
 {
     Serial.println("[Mutex] Taking firebaseMutex...");
 
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(10000))) { // 10 second timeout
         
     String documentPath;
     documentPath.reserve(100);
@@ -248,7 +248,7 @@ void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, flo
 {
     Serial.println("[Mutex] Taking firebaseMutex for Cap value...");
     
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(10000))) // 10 second timeout
     {
         String documentPath;
         documentPath.reserve(100);
@@ -277,7 +277,7 @@ void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWe
 {
     Serial.println("[Mutex] Taking firebaseMutex for Float state...");
     
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(10000))) // 10 second timeout
     {
         String documentPath;
         documentPath.reserve(100);
@@ -303,7 +303,7 @@ void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWe
     }
 }
 void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2) {
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY)) {
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(10000))) { // 10 second timeout
         String documentPath = systemPath;  // e.g., Systems/123456789123456789
         FirebaseJson content;
         content.set("fields/temperature/doubleValue", temp);

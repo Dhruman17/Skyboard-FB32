@@ -5,7 +5,7 @@
 #include <time.h>
 
 // === Firmware Version ===
-const double firmware_version = 1.563;
+const double firmware_version = 1.566;
 
 // === Select Board Type via build_flags ===
 // Use -DESP32_THREE_PORT or -DESP32_S3 in platformio.ini
@@ -42,7 +42,11 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 #define TCAADDR 0x77
 
 // === Timing Configurations ===
-const unsigned long INTERVAL_30_SECONDS = 30000;
+#ifdef ESP32_THREE_PORT
+  const unsigned long INTERVAL_30_SECONDS = 45000; // 45 seconds for 3-port (reduce load)
+#else
+  const unsigned long INTERVAL_30_SECONDS = 30000; // 30 seconds for other boards
+#endif
 const unsigned long WIFI_RESET_INTERVAL = 60000;
 const unsigned long FIRMWARE_CHECK_INTERVAL = 6UL * 60 * 60 * 1000; // Every 6 hours
 const unsigned long resetInterval = 21600000; // 6 hours

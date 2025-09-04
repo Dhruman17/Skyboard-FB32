@@ -19,8 +19,10 @@
 #include <Protocentral_FDC1004.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
+#include "esp_task_wdt.h" // Watchdog timer
 #include "mutex_handler.h" // if you created this
 #include "memory_manager.h" // Memory management utilities
+#include "utils.h" // Utility functions for safe time handling
 #define FIREBASEJSON_USE_PSRAM
 
 FirebaseData fbdo;
@@ -671,6 +673,12 @@ void sendHeartbeat()
         // Initialize memory manager
         MemoryManager::init();
         MemoryManager::logMemoryStatus();
+        
+        // Initialize watchdog timer (30 seconds timeout)
+        esp_task_wdt_init(30, true);
+        esp_task_wdt_add(NULL); // Add current task to watchdog
+        Serial.println("✅ Watchdog timer initialized (30s timeout)");
+        
         randomSeed(analogRead(0));
         config.token_status_callback = tokenStatusCallback;
         // === Derive Static IP from serial number ===
@@ -831,8 +839,8 @@ void sendHeartbeat()
         {
             unsigned long currentMillis = millis();
 
-            // Check for daily restart
-            if (currentMillis - lastRestartMillis >= DAILY_RESTART_INTERVAL)
+            // Check for daily restart (safe overflow handling)
+            if (isTimeElapsed(lastRestartMillis, DAILY_RESTART_INTERVAL))
             {
                 Serial.println("[RESTART] Performing scheduled daily restart...");
                 MemoryManager::logMemoryStatus();
@@ -841,8 +849,11 @@ void sendHeartbeat()
                 ESP.restart();
             }
 
-            if (currentMillis - previousHeartbeatMillis >= INTERVAL_30_SECONDS)
+            if (isTimeElapsed(previousHeartbeatMillis, INTERVAL_30_SECONDS))
             {
+                // Reset watchdog timer before operations
+                esp_task_wdt_reset();
+                
                 if (Firebase.ready() && MemoryManager::canPerformFirebaseOperation())
                 {
                     // float currentEC = readECSensorValue();   // Read EC value
@@ -878,7 +889,7 @@ void sendHeartbeat()
             }
 
             // 🔹 **Check for Firmware Update Every 6 Hour**
-            if (currentMillis - lastFirmwareCheckMillis >= FIRMWARE_CHECK_INTERVAL)
+            if (isTimeElapsed(lastFirmwareCheckMillis, FIRMWARE_CHECK_INTERVAL))
             {
                 Serial.println("Checking for firmware updates...");
                 checkForFirmwareUpdate();

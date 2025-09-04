@@ -3,10 +3,16 @@
 
 #include <Arduino.h>
 
-// Memory thresholds
-#define CRITICAL_HEAP_SIZE 20000  // 20KB - restart if below this
-#define WARNING_HEAP_SIZE 30000   // 30KB - start cleanup if below this
-#define MIN_HEAP_FOR_FIREBASE 25000 // 25KB - skip Firebase ops if below this
+// Memory thresholds - Different values for 3-port boards
+#ifdef ESP32_THREE_PORT
+  #define CRITICAL_HEAP_SIZE 30000    // 30KB - restart if below this (3-port needs more)
+  #define WARNING_HEAP_SIZE 40000     // 40KB - start cleanup if below this
+  #define MIN_HEAP_FOR_FIREBASE 35000 // 35KB - skip Firebase ops if below this
+#else
+  #define CRITICAL_HEAP_SIZE 20000    // 20KB - restart if below this
+  #define WARNING_HEAP_SIZE 30000     // 30KB - start cleanup if below this
+  #define MIN_HEAP_FOR_FIREBASE 25000 // 25KB - skip Firebase ops if below this
+#endif
 
 // Track heap fragmentation
 class MemoryManager {
