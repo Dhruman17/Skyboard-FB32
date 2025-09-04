@@ -674,10 +674,10 @@ void sendHeartbeat()
         MemoryManager::init();
         MemoryManager::logMemoryStatus();
         
-        // Initialize watchdog timer (30 seconds timeout)
-        esp_task_wdt_init(30, true);
+        // Initialize watchdog timer (60 seconds timeout for complex operations)
+        esp_task_wdt_init(60, true);
         esp_task_wdt_add(NULL); // Add current task to watchdog
-        Serial.println("✅ Watchdog timer initialized (30s timeout)");
+        Serial.println("✅ Watchdog timer initialized (60s timeout)");
         
         randomSeed(analogRead(0));
         config.token_status_callback = tokenStatusCallback;
@@ -736,11 +736,12 @@ void sendHeartbeat()
     Firebase.begin(&config, &auth);
     Firebase.reconnectWiFi(true);
 
-        // Wait for Firebase to be ready
-
+        // Wait for Firebase to be ready (with watchdog resets)
+        esp_task_wdt_reset();
         while (!Firebase.ready())
         {
             delay(100);
+            esp_task_wdt_reset(); // Reset watchdog during Firebase initialization
         }
 
         // === Sync data and setup system ===
@@ -819,6 +820,9 @@ void sendHeartbeat()
         ArduinoOTA.handle();
         updateUnits();
         checkWiFiFailsafe();
+        
+        // Reset watchdog in main loop
+        esp_task_wdt_reset();
         // Memory health check every 30 seconds
         static unsigned long lastMemoryCheckTime = 0;
         if (millis() - lastMemoryCheckTime >= 30000)
@@ -906,6 +910,7 @@ void sendHeartbeat()
             {
                 currentMillisWiFi = millis();
                 delay(1000); // Retry every second
+                esp_task_wdt_reset(); // Reset watchdog during WiFi reconnection
                 if (!wm.autoConnect(setupWifiName.c_str()))
                 {
                     Serial.println("Failed to configure WiFi. Restarting...");
