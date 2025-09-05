@@ -5,7 +5,7 @@
 #include <time.h>
 
 // === Firmware Version ===
-const double firmware_version = 1.566;
+const double firmware_version = 1.568;
 
 // === Select Board Type via build_flags ===
 // Use -DESP32_THREE_PORT or -DESP32_S3 in platformio.ini
@@ -48,7 +48,7 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
   const unsigned long INTERVAL_30_SECONDS = 30000; // 30 seconds for other boards
 #endif
 const unsigned long WIFI_RESET_INTERVAL = 60000;
-const unsigned long FIRMWARE_CHECK_INTERVAL = 6UL * 60 * 60 * 1000; // Every 6 hours
+const unsigned long FIRMWARE_CHECK_INTERVAL = 60000; // Every 6 hours
 const unsigned long resetInterval = 21600000; // 6 hours
 
 // === Global State Variables ===

@@ -674,10 +674,10 @@ void sendHeartbeat()
         MemoryManager::init();
         MemoryManager::logMemoryStatus();
         
-        // Initialize watchdog timer (60 seconds timeout for complex operations)
-        esp_task_wdt_init(60, true);
+        // Initialize watchdog timer (180 seconds timeout for firmware uploads)
+        esp_task_wdt_init(180, true);
         esp_task_wdt_add(NULL); // Add current task to watchdog
-        Serial.println("✅ Watchdog timer initialized (60s timeout)");
+        Serial.println("✅ Watchdog timer initialized (180s timeout)");
         
         randomSeed(analogRead(0));
         config.token_status_callback = tokenStatusCallback;
