@@ -302,7 +302,7 @@ void sendFloatSensorState(FirebaseData *pFBDO, const String &unitName, bool isWe
         Serial.println("[Mutex] Released firebaseMutex.");
     }
 }
-void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2) {
+bool updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2) {
     if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(10000))) { // 10 second timeout
         String documentPath = systemPath;  // e.g., Systems/123456789123456789
         FirebaseJson content;
@@ -311,23 +311,26 @@ void updateEnvironmentalData(FirebaseData* pFBDO, float temp, float hum, int co2
         content.set("fields/co2/doubleValue", co2);
         content.set("fields/environmental_updated/timestampValue", formatTimestamp());
 
-        if (Firebase.Firestore.patchDocument(
+        bool success = Firebase.Firestore.patchDocument(
             pFBDO,
             FIREBASE_PROJECT_ID,
             "",
             documentPath.c_str(),
             content.raw(),
-            "temperature,humidity,co2,environmental_updated"))
+            "temperature,humidity,co2,environmental_updated");
+
+        if (success)
         {
             Serial.println("Environmental data updated in Firestore (root system doc).");
-             
         } else {
             Serial.println("Failed to update environmental data: " + pFBDO->errorReason());
         }
 
         content.clear();
         xSemaphoreGive(firebaseMutex);
+        return success;
     }
+    return false; // Timeout or mutex not acquired
 }
 
 #endif //

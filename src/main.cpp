@@ -143,7 +143,7 @@ void systemLights()
 }
 void readWaterLevel()
 {
-    if (xSemaphoreTake(sensorMutex, portMAX_DELAY))
+    if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(5000))) // 5 second timeout instead of portMAX_DELAY
     {
         int capdacs[NUMBER_OF_UNITS] = {0, 0, 0};
         int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4};
@@ -151,65 +151,72 @@ void readWaterLevel()
         for (int i = 0; i < NUMBER_OF_UNITS; i++)
         {
             if (useCapacitiveSensor) // new system-wide flag
-
             {
-                tcaselect(tcaChannels[i]);
-                FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdacs[i]);
-                FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
-                delay(100);
+                    tcaselect(tcaChannels[i]);
+                    delay(50); // Ensure channel switch completes
 
-                uint16_t value[2];
-                if (!FDC.readMeasurement(MEASURMENT, value))
+                    FDC.configureMeasurementSingle(MEASURMENT, CHANNEL, capdacs[i]);
+                    FDC.triggerSingleMeasurement(MEASURMENT, FDC1004_100HZ);
+                    delay(100);
+
+                    uint16_t value[2];
+                    if (!FDC.readMeasurement(MEASURMENT, value))
+                    {
+                        int16_t msb = (int16_t)value[0];
+                        int32_t capacitance = ((int32_t)457) * msb;
+                        capacitance /= 1000;
+                        capacitance += ((int32_t)3028) * capdacs[i];
+                        measuredCap = (float)capacitance / 1000;
+                        waterLevel = (measuredCap - 1.58) / 0.107;
+
+                        Serial.print("Unit ");
+                        Serial.print(i);
+                        Serial.print(" | Capacitance: ");
+                        Serial.print(measuredCap, 4);
+                        Serial.print(" pf | Water Level: ");
+                        Serial.println(waterLevel);
+
+                        if (!unitNames[i].isEmpty() && Firebase.ready())
+                        {
+                            sendUnitCapValueToFirebase(&fbdo, unitNames[i], measuredCap);
+                        }
+
+                        // Auto-calibrate capdac
+                        if (msb > UPPER_BOUND && capdacs[i] < FDC1004_CAPDAC_MAX)
+                            capdacs[i]++;
+                        else if (msb < LOWER_BOUND && capdacs[i] > 0)
+                            capdacs[i]--;
+                    }
+                    else
+                    {
+                        Serial.printf("⚠️ Failed to read capacitive sensor for unit %d\n", i);
+                    }
+                }
+                else
                 {
-                    int16_t msb = (int16_t)value[0];
-                    int32_t capacitance = ((int32_t)457) * msb;
-                    capacitance /= 1000;
-                    capacitance += ((int32_t)3028) * capdacs[i];
-                    measuredCap = (float)capacitance / 1000;
-                    waterLevel = (measuredCap - 1.58) / 0.107;
+                    // ADC-based float sensor reading
+                    tcaselect(tcaChannels[i]);
+                    delay(50); // Ensure channel switch completes
+
+                    uint16_t result = mcp3021.read();
+                    float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
+                    bool floatState = (floatSignal > 0.5); // Above 0.5V means water present
+                    waterLevelStates[i] = floatState;
 
                     Serial.print("Unit ");
                     Serial.print(i);
-                    Serial.print(" | Capacitance: ");
-                    Serial.print(measuredCap, 4);
-                    Serial.print(" pf | Water Level: ");
-                    Serial.println(waterLevel);
+                    Serial.print(" | Float Sensor (via ADC): ");
+                    Serial.println(floatState ? "WATER PRESENT" : "DRY");
 
-                    if (!unitNames[i].isEmpty())
+                    if (!unitNames[i].isEmpty() && Firebase.ready())
                     {
-                        sendUnitCapValueToFirebase(&fbdo, unitNames[i], measuredCap);
+                        sendFloatSensorState(&fbdo, unitNames[i], floatState);
                     }
-
-                    // Auto-calibrate capdac
-                    if (msb > UPPER_BOUND && capdacs[i] < FDC1004_CAPDAC_MAX)
-                        capdacs[i]++;
-                    else if (msb < LOWER_BOUND && capdacs[i] > 0)
-                        capdacs[i]--;
-                }
-            }
-            else
-            {
-                // :white_check_mark: New ADC-based float sensor reading
-                int tcaChannels[NUMBER_OF_UNITS] = {0, 2, 4}; // Channels you use for MCP3021 per unit
-                tcaselect(tcaChannels[i]);
-                delay(100);
-                uint16_t result = mcp3021.read();
-                float floatSignal = (mcp3021.toVoltage(result, 3300) / 1000.000);
-                bool floatState = (floatSignal > 0.5); // Above 0.5V means water present
-                waterLevelStates[i] = floatState;
-                Serial.print("Unit ");
-                Serial.print(i);
-                Serial.print(" | Float Sensor (via ADC): ");
-                Serial.println(floatState ? "WATER PRESENT" : "DRY");
-                if (!unitNames[i].isEmpty())
-                {
-                    sendFloatSensorState(&fbdo, unitNames[i], floatState);
                 }
             }
         }
         xSemaphoreGive(sensorMutex);
     }
-}
 uint32_t getAbsoluteHumidity(float temperature, float humidity)
 {
     // approximation formula from Sensirion SGP30 Driver Integration chapter 3.15
@@ -291,11 +298,10 @@ void readCO2()
         co2ppm = 0;
     }
 }
-
 // Function to read EC sensor value from MCP3021 ADC
 void readECSensorValue()
 {
-    if (xSemaphoreTake(sensorMutex, portMAX_DELAY))
+    if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(5000))) // 5 second timeout for consistency
     {
         float calibratedECs[NUMBER_OF_UNITS];
         int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
@@ -320,14 +326,76 @@ void readECSensorValue()
         }
         xSemaphoreGive(sensorMutex);
     }
+    else
+    {
+        Serial.println("⚠️ Could not acquire sensor mutex for EC sensor reading");
+    }
+}
+// New function to read all sensors and immediately send to Firebase
+void readAllSensorsAndSendToFirebase()
+{
+    if (!ENABLE_I2C_SENSORS)
+    {
+        Serial.println("🔒 I2C sensors disabled by flag. Skipping sensor reading.");
+        return;
+    }
+
+    if (!Firebase.ready() || !MemoryManager::canPerformFirebaseOperation())
+    {
+        Serial.println("🔒 Firebase not ready or low memory. Skipping sensor transmission.");
+        return;
+    }
+
+    Serial.println("📊 Reading all sensors and sending to Firebase immediately...");
+
+    // Reset watchdog to prevent timeouts during sensor reading
+    esp_task_wdt_reset();
+
+    // Read EC sensors and water levels with error handling
+    readECSensorValue();
+    delay(100); // Small delay between sensor readings
+    readWaterLevel();
+    delay(100);
+
+    // Read environmental sensors
+    readSensors();
+    delay(100);
+    readCO2();
+    delay(100);
+
+    // Reset watchdog before Firebase operations
+    esp_task_wdt_reset();
+
+    // Send environmental data to Firebase with retry logic
+    int retryCount = 0;
+    const int maxRetries = 3;
+
+    while (retryCount < maxRetries && Firebase.ready()) {
+        if (updateEnvironmentalData(&fbdo, temperature, humidity, co2ppm)) {
+            Serial.println("✅ Environmental data sent to Firebase successfully.");
+            break;
+        } else {
+            retryCount++;
+            Serial.printf("⚠️ Firebase transmission failed (attempt %d/%d). Retrying...\n", retryCount, maxRetries);
+            delay(1000); // Wait before retry
+            esp_task_wdt_reset();
+        }
+    }
+
+    if (retryCount >= maxRetries) {
+        Serial.println("❌ Failed to send environmental data after all retries.");
+    }
+
+    Serial.println("✅ All sensor readings and Firebase updates completed.");
 }
 
-void updateUnits()
 
+
+void updateUnits()
 // A function that updates and sends atomizer signals and sends a command to update the water level state when atomizers are off
 {
-
     unsigned long currentMillis = millis();
+
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
         if (unitsEnabled[i])
@@ -337,10 +405,21 @@ void updateUnits()
                 // if more time has passed than the (atomizer on interval if the atomizer state is on, or atomizer off interval if the atomizer state is off)
                 atomStates[i] = !atomStates[i];                                   // Record the atomizer state as the opposite
                 ledcWrite(i, atomStates[i] ? PWM_ATOMIZER_ON : PWM_ATOMIZER_OFF); // Send the atomizer signal according to this opposite state
+
+                // Check if all atomizers are now OFF and trigger sensor reading
                 if (!atomStates[0] && !atomStates[1] && !atomStates[2])
                 {
-                    // updateWaterLevelStates();
+                    Serial.println("🔄 All atomizers turned OFF - triggering immediate sensor reading and Firebase update");
+
+                    // Add a small delay to allow sensors to settle after atomizers turn off
+                    delay(2000);
+
+                    // Reset watchdog before sensor operations
+                    esp_task_wdt_reset();
+
+                    readAllSensorsAndSendToFirebase();
                 } // read the water level state only if the atomizers are off
+
                 previousMillis[i] = currentMillis; // reset the time counter
             }
         }
@@ -424,7 +503,7 @@ float fetchLatestVersion()
 
 void updateFirmwareVersionInFirestore(float newVersion)
 {
-    if (xSemaphoreTake(firebaseMutex, portMAX_DELAY))
+    if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(10000))) // 10 second timeout
     {
         if (systemPath != "")
         {
@@ -876,6 +955,9 @@ void sendHeartbeat()
                         readWaterLevel(); // Read water level states
                         readSensors();
                         readCO2();
+
+                        // Send environmental data to Firebase during regular intervals
+                        updateEnvironmentalData(&fbdo, temperature, humidity, co2ppm);
                     }
                     else
                     {

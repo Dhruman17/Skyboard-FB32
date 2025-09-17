@@ -73,7 +73,11 @@ unsigned long lastResetMillis = 0;
 unsigned long lastFirmwareCheckMillis = 0;
 unsigned long startTime = 0;
 bool isConnected = false;
-bool ENABLE_I2C_SENSORS = false;  // default off
+#ifdef ESP32_S3
+bool ENABLE_I2C_SENSORS = true;   // Enable by default for S3 boards
+#else
+bool ENABLE_I2C_SENSORS = false;  // default off for other boards
+#endif
 
 // === Mutex Declarations ===
 extern SemaphoreHandle_t sensorMutex;
