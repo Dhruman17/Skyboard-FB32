@@ -346,7 +346,7 @@ void readAllSensorsAndSendToFirebase()
         return;
     }
 
-    Serial.println("📊 Reading all sensors and sending to Firebase immediately...");
+    Serial.println("📊 IMMEDIATE SENSOR READING - atomizers just turned off, reading all sensors and sending to Firebase...");
 
     // Reset watchdog to prevent timeouts during sensor reading
     esp_task_wdt_reset();
@@ -409,7 +409,7 @@ void updateUnits()
                 // Check if all atomizers are now OFF and trigger sensor reading
                 if (!atomStates[0] && !atomStates[1] && !atomStates[2])
                 {
-                    Serial.println("🔄 All atomizers turned OFF - triggering immediate sensor reading and Firebase update");
+                    Serial.println("🔄 ATOMIZERS JUST TURNED OFF - triggering immediate sensor reading and Firebase update");
 
                     // Add a small delay to allow sensors to settle after atomizers turn off
                     delay(2000);
@@ -949,8 +949,13 @@ void sendHeartbeat()
 
                     systemLights();
                     previousHeartbeatMillis = currentMillis;
-                    if (ENABLE_I2C_SENSORS)
+
+                    // Only read sensors during regular intervals if all atomizers are OFF
+                    bool allAtomizersOff = !atomStates[0] && !atomStates[1] && !atomStates[2];
+
+                    if (ENABLE_I2C_SENSORS && allAtomizersOff)
                     {
+                        Serial.println("📊 Regular sensor reading - all atomizers are OFF");
                         readECSensorValue();
                         readWaterLevel(); // Read water level states
                         readSensors();
@@ -958,6 +963,10 @@ void sendHeartbeat()
 
                         // Send environmental data to Firebase during regular intervals
                         updateEnvironmentalData(&fbdo, temperature, humidity, co2ppm);
+                    }
+                    else if (ENABLE_I2C_SENSORS && !allAtomizersOff)
+                    {
+                        Serial.println("⏸️ Skipping regular sensor reading - atomizers are running");
                     }
                     else
                     {
