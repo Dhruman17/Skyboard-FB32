@@ -1,0 +1,4 @@
+# Requirements for Bulk OTA Deployment Script
+firebase-admin>=6.2.0
+google-cloud-firestore>=2.13.0
+google-cloud-storage>=2.10.0
