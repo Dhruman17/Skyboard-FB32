@@ -1,0 +1,2 @@
+serial_number,board_type,target_version,deployment_group,notes,system_name,ip_address
+123456789123456789,ESP32_S3,1.570,testing,4-port S3 new board system,THQ,

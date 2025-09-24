@@ -1,0 +1,2 @@
+# Requirements for Local Bulk OTA Deployment Script
+esptool>=4.5.0

@@ -1,2 +1,0 @@
-serial_number,board_type,target_version,deployment_group,notes
-123456789123456789,ESP32_THREE_PORT,1.570,testing,Test system for bulk OTA validation
