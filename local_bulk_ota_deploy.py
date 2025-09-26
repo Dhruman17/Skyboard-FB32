@@ -277,6 +277,98 @@ class LocalBulkOTADeployer:
 
         return None
 
+    def compile_device_firmware(self, serial_number, board_type):
+        """Compile device-specific firmware with unique serial number"""
+        import shutil
+        from pathlib import Path
+
+        print(f"[COMPILE] Compiling device-specific firmware for {serial_number}...")
+
+        try:
+            # Create temporary credentials file with device-specific serial number
+            temp_credentials = f"""#ifndef CREDENTIALS_H
+#define CREDENTIALS_H
+
+// Serial number and delays for system
+String serialNumber = "{serial_number}"; // Unique serial number for each system
+
+// Known Wi-Fi Networks
+struct WiFiCredentials
+{{
+    const char *ssid;
+    const char *password;
+}};
+
+String setupWifiName = "SkyAcres Setup " + serialNumber;
+
+// Firebase Credentials
+#define API_KEY "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI"
+#define FIREBASE_PROJECT_ID "skyacres-marketplace"
+#define USER_EMAIL "info@skyacres.ca"
+#define USER_PASSWORD "SkyacresBC"
+
+#endif // CREDENTIALS_H
+"""
+
+            # Backup original credentials.h
+            original_creds = Path("src/credentials.h")
+            backup_creds = Path("src/credentials.h.backup")
+            shutil.copy2(original_creds, backup_creds)
+
+            # Write device-specific credentials
+            with open(original_creds, 'w') as f:
+                f.write(temp_credentials)
+
+            # Determine PlatformIO environment
+            if board_type == 'ESP32_S3':
+                env = 'esps3_board'
+            elif board_type == 'ESP32_THREE_PORT':
+                env = 'esp32dev_3port'
+            else:
+                env = 'esps3_board'  # Default
+
+            # Find PlatformIO executable
+            pio_cmd = self.find_platformio_executable()
+            if not pio_cmd:
+                print(f"[ERROR] PlatformIO not found. Please install PlatformIO.")
+                return None
+
+            # Compile firmware
+            import subprocess
+            cmd = pio_cmd + ['run', '-e', env]
+            print(f"[CMD] Compiling: {' '.join(cmd)}")
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+            if result.returncode == 0:
+                # Copy compiled firmware to device-specific location
+                compiled_firmware = Path(f".pio/build/{env}/firmware.bin")
+                if compiled_firmware.exists():
+                    device_firmware_dir = Path("firmware_compiled") / serial_number
+                    device_firmware_dir.mkdir(parents=True, exist_ok=True)
+                    device_firmware_path = device_firmware_dir / "firmware.bin"
+                    shutil.copy2(compiled_firmware, device_firmware_path)
+
+                    print(f"[OK] Device-specific firmware compiled: {device_firmware_path}")
+                    return str(device_firmware_path)
+                else:
+                    print(f"[ERROR] Compiled firmware not found at {compiled_firmware}")
+                    return None
+            else:
+                print(f"[ERROR] Compilation failed:")
+                print(f"STDOUT: {result.stdout}")
+                print(f"STDERR: {result.stderr}")
+                return None
+
+        except Exception as e:
+            print(f"[ERROR] Compilation error: {e}")
+            return None
+        finally:
+            # Restore original credentials.h
+            if backup_creds.exists():
+                shutil.copy2(backup_creds, original_creds)
+                backup_creds.unlink()  # Delete backup
+
     def deploy_ota_to_device(self, ip, hostname, firmware_path, password="", board_type="ESP32_S3"):
         """Deploy firmware to a single device using PlatformIO OTA"""
         try:
@@ -340,12 +432,13 @@ class LocalBulkOTADeployer:
             ip = device_info['ip']
             hostname = device_info['hostname']
 
-            # Find firmware file
-            firmware_path = Path(firmware_dir) / device['target_version'] / device['board_type'] / "firmware.bin"
+            # Step 1: Compile device-specific firmware
+            print(f"[DEVICE] Compiling firmware for {serial_number}...")
+            firmware_path = self.compile_device_firmware(serial_number, device['board_type'])
 
-            if not firmware_path.exists():
-                print(f"[WARN] Skipping {device['serial_number']} ({device['system_name']}): Firmware not found at {firmware_path}")
-                return 'firmware_missing'
+            if not firmware_path:
+                print(f"[ERROR] Failed to compile firmware for {serial_number}")
+                return False
 
             # Use system_name from CSV instead of discovered hostname for OTA
             system_name = device.get('system_name', hostname)

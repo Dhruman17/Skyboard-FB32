@@ -32,9 +32,9 @@ class BulkOTADeployer:
             self.bucket = storage.bucket()
             self.project_id = project_id
 
-            print("✅ Firebase Admin SDK initialized successfully")
+            print("[OK] Firebase Admin SDK initialized successfully")
         except Exception as e:
-            print(f"❌ Failed to initialize Firebase: {e}")
+            print(f"[ERROR] Failed to initialize Firebase: {e}")
             sys.exit(1)
 
     def validate_csv_entry(self, row):
@@ -77,10 +77,10 @@ class BulkOTADeployer:
             return devices
 
         except FileNotFoundError:
-            print(f"❌ CSV file not found: {csv_file_path}")
+            print(f"[ERROR] CSV file not found: {csv_file_path}")
             sys.exit(1)
         except Exception as e:
-            print(f"❌ Error reading CSV: {e}")
+            print(f"[ERROR] Error reading CSV: {e}")
             sys.exit(1)
 
     def upload_firmware_to_storage(self, serial_number, firmware_path, target_version):
@@ -134,6 +134,123 @@ class BulkOTADeployer:
             print(f"❌ Failed to update Firestore for {serial_number}: {e}")
             return False
 
+    def compile_device_firmware(self, serial_number, board_type, target_version):
+        """Compile device-specific firmware with unique serial number"""
+        import tempfile
+        import shutil
+
+        print(f"🔨 Compiling device-specific firmware for {serial_number}...")
+
+        try:
+            # Create temporary credentials file with device-specific serial number
+            temp_credentials = f"""#ifndef CREDENTIALS_H
+#define CREDENTIALS_H
+
+// Serial number and delays for system
+String serialNumber = "{serial_number}"; // Unique serial number for each system
+
+// Known Wi-Fi Networks
+struct WiFiCredentials
+{{
+    const char *ssid;
+    const char *password;
+}};
+
+String setupWifiName = "SkyAcres Setup " + serialNumber;
+
+// Firebase Credentials
+#define API_KEY "AIzaSyDfp9KFIxgs9Wb0AiJTENejm1GLjS2MCQI"
+#define FIREBASE_PROJECT_ID "skyacres-marketplace"
+#define USER_EMAIL "info@skyacres.ca"
+#define USER_PASSWORD "SkyacresBC"
+
+#endif // CREDENTIALS_H
+"""
+
+            # Backup original credentials.h
+            original_creds = Path("src/credentials.h")
+            backup_creds = Path("src/credentials.h.backup")
+            shutil.copy2(original_creds, backup_creds)
+
+            # Write device-specific credentials
+            with open(original_creds, 'w') as f:
+                f.write(temp_credentials)
+
+            # Determine PlatformIO environment
+            if board_type == 'ESP32_S3':
+                env = 'esps3_board'
+            elif board_type == 'ESP32_THREE_PORT':
+                env = 'esp32dev_3port'
+            else:
+                env = 'esps3_board'  # Default
+
+            # Find PlatformIO executable
+            pio_cmd = self.find_platformio_executable()
+            if not pio_cmd:
+                print(f"❌ PlatformIO not found. Please install PlatformIO.")
+                return None
+
+            # Compile firmware
+            import subprocess
+            cmd = pio_cmd + ['run', '-e', env]
+            print(f"📦 Compiling: {' '.join(cmd)}")
+
+            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+            if result.returncode == 0:
+                # Copy compiled firmware to device-specific location
+                compiled_firmware = Path(f".pio/build/{env}/firmware.bin")
+                if compiled_firmware.exists():
+                    device_firmware_dir = Path("firmware_compiled") / serial_number
+                    device_firmware_dir.mkdir(parents=True, exist_ok=True)
+                    device_firmware_path = device_firmware_dir / "firmware.bin"
+                    shutil.copy2(compiled_firmware, device_firmware_path)
+
+                    print(f"✅ Device-specific firmware compiled: {device_firmware_path}")
+                    return str(device_firmware_path)
+                else:
+                    print(f"❌ Compiled firmware not found at {compiled_firmware}")
+                    return None
+            else:
+                print(f"❌ Compilation failed:")
+                print(f"STDOUT: {result.stdout}")
+                print(f"STDERR: {result.stderr}")
+                return None
+
+        except Exception as e:
+            print(f"❌ Compilation error: {e}")
+            return None
+        finally:
+            # Restore original credentials.h
+            if backup_creds.exists():
+                shutil.copy2(backup_creds, original_creds)
+                backup_creds.unlink()  # Delete backup
+
+    def find_platformio_executable(self):
+        """Find PlatformIO executable"""
+        import subprocess
+        import os
+        from pathlib import Path
+
+        # Try common PlatformIO locations
+        possible_commands = [
+            ['pio'],
+            ['platformio'],
+            ['python', '-m', 'platformio'],
+            [str(Path.home() / '.platformio' / 'penv' / 'Scripts' / 'pio.exe')],
+            [str(Path.home() / '.platformio' / 'penv' / 'Scripts' / 'platformio.exe')]
+        ]
+
+        for cmd in possible_commands:
+            try:
+                result = subprocess.run(cmd + ['--version'], capture_output=True, timeout=10)
+                if result.returncode == 0:
+                    return cmd
+            except:
+                continue
+
+        return None
+
     def deploy_single_device(self, device, firmware_dir):
         """Deploy OTA update to a single device"""
         serial_number = device['serial_number']
@@ -142,20 +259,17 @@ class BulkOTADeployer:
 
         print(f"\n🚀 Deploying to {serial_number}...")
 
-        # Find firmware file
-        firmware_path = Path(firmware_dir) / target_version / board_type / "firmware.bin"
-
-        if not firmware_path.exists():
-            print(f"❌ Firmware not found: {firmware_path}")
+        # Step 1: Compile device-specific firmware
+        firmware_path = self.compile_device_firmware(serial_number, board_type, target_version)
+        if not firmware_path:
+            print(f"❌ Failed to compile firmware for {serial_number}")
             return False
 
-        print(f"📁 Using firmware: {firmware_path}")
-
-        # Step 1: Upload firmware and version to Firebase Storage
-        if not self.upload_firmware_to_storage(serial_number, str(firmware_path), target_version):
+        # Step 2: Upload firmware and version to Firebase Storage
+        if not self.upload_firmware_to_storage(serial_number, firmware_path, target_version):
             return False
 
-        # Step 2: Update Firestore with deployment status
+        # Step 3: Update Firestore with deployment status
         if not self.update_firestore_deployment_status(serial_number, target_version):
             return False
 
@@ -246,15 +360,15 @@ def main():
 
     # Validate inputs
     if not os.path.exists(args.csv):
-        print(f"❌ CSV file not found: {args.csv}")
+        print(f"[ERROR] CSV file not found: {args.csv}")
         sys.exit(1)
 
     if not os.path.exists(args.service_account):
-        print(f"❌ Service account key not found: {args.service_account}")
+        print(f"[ERROR] Service account key not found: {args.service_account}")
         sys.exit(1)
 
     if not args.monitor and not os.path.exists(args.firmware_dir):
-        print(f"❌ Firmware directory not found: {args.firmware_dir}")
+        print(f"[ERROR] Firmware directory not found: {args.firmware_dir}")
         sys.exit(1)
 
     # Initialize deployer
