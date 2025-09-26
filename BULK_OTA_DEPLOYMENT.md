@@ -2,6 +2,22 @@
 
 This system allows you to deploy firmware updates to multiple ESP32 devices simultaneously using Firebase Storage and Firestore.
 
+## ⚠️ **IMPORTANT UPDATE** ⚠️
+
+**For Local Network Deployments**, use the new enhanced system documented in [`DEPLOYMENT_GUIDE.md`](./DEPLOYMENT_GUIDE.md). This new system:
+
+✅ **Compiles device-specific firmware** to preserve unique serial numbers
+✅ **Prevents identity conflicts** that cause devices to go offline
+✅ **Maintains Firebase tracking** for all devices
+✅ **Uses local network OTA** via PlatformIO
+
+**Command for local deployments:**
+```bash
+python local_bulk_ota_deploy.py --csv deployment_list.csv --network 192.168.68.0/24 --yes
+```
+
+**This document below describes the Firebase-based remote deployment system.**
+
 ## Prerequisites
 
 1. **Python 3.7+** with pip installed
