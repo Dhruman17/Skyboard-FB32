@@ -22,9 +22,9 @@ class LocalBulkOTADeployer:
         self.network_range = network_range
         self.ota_port = ota_port
         self.discovered_devices = {}
-        print(f"✅ Local Bulk OTA Deployer initialized")
-        print(f"📡 Network range: {network_range}")
-        print(f"🔌 OTA port: {ota_port}")
+        print(f"[OK] Local Bulk OTA Deployer initialized")
+        print(f"[NET] Network range: {network_range}")
+        print(f"[PORT] OTA port: {ota_port}")
 
     def validate_csv_entry(self, row):
         """Validate CSV row data"""
@@ -43,7 +43,7 @@ class LocalBulkOTADeployer:
     def read_deployment_csv(self, csv_file_path, deployment_group=None):
         """Read and validate CSV file"""
         devices = []
-        print(f"📖 Reading deployment list from: {csv_file_path}")
+        print(f"[READ] Reading deployment list from: {csv_file_path}")
 
         try:
             with open(csv_file_path, 'r', newline='') as csvfile:
@@ -56,20 +56,20 @@ class LocalBulkOTADeployer:
                     # Validate row
                     is_valid, message = self.validate_csv_entry(row)
                     if not is_valid:
-                        print(f"⚠️ Row {row_num}: {message}")
+                        print(f"[WARN] Row {row_num}: {message}")
                         continue
 
                     devices.append(row)
-                    print(f"✅ Added device: {row['serial_number']} ({row['board_type']}) -> v{row['target_version']}")
+                    print(f"[OK] Added device: {row['serial_number']} ({row['board_type']}) -> v{row['target_version']}")
 
-            print(f"📊 Total devices to deploy: {len(devices)}")
+            print(f"[SUMMARY] Total devices to deploy: {len(devices)}")
             return devices
 
         except FileNotFoundError:
-            print(f"❌ CSV file not found: {csv_file_path}")
+            print(f"[ERROR] CSV file not found: {csv_file_path}")
             sys.exit(1)
         except Exception as e:
-            print(f"❌ Error reading CSV: {e}")
+            print(f"[ERROR] Error reading CSV: {e}")
             sys.exit(1)
 
     def scan_for_device_ip(self, hostname, timeout=2):
@@ -153,12 +153,12 @@ class LocalBulkOTADeployer:
 
         # If IP address is directly provided, test it first
         if ip_hint and self.is_ipv4(ip_hint):
-            print(f"🔍 Testing direct IP {ip_hint} for {serial_number}...")
+            print(f"[FIND] Testing direct IP {ip_hint} for {serial_number}...")
             if self.check_ota_port(ip_hint):
-                print(f"✅ OTA service confirmed on direct IP {ip_hint}")
+                print(f"[OK] OTA service confirmed on direct IP {ip_hint}")
                 return ip_hint, f"direct-{serial_number}"
             else:
-                print(f"⚠️ OTA port {self.ota_port} not open on direct IP {ip_hint}")
+                print(f"[WARN] OTA port {self.ota_port} not open on direct IP {ip_hint}")
 
         # Try different hostname possibilities
         hostnames = []
@@ -175,21 +175,21 @@ class LocalBulkOTADeployer:
         ])
 
         for hostname in hostnames:
-            print(f"🔍 Trying to discover {serial_number} as {hostname}...")
+            print(f"[FIND] Trying to discover {serial_number} as {hostname}...")
 
             ip = self.scan_for_device_ip(hostname)
             if ip:
-                print(f"📍 Found {hostname} at IPv4: {ip}")
+                print(f"[FOUND] Found {hostname} at IPv4: {ip}")
                 # For PlatformIO OTA, we don't need to check the OTA port
                 # PlatformIO handles the connection directly via hostname.local
-                print(f"✅ Device reachable via {hostname}.local ({ip})")
+                print(f"[OK] Device reachable via {hostname}.local ({ip})")
                 return ip, hostname
 
         return None, None
 
     def discover_devices(self, devices):
         """Discover multiple devices on the network"""
-        print(f"\n🕵️ Discovering {len(devices)} devices on network...")
+        print(f"\n[DISCOVER] Discovering {len(devices)} devices on network...")
 
         discovered = {}
 
@@ -215,13 +215,13 @@ class LocalBulkOTADeployer:
                             'hostname': hostname,
                             'device': device
                         }
-                        print(f"✅ Device {device['serial_number']} discovered at {ip}")
+                        print(f"[OK] Device {device['serial_number']} discovered at {ip}")
                     else:
-                        print(f"❌ Could not discover device {device['serial_number']}")
+                        print(f"[ERROR] Could not discover device {device['serial_number']}")
                 except Exception as e:
-                    print(f"❌ Error discovering {device['serial_number']}: {e}")
+                    print(f"[ERROR] Error discovering {device['serial_number']}: {e}")
 
-        print(f"📊 Discovered {len(discovered)}/{len(devices)} devices")
+        print(f"[SUMMARY] Discovered {len(discovered)}/{len(devices)} devices")
         return discovered
 
     def find_platformio_executable(self):
@@ -271,7 +271,7 @@ class LocalBulkOTADeployer:
             # Find PlatformIO executable
             pio_cmd = self.find_platformio_executable()
             if not pio_cmd:
-                print(f"❌ PlatformIO not found. Please install PlatformIO or ensure it's in PATH")
+                print(f"[ERROR] PlatformIO not found. Please install PlatformIO or ensure it's in PATH")
                 return False
 
             # Determine environment based on board type
@@ -285,16 +285,16 @@ class LocalBulkOTADeployer:
             # Use PlatformIO OTA upload with specific environment
             cmd = pio_cmd + ['run', '-e', env, '-t', 'upload', '--upload-port', f"{hostname}.local"]
 
-            print(f"🚀 Starting PlatformIO OTA deployment to {hostname}.local ({ip})...")
-            print(f"📦 Command: {' '.join(cmd)}")
+            print(f"[OTA] Starting PlatformIO OTA deployment to {hostname}.local ({ip})...")
+            print(f"[CMD] Command: {' '.join(cmd)}")
 
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
             if result.returncode == 0:
-                print(f"✅ Successfully deployed to {hostname}.local ({ip})")
+                print(f"[OK] Successfully deployed to {hostname}.local ({ip})")
                 return True
             else:
-                print(f"❌ PlatformIO OTA failed for {hostname}.local ({ip})")
+                print(f"[ERROR] PlatformIO OTA failed for {hostname}.local ({ip})")
                 print(f"Error: {result.stderr}")
                 print(f"Output: {result.stdout}")
                 return False
@@ -303,23 +303,24 @@ class LocalBulkOTADeployer:
             print(f"⏱️ PlatformIO OTA timeout for {hostname}.local ({ip})")
             return False
         except Exception as e:
-            print(f"❌ PlatformIO OTA error for {hostname}.local ({ip}): {e}")
+            print(f"[ERROR] PlatformIO OTA error for {hostname}.local ({ip}): {e}")
             return False
 
     def deploy_bulk_local(self, devices, firmware_dir, max_concurrent=5):
         """Deploy to multiple devices locally"""
-        print(f"\n🎯 Starting local bulk deployment...")
+        print(f"\n[DEPLOY] Starting local bulk deployment...")
 
         # First discover all devices
         discovered_devices = self.discover_devices(devices)
 
         if not discovered_devices:
-            print("❌ No devices discovered. Check network connectivity and device status.")
+            print("[ERROR] No devices discovered. Check network connectivity and device status.")
             return
 
         # Deploy to discovered devices
         successful_deployments = 0
         failed_deployments = 0
+        skipped_deployments = 0
 
         def deploy_single(serial_number, device_info):
             """Deploy to single device (for threading)"""
@@ -331,8 +332,8 @@ class LocalBulkOTADeployer:
             firmware_path = Path(firmware_dir) / device['target_version'] / device['board_type'] / "firmware.bin"
 
             if not firmware_path.exists():
-                print(f"❌ Firmware not found: {firmware_path}")
-                return False
+                print(f"[WARN] Skipping {device['serial_number']} ({device['system_name']}): Firmware not found at {firmware_path}")
+                return 'firmware_missing'
 
             return self.deploy_ota_to_device(ip, hostname, firmware_path, board_type=device['board_type'])
 
@@ -346,27 +347,41 @@ class LocalBulkOTADeployer:
             for future in as_completed(future_to_serial):
                 serial_number = future_to_serial[future]
                 try:
-                    success = future.result()
-                    if success:
+                    result = future.result()
+                    if result == 'firmware_missing':
+                        skipped_deployments += 1
+                    elif result:
                         successful_deployments += 1
                     else:
                         failed_deployments += 1
                 except Exception as e:
-                    print(f"❌ Deployment error for {serial_number}: {e}")
+                    print(f"[ERROR] Deployment error for {serial_number}: {e}")
                     failed_deployments += 1
 
         # Print summary
         total_devices = len(discovered_devices)
+        total_requested = len(devices)
+        undiscovered_devices = total_requested - total_devices
+
         print(f"\n{'='*50}")
-        print(f"📊 LOCAL DEPLOYMENT SUMMARY")
+        print(f"[SUMMARY] LOCAL DEPLOYMENT SUMMARY")
         print(f"{'='*50}")
-        print(f"Devices discovered: {total_devices}/{len(devices)}")
-        print(f"✅ Successful deployments: {successful_deployments}")
-        print(f"❌ Failed deployments: {failed_deployments}")
-        print(f"📅 Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"Devices in CSV: {total_requested}")
+        print(f"Devices discovered: {total_devices}")
+        if undiscovered_devices > 0:
+            print(f"[FIND] Devices not found on network: {undiscovered_devices}")
+        if skipped_deployments > 0:
+            print(f"[WARN] Deployments skipped (missing firmware): {skipped_deployments}")
+        print(f"[OK] Successful deployments: {successful_deployments}")
+        print(f"[ERROR] Failed deployments: {failed_deployments}")
+        print(f"[TIME] Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         if failed_deployments > 0:
-            print(f"\n⚠️ {failed_deployments} deployments failed. Check logs above for details.")
+            print(f"\n[WARN] {failed_deployments} deployments failed. Check logs above for details.")
+        elif successful_deployments == 0 and total_devices > 0:
+            print(f"\n[WARN] No deployments completed successfully.")
+        elif successful_deployments > 0:
+            print(f"\n[SUCCESS] {successful_deployments} device(s) updated successfully!")
 
 def main():
     parser = argparse.ArgumentParser(description='Local Bulk OTA Deployment for SkyAcres Systems')
@@ -378,16 +393,17 @@ def main():
     parser.add_argument('--max-concurrent', type=int, default=5, help='Maximum concurrent deployments')
     parser.add_argument('--discover-only', action='store_true', help='Only discover devices, do not deploy')
     parser.add_argument('--dry-run', action='store_true', help='Show what would be deployed without actually deploying')
+    parser.add_argument('--yes', '-y', action='store_true', help='Skip confirmation prompts')
 
     args = parser.parse_args()
 
     # Validate inputs
     if not os.path.exists(args.csv):
-        print(f"❌ CSV file not found: {args.csv}")
+        print(f"[ERROR] CSV file not found: {args.csv}")
         sys.exit(1)
 
     if not args.discover_only and not os.path.exists(args.firmware_dir):
-        print(f"❌ Firmware directory not found: {args.firmware_dir}")
+        print(f"[ERROR] Firmware directory not found: {args.firmware_dir}")
         sys.exit(1)
 
     # Initialize deployer
@@ -397,16 +413,16 @@ def main():
     devices = deployer.read_deployment_csv(args.csv, args.group)
 
     if not devices:
-        print("❌ No devices to process")
+        print("[ERROR] No devices to process")
         sys.exit(1)
 
     if args.discover_only:
         # Discovery mode only
         discovered = deployer.discover_devices(devices)
-        print(f"\n📊 Discovery complete: {len(discovered)} devices found")
+        print(f"\n[SUMMARY] Discovery complete: {len(discovered)} devices found")
     elif args.dry_run:
         # Dry run mode
-        print("\n🧪 DRY RUN MODE - No actual deployment will occur")
+        print("\n[DRY-RUN] DRY RUN MODE - No actual deployment will occur")
         discovered = deployer.discover_devices(devices)
         print(f"\nWould deploy to {len(discovered)} discovered devices:")
         for serial_number, info in discovered.items():
@@ -414,12 +430,12 @@ def main():
             print(f"  - {serial_number} at {info['ip']} ({device['board_type']}) -> v{device['target_version']}")
     else:
         # Deployment mode
-        print(f"\n⚠️ About to deploy firmware to devices on network {args.network}")
-        confirm = input("Continue? (y/N): ").strip().lower()
-
-        if confirm != 'y':
-            print("❌ Deployment cancelled")
-            sys.exit(0)
+        print(f"\n[WARN] About to deploy firmware to devices on network {args.network}")
+        if not args.yes:
+            confirm = input("Continue? (y/N): ").strip().lower()
+            if confirm != 'y':
+                print("[ERROR] Deployment cancelled")
+                sys.exit(0)
 
         deployer.deploy_bulk_local(devices, args.firmware_dir, args.max_concurrent)
 
