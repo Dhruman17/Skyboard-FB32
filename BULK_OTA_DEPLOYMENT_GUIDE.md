@@ -126,7 +126,7 @@ The deployment is controlled by a CSV file (`test_local_deployment.csv`) with th
 2. **Add a new row** with the device information:
    ```csv
    serial_number,board_type,target_version,deployment_group,notes,system_name,ip_address
-   TL1079927967,ESP32_S3,1.57,testing,New board system,TL01,
+   TL1079927967,ESP32_THREE_PORT,1.57,testing,New board system,TL01,
    ```
 
 3. **Save the file**
@@ -222,10 +222,11 @@ The script will:
    python local_bulk_ota_deploy.py --csv test_local_deployment.csv --firmware-dir ./firmware
    ```
 
-### Example: Adding TL01 System
+### Example: Adding Systems
 
 ```csv
-TL1079927967,ESP32_S3,1.57,testing,New board system,TL01,
+TL1079927967,ESP32_THREE_PORT,1.57,testing,New board system,TL01,
+MR6384439627,ESP32_S3,1.57,testing,S3 board system,MR1,
 ```
 
 ## Troubleshooting

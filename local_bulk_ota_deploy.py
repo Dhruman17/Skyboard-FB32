@@ -154,11 +154,23 @@ class LocalBulkOTADeployer:
         # If IP address is directly provided, test it first
         if ip_hint and self.is_ipv4(ip_hint):
             print(f"[FIND] Testing direct IP {ip_hint} for {serial_number}...")
-            if self.check_ota_port(ip_hint):
-                print(f"[OK] OTA service confirmed on direct IP {ip_hint}")
-                return ip_hint, f"direct-{serial_number}"
-            else:
-                print(f"[WARN] OTA port {self.ota_port} not open on direct IP {ip_hint}")
+            # Skip OTA port check - PlatformIO handles OTA protocol internally
+            # Just verify the IP is reachable via ping
+            try:
+                import platform
+                if platform.system().lower() == 'windows':
+                    result = subprocess.run(['ping', '-n', '1', '-w', '2000', ip_hint],
+                                          capture_output=True, text=True, timeout=5)
+                else:
+                    result = subprocess.run(['ping', '-c', '1', '-W', '2', ip_hint],
+                                          capture_output=True, text=True, timeout=5)
+                if result.returncode == 0:
+                    print(f"[OK] Device reachable at direct IP {ip_hint}")
+                    return ip_hint, f"direct-{serial_number}"
+                else:
+                    print(f"[WARN] Cannot ping direct IP {ip_hint}")
+            except Exception as e:
+                print(f"[WARN] Cannot test direct IP {ip_hint}: {e}")
 
         # Try different hostname possibilities
         hostnames = []
@@ -335,7 +347,9 @@ class LocalBulkOTADeployer:
                 print(f"[WARN] Skipping {device['serial_number']} ({device['system_name']}): Firmware not found at {firmware_path}")
                 return 'firmware_missing'
 
-            return self.deploy_ota_to_device(ip, hostname, firmware_path, board_type=device['board_type'])
+            # Use system_name from CSV instead of discovered hostname for OTA
+            system_name = device.get('system_name', hostname)
+            return self.deploy_ota_to_device(ip, system_name, firmware_path, board_type=device['board_type'])
 
         # Use ThreadPoolExecutor for concurrent deployments
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
