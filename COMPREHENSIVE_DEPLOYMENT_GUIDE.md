@@ -297,7 +297,33 @@ pio run -e esps3_board -t upload --upload-port device.local
 | `PlatformIO not found` | Missing installation | `pip install platformio` |
 | `Compilation failed` | Source code issues | Fix syntax errors, check includes |
 | `Cannot ping direct IP` | Device unreachable | Verify IP, check device status |
+| `No response from device` | Device not ready for OTA | Check device is awake, OTA enabled, sufficient memory |
 | `OTA timeout` | Network/device busy | Check connection, retry |
+| `Error Uploading` | Upload interrupted | Device disconnected during upload, retry |
+| `OTA port not responding` | Device not in OTA mode | Wake device, check ArduinoOTA enabled |
+
+### OTA-Specific Troubleshooting
+
+#### Device Not Responding to OTA
+```bash
+# Check if OTA port is open (run before deployment)
+telnet device.local 3232
+# or
+nc -zv device.local 3232
+```
+
+**Common causes and solutions:**
+1. **Device in deep sleep** - Wake device or disable deep sleep temporarily
+2. **ArduinoOTA not enabled** - Check firmware has OTA enabled
+3. **Insufficient memory** - Device needs ~50KB free heap for OTA
+4. **Firewall blocking** - Check Windows/router firewall for port 3232
+5. **Network issues** - Device and computer on same subnet
+
+#### Manual OTA Test
+```bash
+# Test single device OTA manually
+pio run -e esps3_board -t upload --upload-port device.local --upload-protocol espota
+```
 
 ## Best Practices
 
@@ -307,6 +333,9 @@ pio run -e esps3_board -t upload --upload-port device.local
 3. **Verify firmware version** in `src/Version.txt`
 4. **Validate CSV format** and device information
 5. **Check network connectivity** to all devices
+6. **Verify OTA readiness** - devices awake and responsive
+7. **Check device memory** - ensure >50KB free heap
+8. **Test OTA ports** - port 3232 accessible on all devices
 
 ### During Deployment
 1. **Monitor output** for errors and warnings

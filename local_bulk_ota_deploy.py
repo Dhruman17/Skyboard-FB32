@@ -369,9 +369,25 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
                 shutil.copy2(backup_creds, original_creds)
                 backup_creds.unlink()  # Delete backup
 
+    def check_ota_ready(self, ip, hostname):
+        """Check if device is ready for OTA by testing port connectivity"""
+        try:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(5)  # 5 second timeout
+            result = sock.connect_ex((ip, self.ota_port))
+            sock.close()
+            return result == 0
+        except Exception:
+            return False
+
     def deploy_ota_to_device(self, ip, hostname, firmware_path, password="", board_type="ESP32_S3"):
         """Deploy firmware to a single device using PlatformIO OTA"""
         try:
+            # Check if device is ready for OTA
+            if not self.check_ota_ready(ip, hostname):
+                print(f"[WARN] Device {hostname} ({ip}) OTA port {self.ota_port} not responding - device may not be ready for OTA")
+                print(f"[INFO] Attempting OTA anyway - device might be in deep sleep or busy")
+
             # Find PlatformIO executable
             pio_cmd = self.find_platformio_executable()
             if not pio_cmd:
@@ -386,8 +402,8 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             else:
                 env = 'esps3_board'  # Default to S3
 
-            # Use PlatformIO OTA upload with specific environment
-            cmd = pio_cmd + ['run', '-e', env, '-t', 'upload', '--upload-port', f"{hostname}.local"]
+            # Use PlatformIO OTA upload with specific environment and protocol
+            cmd = pio_cmd + ['run', '-e', env, '-t', 'upload', '--upload-port', f"{hostname}.local", '--upload-protocol', 'espota']
 
             print(f"[OTA] Starting PlatformIO OTA deployment to {hostname}.local ({ip})...")
             print(f"[CMD] Command: {' '.join(cmd)}")
@@ -399,8 +415,23 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
                 return True
             else:
                 print(f"[ERROR] PlatformIO OTA failed for {hostname}.local ({ip})")
+
+                # Check for common error patterns and provide helpful suggestions
+                error_output = result.stderr + result.stdout
+                if "No response from device" in error_output:
+                    print(f"[HINT] Device not responding to OTA - check if:")
+                    print(f"       - Device is awake (not in deep sleep)")
+                    print(f"       - ArduinoOTA is enabled in firmware")
+                    print(f"       - Device has sufficient memory for OTA")
+                    print(f"       - No firewall blocking port {self.ota_port}")
+                elif "Error Uploading" in error_output:
+                    print(f"[HINT] Upload error - device may have disconnected during upload")
+                elif "timeout" in error_output.lower():
+                    print(f"[HINT] Upload timeout - check network stability and device responsiveness")
+
                 print(f"Error: {result.stderr}")
-                print(f"Output: {result.stdout}")
+                if len(result.stdout) < 2000:  # Only show stdout if not too verbose
+                    print(f"Output: {result.stdout}")
                 return False
 
         except subprocess.TimeoutExpired:
