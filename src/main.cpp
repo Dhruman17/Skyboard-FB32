@@ -880,7 +880,7 @@ void sendHeartbeat()
         else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
 
         ArduinoOTA.begin(); // ✅ Start the OTA server
-          updateSystemVersion();
+        updateSystemVersion();
         // === I2C Init (must come BEFORE any sensor init or scan) ===
         Wire.begin(SDA, SCL); // Initialize the I2C bus only ONCE
         mcp3021.init(&Wire);  // MCP3021 ADC init
@@ -899,7 +899,7 @@ void sendHeartbeat()
         ArduinoOTA.handle();
         updateUnits();
         checkWiFiFailsafe();
-        
+
         // Reset watchdog in main loop
         esp_task_wdt_reset();
         // Memory health check every 30 seconds

@@ -30,6 +30,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 import socket
+import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 class LocalBulkOTADeployer:
@@ -396,18 +397,31 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
         except Exception:
             return False
 
-    def deploy_ota_to_device(self, ip, hostname, firmware_path, password="", board_type="ESP32_S3"):
-        """Deploy firmware to a single device using PlatformIO OTA"""
+    def prepare_device_for_ota(self, ip, hostname):
+        """Trigger OTA preparation mode on device via HTTP endpoint"""
         try:
-            # Check if device is ready for OTA
-            if not self.check_ota_ready(ip, hostname):
-                print(f"[WARN] Device {hostname} ({ip}) OTA port {self.ota_port} not responding - device may not be ready for OTA")
-                print(f"[INFO] Attempting OTA anyway - device might be in deep sleep or busy")
+            url = f"http://{ip}/prepare-ota"
+            print(f"[OTA] Triggering OTA preparation mode on {hostname} ({ip})...")
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                print(f"[OK] OTA preparation mode activated on {hostname}")
+                print(f"[INFO] {response.text.splitlines()[0]}")  # First line of response
+                time.sleep(2)  # Give device time to free memory
+                return True
+            else:
+                print(f"[WARN] Failed to activate OTA preparation mode (HTTP {response.status_code})")
+                return False
+        except requests.exceptions.RequestException as e:
+            print(f"[WARN] Could not reach HTTP endpoint: {e}")
+            print(f"[INFO] Device might be running old firmware without OTA preparation support")
+            return False
 
-            # Find PlatformIO executable
-            pio_cmd = self.find_platformio_executable()
-            if not pio_cmd:
-                print(f"[ERROR] PlatformIO not found. Please install PlatformIO or ensure it's in PATH")
+    def deploy_ota_to_device(self, ip, hostname, firmware_path, password="", board_type="ESP32_S3"):
+        """Deploy firmware to a single device using PlatformIO OTA (with device-specific binary swap)"""
+        try:
+            # Verify firmware binary exists
+            if not os.path.exists(firmware_path):
+                print(f"[ERROR] Device-specific firmware binary not found: {firmware_path}")
                 return False
 
             # Determine environment based on board type
@@ -418,73 +432,69 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             else:
                 env = 'esps3_board'  # Default to S3
 
-            # IMPORTANT: Don't use 'pio run -t upload' because it will RECOMPILE the firmware
-            # with the restored credentials.h, losing the device-specific serial number!
-            # Instead, use espota.py directly to upload the pre-compiled binary.
+            # Find PlatformIO executable
+            pio_cmd = self.find_platformio_executable()
+            if not pio_cmd:
+                print(f"[ERROR] PlatformIO not found")
+                return False
 
-            # Find espota.py in PlatformIO packages
+            # CLEVER TRICK: Temporarily replace the build firmware with device-specific one
+            # This allows PlatformIO to handle OTA upload (which works), but with our custom binary
             from pathlib import Path
-            espota_path = None
-            possible_espota_paths = [
-                Path.home() / '.platformio' / 'packages' / 'framework-arduinoespressif32' / 'tools' / 'espota.py',
-                Path.home() / '.platformio' / 'packages' / 'tool-espotapy' / 'espota.py',
-            ]
+            import shutil
 
-            for path in possible_espota_paths:
-                if path.exists():
-                    espota_path = str(path)
-                    break
+            build_firmware = Path(f".pio/build/{env}/firmware.bin")
+            backup_firmware = Path(f".pio/build/{env}/firmware.bin.backup")
 
-            if not espota_path:
-                print(f"[ERROR] espota.py not found in PlatformIO packages")
-                return False
+            # Backup original firmware (if it exists)
+            if build_firmware.exists():
+                shutil.copy2(build_firmware, backup_firmware)
 
-            # Verify firmware binary exists
-            if not os.path.exists(firmware_path):
-                print(f"[ERROR] Device-specific firmware binary not found: {firmware_path}")
-                return False
+            # Replace with device-specific firmware
+            shutil.copy2(firmware_path, build_firmware)
 
-            # Use espota.py to upload the pre-compiled device-specific binary
-            target = f"{hostname}.local"
-            cmd = [
-                'python', espota_path,
-                '-i', target,
-                '-p', str(self.ota_port),
-                '-f', firmware_path,
-                '-d'  # Debug mode
-            ]
+            try:
+                # Use hostname.local for mDNS resolution
+                target = f"{hostname}.local"
+                cmd = pio_cmd + ['run', '-e', env, '-t', 'upload', '--upload-port', target]
 
-            print(f"[OTA] Uploading device-specific firmware to {hostname}.local ({ip})...")
-            print(f"[OTA] Firmware: {firmware_path}")
-            print(f"[CMD] Command: {' '.join(cmd)}")
+                print(f"[OTA] Uploading device-specific firmware to {hostname}.local ({ip})...")
+                print(f"[OTA] Firmware: {firmware_path}")
+                print(f"[CMD] Command: {' '.join(cmd)}")
 
-            result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
-            if result.returncode == 0:
-                print(f"[OK] Successfully deployed device-specific firmware to {hostname}.local ({ip})")
-                return True
-            else:
-                print(f"[ERROR] OTA upload failed for {hostname}.local ({ip})")
+                if result.returncode == 0:
+                    print(f"[OK] Successfully deployed device-specific firmware to {hostname}.local ({ip})")
+                    return True
+                else:
+                    print(f"[ERROR] OTA upload failed for {hostname}.local ({ip})")
 
-                # Check for common error patterns and provide helpful suggestions
-                error_output = result.stderr + result.stdout
-                if "No response from device" in error_output or "No Answer" in error_output:
-                    print(f"[HINT] Device not responding to OTA - check if:")
-                    print(f"       - Device is awake (not in deep sleep)")
-                    print(f"       - ArduinoOTA is enabled in firmware")
-                    print(f"       - Device has sufficient memory for OTA (>50KB free heap)")
-                    print(f"       - No firewall blocking port {self.ota_port}")
-                elif "Error Uploading" in error_output:
-                    print(f"[HINT] Upload error - device may have disconnected during upload")
-                elif "timeout" in error_output.lower():
-                    print(f"[HINT] Upload timeout - check network stability and device responsiveness")
-                elif "Connection refused" in error_output:
-                    print(f"[HINT] Connection refused - device may not have OTA enabled")
+                    # Check for common error patterns and provide helpful suggestions
+                    error_output = result.stderr + result.stdout
+                    if "No response from device" in error_output or "No Answer" in error_output:
+                        print(f"[HINT] Device not responding to OTA - check if:")
+                        print(f"       - Device is awake (not in deep sleep)")
+                        print(f"       - ArduinoOTA is enabled in firmware")
+                        print(f"       - Device has sufficient memory for OTA (>50KB free heap)")
+                        print(f"       - No firewall blocking port {self.ota_port}")
+                    elif "Error Uploading" in error_output:
+                        print(f"[HINT] Upload error - device may have disconnected during upload")
+                    elif "timeout" in error_output.lower():
+                        print(f"[HINT] Upload timeout - check network stability and device responsiveness")
+                    elif "Connection refused" in error_output:
+                        print(f"[HINT] Connection refused - device may not have OTA enabled")
 
-                print(f"Error output: {result.stderr}")
-                if result.stdout and len(result.stdout) < 2000:
-                    print(f"Standard output: {result.stdout}")
-                return False
+                    print(f"Error output: {result.stderr}")
+                    if result.stdout and len(result.stdout) < 2000:
+                        print(f"Standard output: {result.stdout}")
+                    return False
+
+            finally:
+                # Restore original firmware backup
+                if backup_firmware.exists():
+                    shutil.copy2(backup_firmware, build_firmware)
+                    backup_firmware.unlink()  # Delete backup
 
         except subprocess.TimeoutExpired:
             print(f"[ERROR] OTA upload timeout for {hostname}.local ({ip})")
