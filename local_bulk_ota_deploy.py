@@ -256,28 +256,44 @@ class LocalBulkOTADeployer:
     def find_platformio_executable(self):
         """Find PlatformIO executable in common locations"""
         import os
+        import platform
         from pathlib import Path
 
-        # Common PlatformIO installation paths on Windows
+        # Common PlatformIO installation paths for Windows and macOS/Linux
         possible_paths = [
             'pio',  # If in PATH
             'platformio',  # If in PATH
-            Path.home() / '.platformio' / 'penv' / 'Scripts' / 'pio.exe',
-            Path.home() / '.platformio' / 'penv' / 'Scripts' / 'platformio.exe',
-            Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'pio.exe',
-            Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'platformio.exe',
-            'python -m platformio',  # As Python module
         ]
+
+        # Add platform-specific paths
+        if platform.system() == 'Windows':
+            possible_paths.extend([
+                Path.home() / '.platformio' / 'penv' / 'Scripts' / 'pio.exe',
+                Path.home() / '.platformio' / 'penv' / 'Scripts' / 'platformio.exe',
+                Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'pio.exe',
+                Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'platformio.exe',
+            ])
+        else:  # macOS/Linux
+            possible_paths.extend([
+                Path.home() / '.platformio' / 'penv' / 'bin' / 'pio',
+                Path.home() / '.platformio' / 'penv' / 'bin' / 'platformio',
+                Path.home() / '.local' / 'bin' / 'pio',
+                Path.home() / '.local' / 'bin' / 'platformio',
+            ])
+
+        # Try Python module last
+        possible_paths.append('python3 -m platformio')
 
         for path in possible_paths:
             try:
                 if isinstance(path, str):
-                    if path.startswith('python -m'):
-                        # Test python module
-                        result = subprocess.run(['python', '-m', 'platformio', '--version'],
+                    if 'python' in path and '-m' in path:
+                        # Test python module (use python3 on macOS/Linux, python on Windows)
+                        python_cmd = 'python3' if platform.system() != 'Windows' else 'python'
+                        result = subprocess.run([python_cmd, '-m', 'platformio', '--version'],
                                               capture_output=True, timeout=10)
                         if result.returncode == 0:
-                            return ['python', '-m', 'platformio']
+                            return [python_cmd, '-m', 'platformio']
                     else:
                         # Test direct command
                         result = subprocess.run([path, '--version'], capture_output=True, timeout=10)
@@ -454,11 +470,11 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             shutil.copy2(firmware_path, build_firmware)
 
             try:
-                # Use hostname.local for mDNS resolution
-                target = f"{hostname}.local"
+                # Use hostname.local for mDNS resolution (add .local only if not already present)
+                target = hostname if hostname.endswith('.local') else f"{hostname}.local"
                 cmd = pio_cmd + ['run', '-e', env, '-t', 'upload', '--upload-port', target]
 
-                print(f"[OTA] Uploading device-specific firmware to {hostname}.local ({ip})...")
+                print(f"[OTA] Uploading device-specific firmware to {target} ({ip})...")
                 print(f"[OTA] Firmware: {firmware_path}")
                 print(f"[CMD] Command: {' '.join(cmd)}")
 

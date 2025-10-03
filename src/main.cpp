@@ -38,6 +38,7 @@ bool timeCycleEnabled = false;
 bool lightState = false;
 String unitNames[NUMBER_OF_UNITS]; // Storing the names of units with suffixes
 unsigned long startupTime = 0;
+unsigned long sensorReadingScheduledTime = 0; // For non-blocking sensor reading
 
 // Generate the random delays
 int randomDelay;
@@ -406,18 +407,12 @@ void updateUnits()
                 atomStates[i] = !atomStates[i];                                   // Record the atomizer state as the opposite
                 ledcWrite(i, atomStates[i] ? PWM_ATOMIZER_ON : PWM_ATOMIZER_OFF); // Send the atomizer signal according to this opposite state
 
-                // Check if all atomizers are now OFF and trigger sensor reading
+                // Check if all atomizers are now OFF and schedule sensor reading
                 if (!atomStates[0] && !atomStates[1] && !atomStates[2])
                 {
-                    Serial.println("🔄 ATOMIZERS JUST TURNED OFF - triggering immediate sensor reading and Firebase update");
-
-                    // Add a small delay to allow sensors to settle after atomizers turn off
-                    delay(2000);
-
-                    // Reset watchdog before sensor operations
-                    esp_task_wdt_reset();
-
-                    readAllSensorsAndSendToFirebase();
+                    Serial.println("🔄 ATOMIZERS JUST TURNED OFF - scheduling sensor reading");
+                    // Schedule sensor reading for 2 seconds from now (non-blocking)
+                    sensorReadingScheduledTime = millis() + 2000;
                 } // read the water level state only if the atomizers are off
 
                 previousMillis[i] = currentMillis; // reset the time counter
@@ -880,6 +875,8 @@ void sendHeartbeat()
         else if (error == OTA_END_ERROR) Serial.println("End Failed"); });
 
         ArduinoOTA.begin(); // ✅ Start the OTA server
+        Serial.println("✅ ArduinoOTA started on hostname: " + systemName);
+        Serial.printf("✅ OTA available at: %s.local or %s\n", systemName.c_str(), WiFi.localIP().toString().c_str());
         updateSystemVersion();
         // === I2C Init (must come BEFORE any sensor init or scan) ===
         Wire.begin(SDA, SCL); // Initialize the I2C bus only ONCE
@@ -899,6 +896,15 @@ void sendHeartbeat()
         ArduinoOTA.handle();
         updateUnits();
         checkWiFiFailsafe();
+
+        // Non-blocking sensor reading check (scheduled from updateUnits)
+        if (sensorReadingScheduledTime > 0 && millis() >= sensorReadingScheduledTime)
+        {
+            Serial.println("📊 Executing scheduled sensor reading...");
+            esp_task_wdt_reset();
+            readAllSensorsAndSendToFirebase();
+            sensorReadingScheduledTime = 0; // Reset schedule
+        }
 
         // Reset watchdog in main loop
         esp_task_wdt_reset();
