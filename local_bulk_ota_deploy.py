@@ -470,8 +470,12 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             shutil.copy2(firmware_path, build_firmware)
 
             try:
-                # Use hostname.local for mDNS resolution (add .local only if not already present)
-                target = hostname if hostname.endswith('.local') else f"{hostname}.local"
+                # Use IP address directly if available to avoid mDNS resolution issues
+                # Otherwise fall back to hostname.local for mDNS resolution
+                if self.is_ipv4(ip):
+                    target = ip
+                else:
+                    target = hostname if hostname.endswith('.local') else f"{hostname}.local"
                 cmd = pio_cmd + ['run', '-e', env, '-t', 'upload', '--upload-port', target]
 
                 print(f"[OTA] Uploading device-specific firmware to {target} ({ip})...")
