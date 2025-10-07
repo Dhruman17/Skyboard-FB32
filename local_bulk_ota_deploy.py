@@ -33,15 +33,34 @@ import socket
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
+# Firebase Storage integration
+try:
+    from firebase_storage_uploader import SecureFirebaseClient
+    FIREBASE_AVAILABLE = True
+except ImportError:
+    FIREBASE_AVAILABLE = False
+    print("[WARN] Firebase Storage uploader not available. Install with: pip install firebase-admin google-cloud-storage")
+
 class LocalBulkOTADeployer:
-    def __init__(self, network_range="192.168.1.0/24", ota_port=3232):
+    def __init__(self, network_range="192.168.1.0/24", ota_port=3232, firebase_project_id=None):
         """Initialize local OTA deployer"""
         self.network_range = network_range
         self.ota_port = ota_port
         self.discovered_devices = {}
+        self.firebase_client = None
+
         print(f"[OK] Local Bulk OTA Deployer initialized")
         print(f"[NET] Network range: {network_range}")
         print(f"[PORT] OTA port: {ota_port}")
+
+        # Initialize Firebase client if requested
+        if firebase_project_id and FIREBASE_AVAILABLE:
+            try:
+                self.firebase_client = SecureFirebaseClient(project_id=firebase_project_id)
+                print(f"[FIREBASE] Firebase Storage client initialized for project: {firebase_project_id}")
+            except Exception as e:
+                print(f"[WARN] Failed to initialize Firebase client: {e}")
+                print(f"[INFO] Continuing without Firebase upload capability")
 
     def validate_csv_entry(self, row):
         """Validate CSV row data"""
@@ -310,6 +329,18 @@ class LocalBulkOTADeployer:
 
         return None
 
+    def create_version_file(self, serial_number, version, firmware_dir):
+        """Create Version.txt file for a device (capital V to match Firebase naming)"""
+        try:
+            version_file_path = Path(firmware_dir) / "Version.txt"
+            with open(version_file_path, 'w') as f:
+                f.write(f"{version}\n")
+            print(f"[VERSION] Created Version.txt: {version}")
+            return str(version_file_path)
+        except Exception as e:
+            print(f"[ERROR] Failed to create Version.txt: {e}")
+            return None
+
     def compile_device_firmware(self, serial_number, board_type):
         """Compile device-specific firmware with unique serial number"""
         import shutil
@@ -525,7 +556,32 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             traceback.print_exc()
             return False
 
-    def deploy_bulk_local(self, devices, firmware_dir, max_concurrent=5):
+    def upload_firmware_to_firebase(self, serial_number, firmware_path, version_path):
+        """Upload firmware to Firebase Storage for a device"""
+        if not self.firebase_client:
+            print(f"[WARN] Firebase client not initialized. Skipping upload for {serial_number}")
+            return False
+
+        try:
+            print(f"[FIREBASE] Uploading firmware for {serial_number} to Firebase Storage...")
+            success = self.firebase_client.upload_firmware_for_device(
+                serial_number=serial_number,
+                firmware_path=firmware_path,
+                version_txt_path=version_path
+            )
+
+            if success:
+                print(f"[FIREBASE] Successfully uploaded firmware for {serial_number}")
+                return True
+            else:
+                print(f"[FIREBASE] Failed to upload firmware for {serial_number}")
+                return False
+
+        except Exception as e:
+            print(f"[ERROR] Firebase upload error for {serial_number}: {e}")
+            return False
+
+    def deploy_bulk_local(self, devices, firmware_dir, max_concurrent=5, upload_to_firebase=False):
         """Deploy to multiple devices locally"""
         print(f"\n[DEPLOY] Starting local bulk deployment...")
 
@@ -540,6 +596,8 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
         successful_deployments = 0
         failed_deployments = 0
         skipped_deployments = 0
+        firebase_upload_success = 0
+        firebase_upload_failed = 0
 
         def deploy_single(serial_number, device_info):
             """Deploy to single device (for threading)"""
@@ -553,11 +611,23 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
 
             if not firmware_path:
                 print(f"[ERROR] Failed to compile firmware for {serial_number}")
-                return False
+                return False, False
 
+            # Step 2: Create version.txt file
+            firmware_dir_path = Path(firmware_path).parent
+            version_path = self.create_version_file(serial_number, device['target_version'], firmware_dir_path)
+
+            # Step 3: Deploy OTA to device
             # Use system_name from CSV instead of discovered hostname for OTA
             system_name = device.get('system_name', hostname)
-            return self.deploy_ota_to_device(ip, system_name, firmware_path, board_type=device['board_type'])
+            ota_success = self.deploy_ota_to_device(ip, system_name, firmware_path, board_type=device['board_type'])
+
+            # Step 4: Upload to Firebase if requested
+            firebase_success = False
+            if upload_to_firebase and version_path:
+                firebase_success = self.upload_firmware_to_firebase(serial_number, firmware_path, version_path)
+
+            return ota_success, firebase_success
 
         # Use ThreadPoolExecutor for concurrent deployments
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
@@ -569,16 +639,26 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             for future in as_completed(future_to_serial):
                 serial_number = future_to_serial[future]
                 try:
-                    result = future.result()
-                    if result == 'firmware_missing':
+                    ota_result, firebase_result = future.result()
+                    if ota_result == 'firmware_missing':
                         skipped_deployments += 1
-                    elif result:
+                    elif ota_result:
                         successful_deployments += 1
                     else:
                         failed_deployments += 1
+
+                    # Track Firebase upload results
+                    if upload_to_firebase:
+                        if firebase_result:
+                            firebase_upload_success += 1
+                        else:
+                            firebase_upload_failed += 1
+
                 except Exception as e:
                     print(f"[ERROR] Deployment error for {serial_number}: {e}")
                     failed_deployments += 1
+                    if upload_to_firebase:
+                        firebase_upload_failed += 1
 
         # Print summary
         total_devices = len(discovered_devices)
@@ -594,8 +674,14 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             print(f"[FIND] Devices not found on network: {undiscovered_devices}")
         if skipped_deployments > 0:
             print(f"[WARN] Deployments skipped (missing firmware): {skipped_deployments}")
-        print(f"[OK] Successful deployments: {successful_deployments}")
-        print(f"[ERROR] Failed deployments: {failed_deployments}")
+        print(f"[OK] Successful OTA deployments: {successful_deployments}")
+        print(f"[ERROR] Failed OTA deployments: {failed_deployments}")
+
+        if upload_to_firebase:
+            print(f"\n[FIREBASE] Firebase Storage Upload Summary:")
+            print(f"[OK] Successful uploads: {firebase_upload_success}")
+            print(f"[ERROR] Failed uploads: {firebase_upload_failed}")
+
         print(f"[TIME] Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
 
         if failed_deployments > 0:
@@ -617,6 +703,14 @@ def main():
     parser.add_argument('--dry-run', action='store_true', help='Show what would be deployed without actually deploying')
     parser.add_argument('--yes', '-y', action='store_true', help='Skip confirmation prompts')
 
+    # Firebase Storage options
+    parser.add_argument('--upload-to-firebase', action='store_true',
+                        help='Upload compiled firmware to Firebase Storage after local OTA deployment')
+    parser.add_argument('--firebase-only', action='store_true',
+                        help='Only upload to Firebase Storage, skip local OTA deployment')
+    parser.add_argument('--firebase-project', default='skyacres-marketplace',
+                        help='Firebase project ID (default: skyacres-marketplace)')
+
     args = parser.parse_args()
 
     # Validate inputs
@@ -628,8 +722,19 @@ def main():
         print(f"[ERROR] Firmware directory not found: {args.firmware_dir}")
         sys.exit(1)
 
-    # Initialize deployer
-    deployer = LocalBulkOTADeployer(args.network, args.ota_port)
+    # Check Firebase availability if Firebase options are used
+    if (args.upload_to_firebase or args.firebase_only) and not FIREBASE_AVAILABLE:
+        print(f"[ERROR] Firebase Storage integration not available.")
+        print(f"[INFO] Install required packages: pip install firebase-admin google-cloud-storage")
+        print(f"[INFO] See FIREBASE_SETUP.md for authentication setup")
+        sys.exit(1)
+
+    # Initialize deployer with optional Firebase support
+    firebase_project_id = None
+    if args.upload_to_firebase or args.firebase_only:
+        firebase_project_id = args.firebase_project
+
+    deployer = LocalBulkOTADeployer(args.network, args.ota_port, firebase_project_id=firebase_project_id)
 
     # Read devices from CSV
     devices = deployer.read_deployment_csv(args.csv, args.group)
@@ -650,16 +755,61 @@ def main():
         for serial_number, info in discovered.items():
             device = info['device']
             print(f"  - {serial_number} at {info['ip']} ({device['board_type']}) -> v{device['target_version']}")
+            if args.upload_to_firebase or args.firebase_only:
+                print(f"    Would also upload to Firebase Storage")
+    elif args.firebase_only:
+        # Firebase-only mode - compile and upload without local OTA
+        print(f"\n[FIREBASE] Firebase-only mode: Compiling and uploading firmware to Firebase Storage")
+        if not args.yes:
+            confirm = input(f"Continue with Firebase upload for {len(devices)} device(s)? (y/N): ").strip().lower()
+            if confirm != 'y':
+                print("[CANCELLED] Firebase upload cancelled")
+                sys.exit(0)
+
+        successful_uploads = 0
+        failed_uploads = 0
+
+        for device in devices:
+            serial_number = device['serial_number']
+            print(f"\n[DEVICE] Processing {serial_number}...")
+
+            # Compile firmware
+            firmware_path = deployer.compile_device_firmware(serial_number, device['board_type'])
+            if not firmware_path:
+                print(f"[ERROR] Failed to compile firmware for {serial_number}")
+                failed_uploads += 1
+                continue
+
+            # Create version file
+            firmware_dir_path = Path(firmware_path).parent
+            version_path = deployer.create_version_file(serial_number, device['target_version'], firmware_dir_path)
+
+            # Upload to Firebase
+            if version_path and deployer.upload_firmware_to_firebase(serial_number, firmware_path, version_path):
+                successful_uploads += 1
+            else:
+                failed_uploads += 1
+
+        print(f"\n{'='*50}")
+        print(f"[SUMMARY] FIREBASE UPLOAD SUMMARY")
+        print(f"{'='*50}")
+        print(f"Total devices: {len(devices)}")
+        print(f"[OK] Successful uploads: {successful_uploads}")
+        print(f"[ERROR] Failed uploads: {failed_uploads}")
+        print(f"[TIME] Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     else:
-        # Deployment mode
+        # Deployment mode (local OTA with optional Firebase upload)
         print(f"\n[WARN] About to deploy firmware to devices on network {args.network}")
+        if args.upload_to_firebase:
+            print(f"[INFO] Firmware will also be uploaded to Firebase Storage")
         if not args.yes:
             confirm = input("Continue? (y/N): ").strip().lower()
             if confirm != 'y':
                 print("[ERROR] Deployment cancelled")
                 sys.exit(0)
 
-        deployer.deploy_bulk_local(devices, args.firmware_dir, args.max_concurrent)
+        deployer.deploy_bulk_local(devices, args.firmware_dir, args.max_concurrent,
+                                   upload_to_firebase=args.upload_to_firebase)
 
 if __name__ == "__main__":
     main()

@@ -71,12 +71,12 @@ class SecureFirebaseClient:
     def upload_firmware_for_device(self, serial_number: str, firmware_path: str,
                                    version_txt_path: str) -> bool:
         """
-        Upload firmware.bin and version.txt for a specific device
+        Upload firmware.bin and Version.txt for a specific device
 
         Args:
             serial_number: Device serial number
             firmware_path: Path to firmware.bin file
-            version_txt_path: Path to version.txt file
+            version_txt_path: Path to Version.txt file
 
         Returns:
             True if both files uploaded successfully, False otherwise
@@ -97,12 +97,12 @@ class SecureFirebaseClient:
             return False
         print(f'✓ Uploaded firmware.bin for {serial_number}')
 
-        # Upload version.txt
-        version_storage_path = f'{serial_number}/version.txt'
+        # Upload Version.txt (capital V to match ESP32 firmware expectations)
+        version_storage_path = f'{serial_number}/Version.txt'
         if not self.upload_file(version_txt_path, version_storage_path):
-            print(f'✗ Failed to upload version.txt for {serial_number}')
+            print(f'✗ Failed to upload Version.txt for {serial_number}')
             return False
-        print(f'✓ Uploaded version.txt for {serial_number}')
+        print(f'✓ Uploaded Version.txt for {serial_number}')
 
         return True
 
@@ -200,10 +200,10 @@ try:
                 return False
             print(f'✓ Uploaded firmware.bin for {serial_number}')
 
-            # Upload version.txt
-            if not self.upload_file(version_txt_path, f'{serial_number}/version.txt'):
+            # Upload Version.txt (capital V to match ESP32 firmware expectations)
+            if not self.upload_file(version_txt_path, f'{serial_number}/Version.txt'):
                 return False
-            print(f'✓ Uploaded version.txt for {serial_number}')
+            print(f'✓ Uploaded Version.txt for {serial_number}')
 
             return True
 
