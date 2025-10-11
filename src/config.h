@@ -76,7 +76,7 @@ bool isConnected = false;
 #ifdef ESP32_S3
 bool ENABLE_I2C_SENSORS = true;   // Enable by default for S3 boards
 #else
-bool ENABLE_I2C_SENSORS = false;  // default off for other boards
+bool ENABLE_I2C_SENSORS = true;  // default off for other boards
 #endif
 
 // === Mutex Declarations ===
