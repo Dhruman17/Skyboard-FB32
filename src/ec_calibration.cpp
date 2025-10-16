@@ -15,15 +15,22 @@
 #include <Wire.h>
 #include "MCP3X21.h"
 
-// I2C Pins (adjust based on your board)
-#define SDA 21
-#define SCL 22
+// Use USB Serial for ESP32-S3
+#if ARDUINO_USB_CDC_ON_BOOT
+#define SerialOutput Serial
+#else
+#define SerialOutput Serial
+#endif
+
+// I2C Pins for ESP32-S3
+#define SDA 13
+#define SCL 14
 
 // TCA9548A I2C multiplexer address
 #define TCAADDR 0x77
 
 // Port configuration
-#define EC_PORT_1_CHANNEL 1  // TCA channel for Port 1
+#define EC_PORT_1_CHANNEL 2  // TCA channel for Port 1 (found on channel 2 from scan)
 
 // MCP3021 ADC instance
 MCP3021 mcp3021;
@@ -57,13 +64,74 @@ float readECVoltage() {
     return voltage;
 }
 
+void scanI2C() {
+    Serial.println("Scanning main I2C bus...");
+    byte count = 0;
+    for (byte i = 1; i < 127; i++) {
+        Wire.beginTransmission(i);
+        if (Wire.endTransmission() == 0) {
+            Serial.print("  Found device at 0x");
+            if (i < 16) Serial.print("0");
+            Serial.print(i, HEX);
+            if (i == 0x77) Serial.print(" (TCA9548A Multiplexer)");
+            if (i == 0x4D) Serial.print(" (MCP3021 ADC)");
+            Serial.println();
+            count++;
+        }
+    }
+    if (count == 0) {
+        Serial.println("  No I2C devices found!");
+    } else {
+        Serial.print("  Total: ");
+        Serial.print(count);
+        Serial.println(" device(s)");
+    }
+    Serial.println();
+}
+
+void scanTCAChannel(uint8_t channel) {
+    tcaselect(channel);
+    delay(100);
+
+    Serial.print("Scanning TCA Channel ");
+    Serial.print(channel);
+    Serial.println("...");
+
+    byte count = 0;
+    for (byte i = 1; i < 127; i++) {
+        Wire.beginTransmission(i);
+        if (Wire.endTransmission() == 0) {
+            Serial.print("  Found device at 0x");
+            if (i < 16) Serial.print("0");
+            Serial.print(i, HEX);
+            if (i == 0x4D) Serial.print(" (MCP3021 ADC) <-- TARGET");
+            Serial.println();
+            count++;
+        }
+    }
+
+    if (count == 0) {
+        Serial.println("  No devices on this channel");
+    }
+    Serial.println();
+}
+
+void scanAllTCAChannels() {
+    Serial.println("========================================");
+    Serial.println("Scanning all TCA channels for MCP3021...");
+    Serial.println("========================================");
+    for (uint8_t ch = 0; ch < 8; ch++) {
+        scanTCAChannel(ch);
+    }
+}
+
 void setup() {
-    Serial.begin(9600);
+    Serial.begin(115200);
     delay(1000);
 
+    Serial.println();
     Serial.println("========================================");
     Serial.println("EC Sensor Voltage Calibration Tool");
-    Serial.println("Port 1 (TCA Channel 1)");
     Serial.println("========================================");
     Serial.println();
 
@@ -73,17 +141,18 @@ void setup() {
 
     // Initialize MCP3021 ADC
     mcp3021.init(&Wire);
-    Serial.println("MCP3021 ADC initialized");
+    Serial.println("MCP3021 ADC initialized on TCA Channel 2");
     Serial.println();
 
     Serial.println("Ready to read EC voltage values...");
+    Serial.println("Readings every 2 seconds:");
     Serial.println("Format: Voltage (V) | ADC Raw Value");
     Serial.println("========================================");
     Serial.println();
 }
 
 void loop() {
-    // Select Port 1 channel
+    // Select Port 1 channel (Channel 2)
     tcaselect(EC_PORT_1_CHANNEL);
     delay(50);
 
