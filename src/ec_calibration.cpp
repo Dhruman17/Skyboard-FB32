@@ -29,8 +29,8 @@
 // TCA9548A I2C multiplexer address
 #define TCAADDR 0x77
 
-// Port configuration - scan all channels
-int tcaChannelsToScan[3] = {1, 3, 5};  // EC sensors typically on channels 1, 3, 5
+// Port configuration
+#define EC_SENSOR_CHANNEL 1  // EC sensor confirmed on Channel 1
 
 // MCP3021 ADC instance
 MCP3021 mcp3021;
@@ -175,59 +175,8 @@ float getAverageVoltage() {
 }
 
 void loop() {
-    Serial.println("\n========================================");
-    Serial.println("Scanning all EC channels...");
-    Serial.println("========================================");
-
-    // Scan all potential EC sensor channels
-    for (int i = 0; i < 3; i++) {
-        int channel = tcaChannelsToScan[i];
-
-        Serial.print("\n--- Channel ");
-        Serial.print(channel);
-        Serial.print(" (Port ");
-        Serial.print(i + 1);
-        Serial.println(") ---");
-
-        tcaselect(channel);
-        delay(50);
-
-        // Read raw ADC value
-        uint16_t adcRaw = mcp3021.read();
-
-        if (adcRaw == 0xFFFF) {
-            Serial.println("  ERROR: No response from ADC");
-            continue;
-        }
-
-        float voltage = mcp3021.toVoltage(adcRaw, 3300) / 1000.0;
-
-        Serial.print("  Voltage: ");
-        Serial.print(voltage, 4);
-        Serial.print(" V  |  ADC Raw: ");
-        Serial.print(adcRaw);
-
-        if (adcRaw == 0) {
-            Serial.println(" - ZERO (may be dry)");
-        } else if (adcRaw < 10) {
-            Serial.println(" - Very low");
-        } else if (adcRaw >= 1000) {
-            Serial.println(" - MAX/STUCK (check connection)");
-        } else {
-            Serial.println(" - OK");
-        }
-    }
-
-    Serial.println("\n========================================");
-    Serial.println("Put probe in DIFFERENT solutions and");
-    Serial.println("watch which channel value CHANGES!");
-    Serial.println("========================================\n");
-
-    delay(3000);  // Scan every 3 seconds
-    return;  // Skip old single-channel code
-
-    // OLD CODE BELOW (not reached)
-    tcaselect(tcaChannelsToScan[0]);
+    // Select EC sensor channel
+    tcaselect(EC_SENSOR_CHANNEL);
     delay(50);
 
     // Read raw ADC value
