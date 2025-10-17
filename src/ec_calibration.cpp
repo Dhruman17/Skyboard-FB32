@@ -47,11 +47,11 @@ void tcaselect(uint8_t channel) {
 }
 
 /**
- * Read voltage from EC sensor on Port 1
+ * Read voltage from EC sensor on a specific channel
  */
-float readECVoltage() {
-    // Select Port 1 channel
-    tcaselect(EC_PORT_1_CHANNEL);
+float readECVoltage(uint8_t channel) {
+    // Select the specified channel
+    tcaselect(channel);
     delay(50);  // Allow channel switch to complete
 
     // Read ADC value
