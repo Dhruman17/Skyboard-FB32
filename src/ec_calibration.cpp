@@ -30,7 +30,7 @@
 #define TCAADDR 0x77
 
 // Port configuration
-#define EC_PORT_1_CHANNEL 2  // TCA channel for Port 1 (found on channel 2 from scan)
+#define EC_PORT_1_CHANNEL 1  // TCA channel for Port 1 (found on channel 1 from scan)
 
 // MCP3021 ADC instance
 MCP3021 mcp3021;
@@ -149,7 +149,7 @@ void setup() {
 
     // Initialize MCP3021 ADC
     mcp3021.init(&Wire);
-    Serial.println("MCP3021 ADC initialized on TCA Channel 2");
+    Serial.println("MCP3021 ADC initialized on TCA Channel 1");
     Serial.println();
 
     Serial.println("Ready to read EC voltage values...");
@@ -159,8 +159,23 @@ void setup() {
     Serial.println();
 }
 
+// Averaging variables
+#define SAMPLE_SIZE 10
+float voltageReadings[SAMPLE_SIZE];
+int readingIndex = 0;
+bool arrayFilled = false;
+
+float getAverageVoltage() {
+    float sum = 0;
+    int count = arrayFilled ? SAMPLE_SIZE : readingIndex;
+    for (int i = 0; i < count; i++) {
+        sum += voltageReadings[i];
+    }
+    return count > 0 ? sum / count : 0;
+}
+
 void loop() {
-    // Select Port 1 channel (Channel 2)
+    // Select Port 1 channel (Channel 1)
     tcaselect(EC_PORT_1_CHANNEL);
     delay(50);
 
@@ -190,11 +205,52 @@ void loop() {
         // Convert to voltage
         float voltage = mcp3021.toVoltage(adcRaw, 3300) / 1000.0;
 
+        // Store reading for averaging
+        voltageReadings[readingIndex] = voltage;
+        readingIndex++;
+        if (readingIndex >= SAMPLE_SIZE) {
+            readingIndex = 0;
+            arrayFilled = true;
+        }
+
+        // Calculate average
+        float avgVoltage = getAverageVoltage();
+
         // Display results
         Serial.print("Voltage: ");
         Serial.print(voltage, 4);  // 4 decimal places
         Serial.print(" V  |  ADC Raw: ");
-        Serial.println(adcRaw);
+        Serial.print(adcRaw);
+        Serial.print("  |  Avg (");
+        Serial.print(arrayFilled ? SAMPLE_SIZE : readingIndex);
+        Serial.print(" samples): ");
+        Serial.print(avgVoltage, 4);
+        Serial.print(" V");
+
+        // Additional diagnostic info
+        if (adcRaw == 0) {
+            Serial.println(" - ZERO (Sensor dry or not powered)");
+        } else if (adcRaw < 10) {
+            Serial.println(" - Very low");
+        } else {
+            Serial.println(" - OK");
+        }
+
+        // Show calibration reminder every 10 readings
+        static int readingCount = 0;
+        readingCount++;
+        if (readingCount % 10 == 0) {
+            Serial.println();
+            Serial.println("========================================");
+            Serial.println("CALIBRATION NOTES:");
+            Serial.print("Current Average: ");
+            Serial.print(avgVoltage, 4);
+            Serial.println(" V");
+            Serial.println("Record this voltage with the EC value");
+            Serial.println("from your handheld meter for calibration.");
+            Serial.println("========================================");
+            Serial.println();
+        }
     }
 
     // Read every 2 seconds
