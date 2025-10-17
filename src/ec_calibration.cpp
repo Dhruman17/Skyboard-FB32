@@ -137,7 +137,15 @@ void setup() {
 
     // Initialize I2C
     Wire.begin(SDA, SCL);
-    Serial.println("I2C initialized");
+    Wire.setClock(100000);  // Set to 100kHz for better compatibility
+    Serial.println("I2C initialized at 100kHz");
+    Serial.println();
+
+    // Scan main I2C bus
+    scanI2C();
+
+    // Scan all TCA channels to find the MCP3021
+    scanAllTCAChannels();
 
     // Initialize MCP3021 ADC
     mcp3021.init(&Wire);
@@ -159,14 +167,35 @@ void loop() {
     // Read raw ADC value
     uint16_t adcRaw = mcp3021.read();
 
-    // Convert to voltage
-    float voltage = mcp3021.toVoltage(adcRaw, 3300) / 1000.0;
+    // Check for I2C error (0xFFFF indicates read failure)
+    if (adcRaw == 0xFFFF) {
+        Serial.println("ERROR: I2C read failed! ADC returned 0xFFFF");
+        Serial.println("Possible causes:");
+        Serial.println("  - MCP3021 not connected or wrong address");
+        Serial.println("  - Wrong TCA channel selected");
+        Serial.println("  - I2C bus speed issue");
+        Serial.println("  - Power supply problem");
+        Serial.println();
 
-    // Display results
-    Serial.print("Voltage: ");
-    Serial.print(voltage, 4);  // 4 decimal places
-    Serial.print(" V  |  ADC Raw: ");
-    Serial.println(adcRaw);
+        // Try to test I2C connection
+        Wire.beginTransmission(0x4D);
+        byte error = Wire.endTransmission();
+        if (error != 0) {
+            Serial.print("  I2C test failed with error: ");
+            Serial.println(error);
+        } else {
+            Serial.println("  I2C device responds but ADC read fails");
+        }
+    } else {
+        // Convert to voltage
+        float voltage = mcp3021.toVoltage(adcRaw, 3300) / 1000.0;
+
+        // Display results
+        Serial.print("Voltage: ");
+        Serial.print(voltage, 4);  // 4 decimal places
+        Serial.print(" V  |  ADC Raw: ");
+        Serial.println(adcRaw);
+    }
 
     // Read every 2 seconds
     delay(2000);
