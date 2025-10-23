@@ -308,15 +308,30 @@ void readECSensorValue()
 
         for (int i = 0; i < NUMBER_OF_UNITS; i++)
         {
+            // Select channel and allow time for switch to complete
             tcaselect(tcaChannels[i]);
-            uint16_t result = mcp3021.read();
-            float rawEc = (mcp3021.toVoltage(result, 3300) / 1000.0);
-            float calibratedEC = 0.727 - (0.365 * rawEc) + (0.416 * rawEc * rawEc);
+            delay(50);  // Allow channel switch to complete (matching ec_calibration.cpp)
+
+            // Read ADC value
+            uint16_t adcValue = mcp3021.read();
+
+            // Convert to voltage (in volts) - matching ec_calibration.cpp implementation
+            float voltage = mcp3021.toVoltage(adcValue, 3300) / 1000.0;
+
+            // Apply calibration curve (degree 3 polynomial)
+            // Fitted from 10 calibration points (0.06-2.56 EC range)
+            // EC = -0.049298 + 1.124305*V - 0.425436*V^2 + 0.161499*V^3
+            // Average error: 0.0346 EC, R^2 = 0.997 (excellent fit)
+            float voltage_sq = voltage * voltage;
+            float voltage_cu = voltage_sq * voltage;
+            float calibratedEC = -0.049298 + (1.124305 * voltage) + (-0.425436 * voltage_sq) + (0.161499 * voltage_cu);
             calibratedECs[i] = calibratedEC;
 
             Serial.print("EC sensor ");
             Serial.print(i + 1);
-            Serial.print(" reading: ");
+            Serial.print(" | Voltage: ");
+            Serial.print(voltage, 4);
+            Serial.print(" V | Calibrated EC: ");
             Serial.println(calibratedEC);
 
             if (!unitNames[i].isEmpty())
