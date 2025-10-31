@@ -505,9 +505,10 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             traceback.print_exc()
             return False
 
-    def deploy_bulk_local(self, devices, firmware_dir, max_concurrent=5):
-        """Deploy to multiple devices locally"""
-        print(f"\n[DEPLOY] Starting local bulk deployment...")
+    def deploy_bulk_local(self, devices, firmware_dir, max_concurrent=1):
+        """Deploy to multiple devices locally - FULLY SEQUENTIAL for safety"""
+        print(f"\n[DEPLOY] Starting SEQUENTIAL local bulk deployment...")
+        print(f"[INFO] Devices will be deployed ONE AT A TIME to prevent build corruption")
 
         # First discover all devices
         discovered_devices = self.discover_devices(devices)
@@ -516,52 +517,75 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             print("[ERROR] No devices discovered. Check network connectivity and device status.")
             return
 
-        # Deploy to discovered devices
+        # Deploy to discovered devices SEQUENTIALLY
         successful_deployments = 0
         failed_deployments = 0
         skipped_deployments = 0
 
-        def deploy_single(serial_number, device_info):
-            """Deploy to single device (for threading)"""
+        total_devices = len(discovered_devices)
+        device_num = 0
+
+        # SEQUENTIAL DEPLOYMENT - One device at a time
+        for serial_number, device_info in discovered_devices.items():
+            device_num += 1
             device = device_info['device']
             ip = device_info['ip']
             hostname = device_info['hostname']
 
-            # Step 1: Compile device-specific firmware
-            print(f"[DEVICE] Compiling firmware for {serial_number}...")
-            firmware_path = self.compile_device_firmware(serial_number, device['board_type'])
+            print(f"\n{'='*60}")
+            print(f"[DEVICE {device_num}/{total_devices}] Processing {serial_number}")
+            print(f"[INFO] System: {device.get('system_name', hostname)}, IP: {ip}")
+            print(f"{'='*60}")
 
-            if not firmware_path:
-                print(f"[ERROR] Failed to compile firmware for {serial_number}")
-                return False
+            try:
+                # Step 1: Clean build directory to prevent corruption
+                print(f"[CLEAN] Cleaning build directory before compilation...")
+                board_type = device['board_type']
+                env = 'esps3_board' if board_type == 'ESP32_S3' else 'esp32dev_3port'
+                pio_cmd = self.find_platformio_executable()
+                if pio_cmd:
+                    subprocess.run(pio_cmd + ['run', '-e', env, '--target', 'clean'],
+                                 capture_output=True, timeout=30)
+                    time.sleep(2)  # Give filesystem time to settle
 
-            # Use system_name from CSV instead of discovered hostname for OTA
-            system_name = device.get('system_name', hostname)
-            return self.deploy_ota_to_device(ip, system_name, firmware_path, board_type=device['board_type'])
+                # Step 2: Compile device-specific firmware
+                print(f"[COMPILE] Compiling device-specific firmware for {serial_number}...")
+                firmware_path = self.compile_device_firmware(serial_number, board_type)
 
-        # Use ThreadPoolExecutor for concurrent deployments
-        with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
-            future_to_serial = {
-                executor.submit(deploy_single, serial_number, device_info): serial_number
-                for serial_number, device_info in discovered_devices.items()
-            }
-
-            for future in as_completed(future_to_serial):
-                serial_number = future_to_serial[future]
-                try:
-                    result = future.result()
-                    if result == 'firmware_missing':
-                        skipped_deployments += 1
-                    elif result:
-                        successful_deployments += 1
-                    else:
-                        failed_deployments += 1
-                except Exception as e:
-                    print(f"[ERROR] Deployment error for {serial_number}: {e}")
+                if not firmware_path:
+                    print(f"[ERROR] Failed to compile firmware for {serial_number}")
                     failed_deployments += 1
+                    print(f"[WAIT] Waiting 5 seconds before next device...")
+                    time.sleep(5)
+                    continue
+
+                # Step 3: Wait before OTA to ensure device is ready
+                print(f"[WAIT] Waiting 3 seconds before starting OTA upload...")
+                time.sleep(3)
+
+                # Step 4: Deploy via OTA
+                system_name = device.get('system_name', hostname)
+                result = self.deploy_ota_to_device(ip, system_name, firmware_path, board_type=board_type)
+
+                if result:
+                    successful_deployments += 1
+                    print(f"[SUCCESS] ✓ Device {serial_number} deployed successfully!")
+                    # Give device time to reboot and stabilize
+                    print(f"[WAIT] Waiting 10 seconds for device to reboot and stabilize...")
+                    time.sleep(10)
+                else:
+                    failed_deployments += 1
+                    print(f"[FAILED] ✗ Device {serial_number} deployment failed")
+                    # Still wait before next device
+                    print(f"[WAIT] Waiting 5 seconds before next device...")
+                    time.sleep(5)
+
+            except Exception as e:
+                print(f"[ERROR] Deployment error for {serial_number}: {e}")
+                failed_deployments += 1
+                time.sleep(5)
 
         # Print summary
-        total_devices = len(discovered_devices)
         total_requested = len(devices)
         undiscovered_devices = total_requested - total_devices
 
