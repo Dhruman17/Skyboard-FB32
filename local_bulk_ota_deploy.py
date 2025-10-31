@@ -294,12 +294,32 @@ class LocalBulkOTADeployer:
 
         return None
 
+    def verify_firmware_serial_number(self, firmware_path, expected_serial):
+        """Verify that the compiled firmware contains the expected serial number"""
+        try:
+            with open(firmware_path, 'rb') as f:
+                firmware_content = f.read()
+                # Search for serial number as ASCII string in binary
+                if expected_serial.encode('ascii') in firmware_content:
+                    print(f"[VERIFY] OK - Firmware contains serial number: {expected_serial}")
+                    return True
+                else:
+                    print(f"[VERIFY] ERROR - Firmware does NOT contain expected serial number: {expected_serial}")
+                    return False
+        except Exception as e:
+            print(f"[VERIFY] Error verifying firmware: {e}")
+            return False
+
     def compile_device_firmware(self, serial_number, board_type):
         """Compile device-specific firmware with unique serial number"""
         import shutil
+        import subprocess
         from pathlib import Path
 
-        print(f"[COMPILE] Compiling device-specific firmware for {serial_number}...")
+        print(f"\n{'='*60}")
+        print(f"[COMPILE] Compiling device-specific firmware for: {serial_number}")
+        print(f"[COMPILE] Board type: {board_type}")
+        print(f"{'='*60}")
 
         try:
             # Create temporary credentials file with device-specific serial number
@@ -333,8 +353,15 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             shutil.copy2(original_creds, backup_creds)
 
             # Write device-specific credentials
+            print(f"[COMPILE] Injecting serial number into credentials.h: {serial_number}")
             with open(original_creds, 'w') as f:
                 f.write(temp_credentials)
+
+            # Verify the file was written correctly
+            with open(original_creds, 'r') as f:
+                if serial_number not in f.read():
+                    print(f"[ERROR] Failed to inject serial number into credentials.h!")
+                    return None
 
             # Determine PlatformIO environment
             if board_type == 'ESP32_S3':
@@ -350,8 +377,12 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
                 print(f"[ERROR] PlatformIO not found. Please install PlatformIO.")
                 return None
 
+            # Clean build to ensure fresh compilation
+            print(f"[COMPILE] Cleaning previous build for environment: {env}")
+            clean_cmd = pio_cmd + ['run', '-e', env, '-t', 'clean']
+            subprocess.run(clean_cmd, capture_output=True, text=True, timeout=60)
+
             # Compile firmware
-            import subprocess
             cmd = pio_cmd + ['run', '-e', env]
             print(f"[CMD] Compiling: {' '.join(cmd)}")
 
@@ -366,8 +397,19 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
                     device_firmware_path = device_firmware_dir / "firmware.bin"
                     shutil.copy2(compiled_firmware, device_firmware_path)
 
-                    print(f"[OK] Device-specific firmware compiled: {device_firmware_path}")
-                    return str(device_firmware_path)
+                    # CRITICAL: Verify the firmware contains the correct serial number
+                    print(f"[COMPILE] Verifying firmware contains serial number...")
+                    if self.verify_firmware_serial_number(str(device_firmware_path), serial_number):
+                        file_size = device_firmware_path.stat().st_size / 1024  # KB
+                        print(f"[OK] Device-specific firmware compiled successfully!")
+                        print(f"[OK]   Path: {device_firmware_path}")
+                        print(f"[OK]   Size: {file_size:.2f} KB")
+                        print(f"[OK]   Serial: {serial_number}")
+                        return str(device_firmware_path)
+                    else:
+                        print(f"[ERROR] Firmware verification FAILED - serial number not found in binary!")
+                        print(f"[ERROR] This firmware would cause all devices to have the same serial number!")
+                        return None
                 else:
                     print(f"[ERROR] Compiled firmware not found at {compiled_firmware}")
                     return None
@@ -379,10 +421,13 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
 
         except Exception as e:
             print(f"[ERROR] Compilation error: {e}")
+            import traceback
+            traceback.print_exc()
             return None
         finally:
             # Restore original credentials.h
             if backup_creds.exists():
+                print(f"[COMPILE] Restoring original credentials.h")
                 shutil.copy2(backup_creds, original_creds)
                 backup_creds.unlink()  # Delete backup
 
@@ -527,6 +572,11 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             ip = device_info['ip']
             hostname = device_info['hostname']
 
+            print(f"\n{'#'*70}")
+            print(f"# DEPLOYING TO DEVICE: {serial_number}")
+            print(f"# IP: {ip} | Hostname: {hostname} | Board: {device['board_type']}")
+            print(f"{'#'*70}\n")
+
             # Step 1: Compile device-specific firmware
             print(f"[DEVICE] Compiling firmware for {serial_number}...")
             firmware_path = self.compile_device_firmware(serial_number, device['board_type'])
@@ -537,7 +587,14 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
 
             # Use system_name from CSV instead of discovered hostname for OTA
             system_name = device.get('system_name', hostname)
-            return self.deploy_ota_to_device(ip, system_name, firmware_path, board_type=device['board_type'])
+            result = self.deploy_ota_to_device(ip, system_name, firmware_path, board_type=device['board_type'])
+
+            if result:
+                print(f"\n[SUCCESS] Device {serial_number} deployed successfully with unique firmware!\n")
+            else:
+                print(f"\n[FAILED] Device {serial_number} deployment failed!\n")
+
+            return result
 
         # Use ThreadPoolExecutor for concurrent deployments
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
@@ -565,9 +622,9 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
         total_requested = len(devices)
         undiscovered_devices = total_requested - total_devices
 
-        print(f"\n{'='*50}")
+        print(f"\n{'='*70}")
         print(f"[SUMMARY] LOCAL DEPLOYMENT SUMMARY")
-        print(f"{'='*50}")
+        print(f"{'='*70}")
         print(f"Devices in CSV: {total_requested}")
         print(f"Devices discovered: {total_devices}")
         if undiscovered_devices > 0:
@@ -576,14 +633,30 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             print(f"[WARN] Deployments skipped (missing firmware): {skipped_deployments}")
         print(f"[OK] Successful deployments: {successful_deployments}")
         print(f"[ERROR] Failed deployments: {failed_deployments}")
-        print(f"[TIME] Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # List all device-specific firmware compiled
+        print(f"\n[FIRMWARE] Device-specific firmware files created:")
+        from pathlib import Path
+        firmware_base = Path("firmware_compiled")
+        if firmware_base.exists():
+            for serial_dir in sorted(firmware_base.iterdir()):
+                if serial_dir.is_dir():
+                    firmware_file = serial_dir / "firmware.bin"
+                    if firmware_file.exists():
+                        size_kb = firmware_file.stat().st_size / 1024
+                        print(f"  [OK] {serial_dir.name}: {firmware_file} ({size_kb:.2f} KB)")
+
+        print(f"\n[TIME] Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        print(f"{'='*70}")
 
         if failed_deployments > 0:
             print(f"\n[WARN] {failed_deployments} deployments failed. Check logs above for details.")
         elif successful_deployments == 0 and total_devices > 0:
             print(f"\n[WARN] No deployments completed successfully.")
         elif successful_deployments > 0:
-            print(f"\n[SUCCESS] {successful_deployments} device(s) updated successfully!")
+            print(f"\n[SUCCESS] {successful_deployments} device(s) updated with unique firmware!")
+            print(f"[INFO] Each device now has its own serial number - no duplicates!")
+            print(f"[INFO] You can verify by checking the Firebase logs for each device.")
 
 def main():
     parser = argparse.ArgumentParser(description='Local Bulk OTA Deployment for SkyAcres Systems')

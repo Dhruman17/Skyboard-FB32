@@ -5,7 +5,7 @@
 #include <time.h>
 
 // === Firmware Version ===
-const double firmware_version = 1.571; // Updated EC calibration to degree 3 polynomial
+const double firmware_version = 1.576; // Updated EC calibration to degree 3 polynomial
 
 // === Select Board Type via build_flags ===
 // Use -DESP32_THREE_PORT or -DESP32_S3 in platformio.ini
