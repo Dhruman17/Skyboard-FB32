@@ -23,11 +23,13 @@ TL1079927967,ESP32_THREE_PORT,1.57,TL01,192.168.68.150
 
 ## How It Works
 
-For each device, the script:
-1. Compiles device-specific firmware with unique serial number
-2. Verifies binary contains correct serial number
-3. Deploys via OTA to device on local network
+The script discovers all devices in parallel, then for each device:
+1. **Compiles** device-specific firmware with unique serial number (sequential, one at a time)
+2. **Verifies** binary contains correct serial number
+3. **Deploys** via OTA to device on local network (can be parallel)
 4. Reports success/failure per device
+
+**Note:** Compilation is sequential (one device at a time) to prevent race conditions when modifying `src/credentials.h`. OTA upload can happen in parallel.
 
 ## Verify Firmware
 

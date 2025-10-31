@@ -39,6 +39,9 @@ class LocalBulkOTADeployer:
         self.network_range = network_range
         self.ota_port = ota_port
         self.discovered_devices = {}
+        # CRITICAL: Lock to prevent parallel compilation race conditions
+        # Only one device can compile at a time to avoid src/credentials.h conflicts
+        self.compilation_lock = threading.Lock()
         print(f"[OK] Local Bulk OTA Deployer initialized")
         print(f"[NET] Network range: {network_range}")
         print(f"[PORT] OTA port: {ota_port}")
@@ -311,15 +314,30 @@ class LocalBulkOTADeployer:
             return False
 
     def compile_device_firmware(self, serial_number, board_type):
-        """Compile device-specific firmware with unique serial number"""
+        """Compile device-specific firmware with unique serial number
+
+        CRITICAL: This function uses a lock to prevent race conditions when multiple
+        threads try to compile simultaneously. Only one compilation can happen at a time
+        because all compilations modify the same src/credentials.h file.
+        """
         import shutil
         import subprocess
         from pathlib import Path
 
-        print(f"\n{'='*60}")
-        print(f"[COMPILE] Compiling device-specific firmware for: {serial_number}")
-        print(f"[COMPILE] Board type: {board_type}")
-        print(f"{'='*60}")
+        # CRITICAL: Acquire lock before compilation to prevent parallel access to credentials.h
+        with self.compilation_lock:
+            print(f"\n{'='*60}")
+            print(f"[COMPILE] Compiling device-specific firmware for: {serial_number}")
+            print(f"[COMPILE] Board type: {board_type}")
+            print(f"{'='*60}")
+
+            return self._compile_device_firmware_locked(serial_number, board_type)
+
+    def _compile_device_firmware_locked(self, serial_number, board_type):
+        """Internal compilation function (must be called with lock held)"""
+        import shutil
+        import subprocess
+        from pathlib import Path
 
         try:
             # Create temporary credentials file with device-specific serial number
