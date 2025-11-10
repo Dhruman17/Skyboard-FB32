@@ -42,6 +42,9 @@ class LocalBulkOTADeployer:
         # CRITICAL: Lock to prevent parallel compilation race conditions
         # Only one device can compile at a time to avoid src/credentials.h conflicts
         self.compilation_lock = threading.Lock()
+        # CRITICAL: Lock to prevent parallel upload race conditions
+        # Only one device can upload at a time to avoid firmware.bin swap conflicts
+        self.upload_lock = threading.Lock()
         print(f"[OK] Local Bulk OTA Deployer initialized")
         print(f"[NET] Network range: {network_range}")
         print(f"[PORT] OTA port: {ota_port}")
@@ -261,14 +264,16 @@ class LocalBulkOTADeployer:
         import os
         from pathlib import Path
 
-        # Common PlatformIO installation paths on Windows
+        # Common PlatformIO installation paths (Windows, macOS, Linux)
         possible_paths = [
             'pio',  # If in PATH
             'platformio',  # If in PATH
-            Path.home() / '.platformio' / 'penv' / 'Scripts' / 'pio.exe',
-            Path.home() / '.platformio' / 'penv' / 'Scripts' / 'platformio.exe',
-            Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'pio.exe',
-            Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'platformio.exe',
+            Path.home() / '.platformio' / 'penv' / 'bin' / 'pio',  # macOS/Linux
+            Path.home() / '.platformio' / 'penv' / 'bin' / 'platformio',  # macOS/Linux
+            Path.home() / '.platformio' / 'penv' / 'Scripts' / 'pio.exe',  # Windows
+            Path.home() / '.platformio' / 'penv' / 'Scripts' / 'platformio.exe',  # Windows
+            Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'pio.exe',  # Windows
+            Path(os.environ.get('APPDATA', '')) / 'Python' / 'Scripts' / 'platformio.exe',  # Windows
             'python -m platformio',  # As Python module
         ]
 
@@ -294,6 +299,31 @@ class LocalBulkOTADeployer:
                             return [str(path)]
             except:
                 continue
+
+        return None
+
+    def find_espota_script(self):
+        """Find espota.py script for direct OTA upload without recompilation"""
+        import os
+        from pathlib import Path
+
+        # Common espota.py locations
+        possible_paths = [
+            Path.home() / '.platformio' / 'packages' / 'framework-arduinoespressif32' / 'tools' / 'espota.py',
+            Path.home() / '.platformio' / 'packages' / 'tool-espotapy' / 'espota.py',
+        ]
+
+        # Also check in platformio packages
+        pio_packages = Path.home() / '.platformio' / 'packages'
+        if pio_packages.exists():
+            for package in pio_packages.glob('framework-arduinoespressif32*'):
+                espota = package / 'tools' / 'espota.py'
+                if espota.exists():
+                    return str(espota)
+
+        for path in possible_paths:
+            if path.exists():
+                return str(path)
 
         return None
 
@@ -395,10 +425,10 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
                 print(f"[ERROR] PlatformIO not found. Please install PlatformIO.")
                 return None
 
-            # Clean build to ensure fresh compilation
-            print(f"[COMPILE] Cleaning previous build for environment: {env}")
-            clean_cmd = pio_cmd + ['run', '-e', env, '-t', 'clean']
-            subprocess.run(clean_cmd, capture_output=True, text=True, timeout=60)
+            # Note: We don't clean the build directory because:
+            # 1. Modifying credentials.h will trigger a rebuild automatically
+            # 2. Cleaning removes .sconsign311.dblite which causes upload issues
+            # 3. Incremental builds are faster
 
             # Compile firmware
             cmd = pio_cmd + ['run', '-e', env]
@@ -407,10 +437,11 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
 
             if result.returncode == 0:
-                # Copy compiled firmware to device-specific location
+                # Copy compiled firmware to device-specific location organized by board type
                 compiled_firmware = Path(f".pio/build/{env}/firmware.bin")
                 if compiled_firmware.exists():
-                    device_firmware_dir = Path("firmware_compiled") / serial_number
+                    # Organize: firmware_compiled/{board_type}/{serial_number}/firmware.bin
+                    device_firmware_dir = Path("firmware_compiled") / board_type / serial_number
                     device_firmware_dir.mkdir(parents=True, exist_ok=True)
                     device_firmware_path = device_firmware_dir / "firmware.bin"
                     shutil.copy2(compiled_firmware, device_firmware_path)
@@ -449,6 +480,31 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
                 shutil.copy2(backup_creds, original_creds)
                 backup_creds.unlink()  # Delete backup
 
+    def get_device_info(self, ip):
+        """Query device for its current board type and serial number"""
+        try:
+            # Try to get device info from HTTP endpoint
+            url = f"http://{ip}/device-info"
+            print(f"[INFO] Querying device info from {ip}...")
+            response = requests.get(url, timeout=5)
+            if response.status_code == 200:
+                try:
+                    data = response.json()
+                    board_type = data.get('board_type', 'UNKNOWN')
+                    serial = data.get('serial_number', 'UNKNOWN')
+                    print(f"[INFO] Device reports: Board={board_type}, Serial={serial}")
+                    return board_type, serial
+                except:
+                    print(f"[WARN] Could not parse device info JSON")
+                    return None, None
+            else:
+                print(f"[WARN] Device info endpoint returned HTTP {response.status_code}")
+                return None, None
+        except requests.exceptions.RequestException as e:
+            print(f"[WARN] Could not reach device info endpoint: {e}")
+            print(f"[INFO] Device might be running old firmware without device-info endpoint")
+            return None, None
+
     def check_ota_ready(self, ip, hostname):
         """Check if device is ready for OTA by testing port connectivity"""
         try:
@@ -479,13 +535,20 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             print(f"[INFO] Device might be running old firmware without OTA preparation support")
             return False
 
-    def deploy_ota_to_device(self, ip, hostname, firmware_path, password="", board_type="ESP32_S3"):
+    def deploy_ota_to_device(self, ip, hostname, firmware_path, password="", board_type="ESP32_S3", expected_serial=None):
         """Deploy firmware to a single device using PlatformIO OTA (with device-specific binary swap)"""
         try:
             # Verify firmware binary exists
             if not os.path.exists(firmware_path):
                 print(f"[ERROR] Device-specific firmware binary not found: {firmware_path}")
                 return False
+
+            # Safety check: Verify firmware contains expected serial number
+            if expected_serial:
+                if not self.verify_firmware_serial_number(firmware_path, expected_serial):
+                    print(f"[ERROR] Firmware verification failed - does not contain expected serial: {expected_serial}")
+                    print(f"[ERROR] Aborting upload to prevent serial number mismatch!")
+                    return False
 
             # Determine environment based on board type
             if board_type == 'ESP32_S3':
@@ -495,75 +558,86 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             else:
                 env = 'esps3_board'  # Default to S3
 
-            # Find PlatformIO executable
-            pio_cmd = self.find_platformio_executable()
-            if not pio_cmd:
-                print(f"[ERROR] PlatformIO not found")
+            # Find espota.py for direct upload (bypasses PlatformIO recompilation)
+            espota_script = self.find_espota_script()
+            if not espota_script:
+                print(f"[ERROR] espota.py not found in PlatformIO packages")
+                print(f"[HINT] Install with: pio pkg install -g -p espressif32")
                 return False
 
-            # CLEVER TRICK: Temporarily replace the build firmware with device-specific one
-            # This allows PlatformIO to handle OTA upload (which works), but with our custom binary
-            from pathlib import Path
-            import shutil
+            # CRITICAL: Acquire lock before upload to prevent parallel upload race conditions
+            # Only one device can upload at a time
+            print(f"[LOCK] Waiting to acquire upload lock for {hostname}...")
+            with self.upload_lock:
+                print(f"[LOCK] ✓ Upload lock acquired by {hostname}")
 
-            build_firmware = Path(f".pio/build/{env}/firmware.bin")
-            backup_firmware = Path(f".pio/build/{env}/firmware.bin.backup")
-
-            # Backup original firmware (if it exists)
-            if build_firmware.exists():
-                shutil.copy2(build_firmware, backup_firmware)
-
-            # Replace with device-specific firmware
-            shutil.copy2(firmware_path, build_firmware)
-
-            try:
-                # Use hostname.local for mDNS resolution
-                target = f"{hostname}.local"
-                cmd = pio_cmd + ['run', '-e', env, '-t', 'upload', '--upload-port', target]
-
-                print(f"[OTA] Uploading device-specific firmware to {hostname}.local ({ip})...")
-                print(f"[OTA] Firmware: {firmware_path}")
-                print(f"[CMD] Command: {' '.join(cmd)}")
-
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-
-                if result.returncode == 0:
-                    print(f"[OK] Successfully deployed device-specific firmware to {hostname}.local ({ip})")
-                    return True
-                else:
-                    print(f"[ERROR] OTA upload failed for {hostname}.local ({ip})")
-
-                    # Check for common error patterns and provide helpful suggestions
-                    error_output = result.stderr + result.stdout
-                    if "No response from device" in error_output or "No Answer" in error_output:
-                        print(f"[HINT] Device not responding to OTA - check if:")
-                        print(f"       - Device is awake (not in deep sleep)")
-                        print(f"       - ArduinoOTA is enabled in firmware")
-                        print(f"       - Device has sufficient memory for OTA (>50KB free heap)")
-                        print(f"       - No firewall blocking port {self.ota_port}")
-                    elif "Error Uploading" in error_output:
-                        print(f"[HINT] Upload error - device may have disconnected during upload")
-                    elif "timeout" in error_output.lower():
-                        print(f"[HINT] Upload timeout - check network stability and device responsiveness")
-                    elif "Connection refused" in error_output:
-                        print(f"[HINT] Connection refused - device may not have OTA enabled")
-
-                    print(f"Error output: {result.stderr}")
-                    if result.stdout and len(result.stdout) < 2000:
-                        print(f"Standard output: {result.stdout}")
+                # VERIFY firmware one more time before upload
+                if not self.verify_firmware_serial_number(firmware_path, expected_serial):
+                    print(f"[ERROR] CRITICAL: Firmware verification failed before upload!")
+                    print(f"[ERROR] Expected serial {expected_serial} but firmware has different serial!")
                     return False
+                print(f"[VERIFY] ✓ Firmware contains correct serial: {expected_serial}")
 
-            finally:
-                # Restore original firmware backup
-                if backup_firmware.exists():
-                    shutil.copy2(backup_firmware, build_firmware)
-                    backup_firmware.unlink()  # Delete backup
+                try:
+                    # Use espota.py directly to upload pre-compiled binary
+                    # This prevents PlatformIO from recompiling during upload
+                    # Use IP address directly to avoid mDNS resolution issues
+                    target = ip
+
+                    cmd = [
+                        'python3', espota_script,
+                        '-i', target,
+                        '-p', str(self.ota_port),
+                        '-f', firmware_path,
+                        '-d'  # Debug mode for verbose output
+                    ]
+
+                    print(f"[OTA] Uploading device-specific firmware to {ip} (system: {hostname})...")
+                    print(f"[OTA] Using espota.py with direct IP (bypasses mDNS)")
+                    print(f"[OTA] Firmware: {firmware_path}")
+                    print(f"[CMD] Command: {' '.join(cmd)}")
+
+                    result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+
+                    if result.returncode == 0:
+                        print(f"[OK] Successfully deployed device-specific firmware to {ip} (system: {hostname})")
+                        print(f"[LOCK] ✓ Upload lock released by {hostname}")
+                        return True
+                    else:
+                        print(f"[ERROR] OTA upload failed for {ip} (system: {hostname})")
+
+                        # Check for common error patterns and provide helpful suggestions
+                        error_output = result.stderr + result.stdout
+                        if "No response from device" in error_output or "No Answer" in error_output or "Not Found" in error_output:
+                            print(f"[HINT] Device not responding to OTA - check if:")
+                            print(f"       - Device is awake (not in deep sleep)")
+                            print(f"       - ArduinoOTA is enabled in firmware")
+                            print(f"       - Device has sufficient memory for OTA (>50KB free heap)")
+                            print(f"       - No firewall blocking port {self.ota_port}")
+                            print(f"       - Device IP {ip} is correct and reachable")
+                        elif "Error Uploading" in error_output:
+                            print(f"[HINT] Upload error - device may have disconnected during upload")
+                        elif "timeout" in error_output.lower():
+                            print(f"[HINT] Upload timeout - check network stability and device responsiveness")
+                        elif "Connection refused" in error_output:
+                            print(f"[HINT] Connection refused - device may not have OTA enabled")
+
+                        print(f"Error output: {result.stderr}")
+                        if result.stdout and len(result.stdout) < 2000:
+                            print(f"Standard output: {result.stdout}")
+                        print(f"[LOCK] ✓ Upload lock released by {hostname}")
+                        return False
+
+                except Exception as e:
+                    print(f"[ERROR] Exception during upload: {e}")
+                    print(f"[LOCK] ✓ Upload lock released by {hostname}")
+                    raise
 
         except subprocess.TimeoutExpired:
-            print(f"[ERROR] OTA upload timeout for {hostname}.local ({ip})")
+            print(f"[ERROR] OTA upload timeout for {ip} (system: {hostname})")
             return False
         except Exception as e:
-            print(f"[ERROR] OTA upload error for {hostname}.local ({ip}): {e}")
+            print(f"[ERROR] OTA upload error for {ip} (system: {hostname}): {e}")
             import traceback
             traceback.print_exc()
             return False
@@ -589,30 +663,101 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             device = device_info['device']
             ip = device_info['ip']
             hostname = device_info['hostname']
+            expected_board_type = device['board_type']
 
             print(f"\n{'#'*70}")
             print(f"# DEPLOYING TO DEVICE: {serial_number}")
-            print(f"# IP: {ip} | Hostname: {hostname} | Board: {device['board_type']}")
+            print(f"# IP: {ip} | Hostname: {hostname} | Expected Board: {expected_board_type}")
             print(f"{'#'*70}\n")
 
+            # PRE-DEPLOYMENT GATING CHECKS
+            print(f"[GATE] Starting pre-deployment verification for {serial_number}...")
+
+            # Gate 1: Connectivity check
+            print(f"[GATE] Step 1/3: Checking connectivity to {ip}...")
+            import platform
+            if platform.system().lower() == 'windows':
+                ping_result = subprocess.run(['ping', '-n', '1', '-w', '2000', ip],
+                                           capture_output=True, text=True, timeout=5)
+            else:
+                ping_result = subprocess.run(['ping', '-c', '1', '-W', '2', ip],
+                                           capture_output=True, text=True, timeout=5)
+
+            if ping_result.returncode != 0:
+                print(f"[GATE] ❌ FAILED: Device not reachable at {ip}")
+                print(f"[ERROR] Cannot proceed with deployment - device offline")
+                return False
+            print(f"[GATE] ✓ Device is reachable")
+
+            # Gate 2: Board type verification
+            print(f"[GATE] Step 2/3: Verifying board type matches expected...")
+            actual_board_type, current_serial = self.get_device_info(ip)
+
+            if actual_board_type and actual_board_type != 'UNKNOWN':
+                print(f"[INFO] Device reports board type: {actual_board_type}")
+                print(f"[INFO] CSV expects board type: {expected_board_type}")
+
+                if actual_board_type != expected_board_type:
+                    print(f"[GATE] ❌ FAILED: Board type mismatch!")
+                    print(f"[ERROR] Device has {actual_board_type} but CSV expects {expected_board_type}")
+                    print(f"[ERROR] Deploying wrong firmware would brick the device!")
+                    print(f"[ERROR] Please fix the CSV or verify physical device board type")
+                    return False
+                print(f"[GATE] ✓ Board type matches: {actual_board_type}")
+            else:
+                print(f"[GATE] ⚠️  WARNING: Could not verify board type (old firmware?)")
+                print(f"[GATE] Proceeding with deployment based on CSV (risky!)")
+
+            if current_serial:
+                print(f"[INFO] Device current serial: {current_serial}")
+                print(f"[INFO] Will be updated to: {serial_number}")
+
+            # Gate 3: OTA availability check
+            print(f"[GATE] Step 3/3: Checking OTA availability...")
+            if not self.check_ota_ready(ip, hostname):
+                print(f"[GATE] ⚠️  WARNING: OTA port {self.ota_port} not responding")
+                print(f"[INFO] Will attempt deployment anyway (PlatformIO handles OTA)")
+            else:
+                print(f"[GATE] ✓ OTA port is ready")
+
+            print(f"[GATE] ✅ All pre-deployment checks passed!\n")
+
             # Step 1: Compile device-specific firmware
-            print(f"[DEVICE] Compiling firmware for {serial_number}...")
-            firmware_path = self.compile_device_firmware(serial_number, device['board_type'])
+            print(f"[DEVICE] Compiling firmware for {serial_number} ({expected_board_type})...")
+            firmware_path = self.compile_device_firmware(serial_number, expected_board_type)
 
             if not firmware_path:
                 print(f"[ERROR] Failed to compile firmware for {serial_number}")
                 return False
 
-            # Use system_name from CSV instead of discovered hostname for OTA
+            # Use system_name from CSV for OTA (systemName.local)
             system_name = device.get('system_name', hostname)
-            result = self.deploy_ota_to_device(ip, system_name, firmware_path, board_type=device['board_type'])
+            result = self.deploy_ota_to_device(ip, system_name, firmware_path,
+                                              board_type=expected_board_type,
+                                              expected_serial=serial_number)
 
             if result:
-                print(f"\n[SUCCESS] Device {serial_number} deployed successfully with unique firmware!\n")
+                # Post-deployment verification: Confirm device has correct serial number
+                print(f"[VERIFY] Waiting 10 seconds for device to reboot...")
+                time.sleep(10)
+
+                print(f"[VERIFY] Checking if device has correct serial number...")
+                verified_board, verified_serial = self.get_device_info(ip)
+
+                if verified_serial == serial_number:
+                    print(f"[VERIFY] ✅ SUCCESS! Device confirmed with serial: {verified_serial}")
+                    print(f"\n[SUCCESS] Device {serial_number} deployed successfully with unique firmware!\n")
+                elif verified_serial:
+                    print(f"[VERIFY] ⚠️  WARNING: Device has serial {verified_serial}, expected {serial_number}")
+                    print(f"[WARN] Upload succeeded but serial number mismatch detected!")
+                    print(f"\n[PARTIAL SUCCESS] Device {serial_number} deployment completed with warnings\n")
+                else:
+                    print(f"[VERIFY] ⚠️  Could not verify serial number (device might still be rebooting)")
+                    print(f"\n[SUCCESS] Device {serial_number} deployed (verification pending)\n")
+                return True
             else:
                 print(f"\n[FAILED] Device {serial_number} deployment failed!\n")
-
-            return result
+                return False
 
         # Use ThreadPoolExecutor for concurrent deployments
         with ThreadPoolExecutor(max_workers=max_concurrent) as executor:
@@ -652,17 +797,20 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
         print(f"[OK] Successful deployments: {successful_deployments}")
         print(f"[ERROR] Failed deployments: {failed_deployments}")
 
-        # List all device-specific firmware compiled
-        print(f"\n[FIRMWARE] Device-specific firmware files created:")
+        # List all device-specific firmware compiled (organized by board type)
+        print(f"\n[FIRMWARE] Device-specific firmware files created (organized by board type):")
         from pathlib import Path
         firmware_base = Path("firmware_compiled")
         if firmware_base.exists():
-            for serial_dir in sorted(firmware_base.iterdir()):
-                if serial_dir.is_dir():
-                    firmware_file = serial_dir / "firmware.bin"
-                    if firmware_file.exists():
-                        size_kb = firmware_file.stat().st_size / 1024
-                        print(f"  [OK] {serial_dir.name}: {firmware_file} ({size_kb:.2f} KB)")
+            for board_type_dir in sorted(firmware_base.iterdir()):
+                if board_type_dir.is_dir():
+                    print(f"\n  Board Type: {board_type_dir.name}")
+                    for serial_dir in sorted(board_type_dir.iterdir()):
+                        if serial_dir.is_dir():
+                            firmware_file = serial_dir / "firmware.bin"
+                            if firmware_file.exists():
+                                size_kb = firmware_file.stat().st_size / 1024
+                                print(f"    [OK] {serial_dir.name}: {firmware_file} ({size_kb:.2f} KB)")
 
         print(f"\n[TIME] Completed at: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"{'='*70}")

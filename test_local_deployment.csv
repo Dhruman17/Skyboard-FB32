@@ -1,4 +1,6 @@
 serial_number,board_type,target_version,deployment_group,notes,system_name,ip_address
-123456789123456789,ESP32_S3,1.57,testing,4-port S3 new board system,THQ,10.0.0.78
-TL1044847129,ESP32_THREE_PORT,1.575,testing,New board system,BC3,192.168.68.136
-TL1031140107,ESP32_S3,1.575,testing,S3 board system,BC4,192.168.68.224
+HQK1234522,ESP32_S3,1.575,testing,New board system,BC72,192.168.68.109
+HQK1234521,ESP32_S3,1.575,testing,S3 board system,BC73,192.168.68.108
+HQK1234524,ESP32_THREE_PORT,1.575,testing,New board system,BC74,192.168.68.200
+HQK1234525,ESP32_THREE_PORT,1.575,testing,S3 board system,BC75,192.168.68.201
+HQK1234526,ESP32_THREE_PORT,1.575,testing,New board system,BC76,192.168.68.204
