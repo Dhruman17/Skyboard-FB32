@@ -5,7 +5,7 @@
 #include <time.h>
 
 // === Firmware Version ===
-const double firmware_version = 1.59; // Updated EC calibration to degree 3 polynomial
+const double firmware_version = 1.6; // Updated EC calibration to degree 3 polynomial
 
 // === Select Board Type via build_flags ===
 // Use -DESP32_THREE_PORT or -DESP32_S3 in platformio.ini
@@ -76,7 +76,7 @@ bool isConnected = false;
 #ifdef ESP32_S3
 bool ENABLE_I2C_SENSORS = true;   // Enable by default for S3 boards
 #else
-bool ENABLE_I2C_SENSORS = false;  // default off for other boards
+bool ENABLE_I2C_SENSORS = true;  // default off for other boards
 #endif
 
 // === Mutex Declarations ===

@@ -447,6 +447,35 @@ void printPartitionInfo()
     Serial.println(running->label);
 }
 
+void updateSystemIPAddress()
+{
+    if (systemPath != "")
+    {
+        String documentPath = systemPath;
+        FirebaseJson content;
+
+        // Get current IP address
+        String ipAddress = WiFi.localIP().toString();
+
+        // Store IP address in Firestore
+        content.set("fields/ipAddress/stringValue", ipAddress);
+
+        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "ipAddress"))
+        {
+            Serial.println("✅ IP address updated in Firestore: " + ipAddress);
+        }
+        else
+        {
+            Serial.println("❌ Failed to update IP address in Firestore.");
+            Serial.println(fbdo.errorReason());
+        }
+    }
+    else
+    {
+        Serial.println("⚠️ System path is not defined. Cannot update IP address.");
+    }
+}
+
 void updateSystemVersion()
 {
     if (systemPath != "")
@@ -842,6 +871,7 @@ void sendHeartbeat()
         fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
         fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
         updateSystemVersion();
+        updateSystemIPAddress(); // Store IP address in Firebase for easy tracking
         Serial.println("➡️ Setting up sensors...");
         // === Pin setup ===
         for (int i = 0; i < NUMBER_OF_UNITS; i++)
