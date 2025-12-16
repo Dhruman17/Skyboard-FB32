@@ -10,6 +10,15 @@ const double firmware_version = 1.6; // Updated EC calibration to degree 3 polyn
 // === Select Board Type via build_flags ===
 // Use -DESP32_THREE_PORT or -DESP32_S3 in platformio.ini
 
+// === Board Type String for Firebase ===
+#ifdef ESP32_THREE_PORT
+  const String BOARD_TYPE = "3Port";
+#elif defined(ESP32_S3)
+  const String BOARD_TYPE = "4Port";
+#else
+  const String BOARD_TYPE = "Unknown";
+#endif
+
 // === Pin Definitions ===
 #define NUMBER_OF_UNITS 3
 

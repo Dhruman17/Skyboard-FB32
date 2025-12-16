@@ -306,6 +306,16 @@ void readECSensorValue()
         float calibratedECs[NUMBER_OF_UNITS];
         int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
 
+        // Ensure MCP3021 is initialized (important after OTA restart)
+        static bool adcInitialized = false;
+        if (!adcInitialized)
+        {
+            mcp3021.init(&Wire);
+            delay(100); // Allow ADC to stabilize
+            adcInitialized = true;
+            Serial.println("🔧 MCP3021 ADC re-initialized for EC sensors");
+        }
+
         for (int i = 0; i < NUMBER_OF_UNITS; i++)
         {
             // Select channel and allow time for switch to complete
@@ -314,6 +324,33 @@ void readECSensorValue()
 
             // Read ADC value
             uint16_t adcValue = mcp3021.read();
+
+            // Check for I2C communication error (0xFFFF indicates failure)
+            if (adcValue == 0xFFFF)
+            {
+                Serial.print("❌ EC sensor ");
+                Serial.print(i + 1);
+                Serial.println(" | I2C communication failure - sensor not responding");
+                Serial.println("   Attempting to re-initialize ADC...");
+
+                // Try to recover by re-initializing the ADC
+                mcp3021.init(&Wire);
+                delay(100);
+                tcaselect(tcaChannels[i]);
+                delay(50);
+                adcValue = mcp3021.read();
+
+                // If still failing, skip this sensor
+                if (adcValue == 0xFFFF)
+                {
+                    Serial.println("   Recovery failed - skipping this sensor");
+                    continue;
+                }
+                else
+                {
+                    Serial.println("   ✅ Recovery successful!");
+                }
+            }
 
             // Convert to voltage (in volts) - matching ec_calibration.cpp implementation
             float voltage = mcp3021.toVoltage(adcValue, 3300) / 1000.0;
@@ -325,9 +362,47 @@ void readECSensorValue()
             float voltage_sq = voltage * voltage;
             float voltage_cu = voltage_sq * voltage;
             float calibratedEC = -0.049298 + (1.124305 * voltage) + (-0.425436 * voltage_sq) + (0.161499 * voltage_cu);
+
+            // Clamp EC to valid range (0-3.3) for hydroponics solutions
+            // This ensures values stay within practical measurement range
+            // while preserving the ±0.0346 EC calibration error tolerance
+            if (calibratedEC < 0.0)
+            {
+                Serial.print("⚠️ EC sensor ");
+                Serial.print(i + 1);
+                Serial.print(" | Raw value ");
+                Serial.print(calibratedEC);
+                Serial.println(" EC below 0, clamping to 0.0");
+                calibratedEC = 0.0;
+            }
+            else if (calibratedEC > 3.3)
+            {
+                Serial.print("⚠️ EC sensor ");
+                Serial.print(i + 1);
+                Serial.print(" | Raw value ");
+                Serial.print(calibratedEC);
+                Serial.println(" EC above 3.3, clamping to 3.3");
+                calibratedEC = 3.3;
+            }
+
+            // Sanity check for extreme sensor faults (detects hardware issues)
+            // If raw polynomial output is extremely out of range, skip the reading
+            float rawEC = -0.049298 + (1.124305 * voltage) + (-0.425436 * voltage_sq) + (0.161499 * voltage_cu);
+            if (rawEC < -0.5 || rawEC > 10.0)
+            {
+                Serial.print("❌ EC sensor ");
+                Serial.print(i + 1);
+                Serial.print(" | Extreme out of range reading: ");
+                Serial.print(rawEC);
+                Serial.println(" EC - possible sensor fault or disconnection");
+
+                // Skip Firebase update for extreme sensor faults
+                continue;
+            }
+
             calibratedECs[i] = calibratedEC;
 
-            Serial.print("EC sensor ");
+            Serial.print("✅ EC sensor ");
             Serial.print(i + 1);
             Serial.print(" | Voltage: ");
             Serial.print(voltage, 4);
@@ -336,7 +411,16 @@ void readECSensorValue()
 
             if (!unitNames[i].isEmpty())
             {
+                Serial.print("   Sending to Firebase (Unit: ");
+                Serial.print(unitNames[i]);
+                Serial.println(")...");
                 sendUnitECValueToFirebase(&fbdo, unitNames[i], calibratedEC);
+            }
+            else
+            {
+                Serial.print("   ⚠️ Unit name is empty for sensor ");
+                Serial.print(i + 1);
+                Serial.println(" - skipping Firebase update");
             }
         }
         xSemaphoreGive(sensorMutex);
@@ -493,9 +577,13 @@ void updateSystemVersion()
         // Store firmware URL in Firestore
         content.set("fields/firmware_url/stringValue", firmwareUrl);
 
-        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version,firmware_url"))
+        // Store board type in Firestore
+        content.set("fields/boardType/stringValue", BOARD_TYPE);
+
+        if (Firebase.Firestore.patchDocument(&fbdo, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "version,firmware_url,boardType"))
         {
-            Serial.println("System version and firmware URL updated successfully in Firestore.");
+            Serial.println("System version, firmware URL, and board type updated successfully in Firestore.");
+            Serial.println("Board Type: " + BOARD_TYPE);
         }
         else
         {

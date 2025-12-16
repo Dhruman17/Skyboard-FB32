@@ -214,14 +214,32 @@ Serial.printf("➡️ unitState for %s: %s\n", unitNames[i].c_str(), unitsEnable
 
 void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, float ecValue)
 {
+    // Check if Firebase is ready before attempting to send
+    if (!Firebase.ready())
+    {
+        Serial.println("⚠️ Firebase not ready - cannot send EC value for " + unitName);
+        return;
+    }
+
+    if (systemPath.isEmpty())
+    {
+        Serial.println("⚠️ systemPath not set - cannot send EC value for " + unitName);
+        return;
+    }
+
     Serial.println("[Mutex] Taking firebaseMutex...");
 
     if (xSemaphoreTake(firebaseMutex, pdMS_TO_TICKS(10000))) { // 10 second timeout
-        
+
     String documentPath;
     documentPath.reserve(100);
     documentPath = systemPath + "/units/";
     documentPath += unitName;
+
+    Serial.print("[DEBUG] EC Firebase path: ");
+    Serial.println(documentPath);
+    Serial.print("[DEBUG] EC value to send: ");
+    Serial.println(ecValue);
 
     FirebaseJson content;
     content.set("fields/EC_Sensor_Value/doubleValue", ecValue);
@@ -242,6 +260,10 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
       xSemaphoreGive(firebaseMutex);
       Serial.println("[Mutex] Released firebaseMutex.");
 
+    }
+    else
+    {
+        Serial.println("❌ Failed to acquire firebaseMutex for EC update (timeout)");
     }
 }
 void sendUnitCapValueToFirebase(FirebaseData *pFBDO, const String &unitName, float waterLevel)
