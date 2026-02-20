@@ -44,6 +44,14 @@ int randomDelay;
 int connectionOffset;
 bool wifiConnected = false; // Track Wi-Fi connection status
 bool configPortalRunning = false;
+bool offlineModeActive = false;
+unsigned long offlineModeStartMillis = 0;
+unsigned long lastOfflineReconnectAttemptMillis = 0;
+
+const unsigned long OFFLINE_LIGHT_ON_DURATION_MS = 4UL * 60UL * 60UL * 1000UL; // 4 hours
+const long OFFLINE_ATOMIZER_ON_INTERVAL_MS = 200000;  // 200 seconds
+const long OFFLINE_ATOMIZER_OFF_INTERVAL_MS = 5000;   // 5 seconds
+const unsigned long OFFLINE_REBOOT_INTERVAL_MS = 15UL * 60UL * 1000UL; // 15 minutes
 
 WiFiManager wm;
 
@@ -67,6 +75,17 @@ void initializeTime()
 // Modify systemLights to consider Light Master Switch and Time Cycle Switch
 void systemLights()
 {
+    if (offlineModeActive)
+    {
+        bool shouldKeepLightsOn = (millis() - offlineModeStartMillis) < OFFLINE_LIGHT_ON_DURATION_MS;
+        if (lightState != shouldKeepLightsOn)
+        {
+            digitalWrite(SYSTEM_LIGHTS_PIN, shouldKeepLightsOn ? HIGH : LOW);
+            lightState = shouldKeepLightsOn;
+        }
+        return;
+    }
+
     time_t now;
     struct tm *currentTime;
     time(&now);
@@ -497,9 +516,12 @@ void updateUnits()
 
     for (int i = 0; i < NUMBER_OF_UNITS; i++)
     {
-        if (unitsEnabled[i])
+        bool unitShouldRun = offlineModeActive ? true : unitsEnabled[i];
+        if (unitShouldRun)
         {
-            if (currentMillis - previousMillis[i] >= (atomStates[i] ? atomizerOnIntervals[i] : atomizerOffIntervals[i]))
+            long effectiveOnInterval = offlineModeActive ? OFFLINE_ATOMIZER_ON_INTERVAL_MS : atomizerOnIntervals[i];
+            long effectiveOffInterval = offlineModeActive ? OFFLINE_ATOMIZER_OFF_INTERVAL_MS : atomizerOffIntervals[i];
+            if (currentMillis - previousMillis[i] >= (atomStates[i] ? effectiveOnInterval : effectiveOffInterval))
             {
                 // if more time has passed than the (atomizer on interval if the atomizer state is on, or atomizer off interval if the atomizer state is off)
                 atomStates[i] = !atomStates[i];                                   // Record the atomizer state as the opposite
@@ -521,6 +543,12 @@ void updateUnits()
 
                 previousMillis[i] = currentMillis; // reset the time counter
             }
+        }
+        else if (atomStates[i])
+        {
+            atomStates[i] = false;
+            ledcWrite(i, PWM_ATOMIZER_OFF);
+            previousMillis[i] = currentMillis;
         }
     }
 }
@@ -908,15 +936,21 @@ void sendHeartbeat()
         wm.setConfigPortalTimeout(60);
         if (!wm.autoConnect(setupWifiName.c_str()))
         {
-            Serial.println(" WiFiManager failed. Restarting...");
-            delay(3000);
-            ESP.restart();
+            Serial.println("⚠️ WiFiManager failed. Starting in offline fallback mode.");
+            wifiConnected = false;
+            offlineModeActive = true;
+            offlineModeStartMillis = millis();
         }
-        Serial.println("WiFi connected!");
-        Serial.print("IP: ");
-        Serial.println(WiFi.localIP());
-        Serial.print("DNS: ");
-        Serial.println(WiFi.dnsIP());
+        else
+        {
+            wifiConnected = true;
+            offlineModeActive = false;
+            Serial.println("WiFi connected!");
+            Serial.print("IP: ");
+            Serial.println(WiFi.localIP());
+            Serial.print("DNS: ");
+            Serial.println(WiFi.dnsIP());
+        }
         startupTime = millis();
         lastRestartMillis = millis();
 
@@ -932,6 +966,9 @@ void sendHeartbeat()
         else
         {
             Serial.println("WiFi not connected.");
+            wifiConnected = false;
+            offlineModeActive = true;
+            offlineModeStartMillis = millis();
         }
     initializeTime(); // NTP sync
         // 🔹 Add a random stagger delay (1–10 seconds)
@@ -939,13 +976,16 @@ void sendHeartbeat()
     Serial.printf("⏳ Random startup delay: %d ms\n", randomDelayMs);
     delay(randomDelayMs);
 
-    Serial.println("➡️ Next: Starting Firebase...");
-    // === Initialize Firebase ===
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
     auth.user.password = USER_PASSWORD;
-    Firebase.begin(&config, &auth);
-    Firebase.reconnectWiFi(true);
+
+    if (wifiConnected)
+    {
+        Serial.println("➡️ Next: Starting Firebase...");
+        // === Initialize Firebase ===
+        Firebase.begin(&config, &auth);
+        Firebase.reconnectWiFi(true);
 
         // Wait for Firebase to be ready (with watchdog resets)
         esp_task_wdt_reset();
@@ -960,6 +1000,11 @@ void sendHeartbeat()
         fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
         updateSystemVersion();
         updateSystemIPAddress(); // Store IP address in Firebase for easy tracking
+    }
+    else
+    {
+        Serial.println("➡️ Skipping Firebase init because Wi-Fi is unavailable.");
+    }
         Serial.println("➡️ Setting up sensors...");
         // === Pin setup ===
         for (int i = 0; i < NUMBER_OF_UNITS; i++)
@@ -1030,8 +1075,52 @@ void sendHeartbeat()
     void loop()
     {
         ArduinoOTA.handle();
+
+        bool currentlyConnected = (WiFi.status() == WL_CONNECTED);
+        if (currentlyConnected)
+        {
+            if (!wifiConnected)
+            {
+                Serial.println("✅ Wi-Fi reconnected. Exiting offline fallback mode.");
+                wifiConnected = true;
+                offlineModeActive = false;
+                initializeTime();
+                checkFirebaseReconnect(&config, &auth);
+            }
+        }
+        else
+        {
+            if (wifiConnected)
+            {
+                Serial.println("📡 Wi-Fi lost. Entering offline fallback mode.");
+                wifiConnected = false;
+                offlineModeActive = true;
+                offlineModeStartMillis = millis();
+            }
+            else if (!offlineModeActive)
+            {
+                offlineModeActive = true;
+                offlineModeStartMillis = millis();
+            }
+
+            if (millis() - lastOfflineReconnectAttemptMillis >= WIFI_RECONNECT_INTERVAL)
+            {
+                Serial.println("🔁 Offline mode: attempting non-blocking Wi-Fi reconnect...");
+                WiFi.disconnect();
+                WiFi.begin();
+                lastOfflineReconnectAttemptMillis = millis();
+            }
+
+            if ((millis() - offlineModeStartMillis) >= OFFLINE_REBOOT_INTERVAL_MS)
+            {
+                Serial.println("🔁 Wi-Fi still offline for 15 minutes. Restarting device...");
+                delay(1000);
+                ESP.restart();
+            }
+        }
+
+        systemLights();
         updateUnits();
-        checkWiFiFailsafe();
 
         // Reset watchdog in main loop
         esp_task_wdt_reset();
@@ -1079,8 +1168,6 @@ void sendHeartbeat()
                     fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
                     Serial.println(unitsEnabled[0]);
                     sendHeartbeat();
-
-                    systemLights();
                     previousHeartbeatMillis = currentMillis;
 
                     // Only read sensors during regular intervals if all atomizers are OFF
@@ -1126,31 +1213,7 @@ void sendHeartbeat()
         }
         else
         {
-            Serial.println("Wi-Fi disconnected. Retrying...");
-            unsigned long wifiTimeoutCheck = millis();
-            unsigned long currentMillisWiFi;
-
-            while (WiFi.status() != WL_CONNECTED)
-            {
-                currentMillisWiFi = millis();
-                delay(1000); // Retry every second
-                esp_task_wdt_reset(); // Reset watchdog during WiFi reconnection
-                if (!wm.autoConnect(setupWifiName.c_str()))
-                {
-                    Serial.println("Failed to configure WiFi. Restarting...");
-                    delay(3000);
-                    ESP.restart();
-                }
-            }
-
-            Serial.println("Wi-Fi reconnected. Reinitializing Firebase...");
-            config.api_key = API_KEY;
-            auth.user.email = USER_EMAIL;
-            auth.user.password = USER_PASSWORD;
-            Firebase.begin(&config, &auth);
-            Firebase.reconnectWiFi(true);
-
-        initializeTime(); // Reinitialize time after reconnection
+            delay(50);
+        }
     }
-}
          
