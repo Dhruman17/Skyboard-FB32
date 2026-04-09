@@ -334,6 +334,15 @@ void readECSensorValue()
             Serial.print(" V | Calibrated EC: ");
             Serial.println(calibratedEC);
 
+            const bool plausibleEc = !isnan(calibratedEC) && calibratedEC >= 0.0f && calibratedEC <= 20.0f;
+            if (!plausibleEc)
+            {
+                Serial.print("EC sensor ");
+                Serial.print(i + 1);
+                Serial.println(" reading out of expected range - skipping Firebase update");
+                continue;
+            }
+
             if (!unitNames[i].isEmpty())
             {
                 sendUnitECValueToFirebase(&fbdo, unitNames[i], calibratedEC);

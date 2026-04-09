@@ -226,8 +226,17 @@ void sendUnitECValueToFirebase(FirebaseData *pFBDO, const String &unitName, floa
     FirebaseJson content;
     content.set("fields/EC_Sensor_Value/doubleValue", ecValue);
     content.set("fields/EC_Updated/timestampValue", formatTimestamp());
+    // Backward-compatible aliases for clients that still read camelCase keys.
+    content.set("fields/ecSensorValue/doubleValue", ecValue);
+    content.set("fields/ecUpdated/timestampValue", formatTimestamp());
 
-    if (Firebase.Firestore.patchDocument(pFBDO, FIREBASE_PROJECT_ID, "", documentPath.c_str(), content.raw(), "EC_Sensor_Value, EC_Updated"))
+    if (Firebase.Firestore.patchDocument(
+            pFBDO,
+            FIREBASE_PROJECT_ID,
+            "",
+            documentPath.c_str(),
+            content.raw(),
+            "EC_Sensor_Value,EC_Updated,ecSensorValue,ecUpdated"))
     {
         Serial.println("EC value updated for " + unitName);
         
