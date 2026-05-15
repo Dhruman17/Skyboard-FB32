@@ -66,6 +66,22 @@ double temp;
 SemaphoreHandle_t sensorMutex = xSemaphoreCreateMutex();
 SemaphoreHandle_t firebaseMutex = xSemaphoreCreateMutex();
 
+bool isI2CDevicePresentOnSelectedChannel(uint8_t address)
+{
+    Wire.beginTransmission(address);
+    return (Wire.endTransmission() == 0);
+}
+
+void reinitializeI2CBus()
+{
+    Wire.end();
+    delay(10);
+    Wire.begin(SDA, SCL);
+    Wire.setClock(100000);
+    Wire.setTimeOut(50);
+    mcp3021.init(&Wire);
+}
+
 // Function to initialize NTP
 void initializeTime()
 {
@@ -322,7 +338,6 @@ void readECSensorValue()
 {
     if (xSemaphoreTake(sensorMutex, pdMS_TO_TICKS(5000))) // 5 second timeout for consistency
     {
-        float calibratedECs[NUMBER_OF_UNITS];
         int tcaChannels[NUMBER_OF_UNITS] = {1, 3, 5};
 
         // Ensure MCP3021 is initialized (important after OTA restart)
@@ -339,28 +354,40 @@ void readECSensorValue()
         {
             // Select channel and allow time for switch to complete
             tcaselect(tcaChannels[i]);
-            delay(50);  // Allow channel switch to complete (matching ec_calibration.cpp)
+            delay(50); // Allow channel switch to complete (matching ec_calibration.cpp)
+
+            if (!isI2CDevicePresentOnSelectedChannel(EC_ADC_I2C_ADDR))
+            {
+                Serial.print("❌ EC sensor ");
+                Serial.print(i + 1);
+                Serial.print(" | No ADC detected at 0x");
+                Serial.print(EC_ADC_I2C_ADDR, HEX);
+                Serial.print(" on TCA channel ");
+                Serial.println(tcaChannels[i]);
+                continue;
+            }
 
             // Read ADC value
             uint16_t adcValue = mcp3021.read();
 
-            // Check for I2C communication error (0xFFFF indicates failure)
-            if (adcValue == 0xFFFF)
+            // Check for I2C communication/read format errors
+            if (adcValue == 0xFFFF || adcValue > 1023)
             {
                 Serial.print("❌ EC sensor ");
                 Serial.print(i + 1);
-                Serial.println(" | I2C communication failure - sensor not responding");
-                Serial.println("   Attempting to re-initialize ADC...");
+                Serial.print(" | I2C read failure (adc=");
+                Serial.print(adcValue);
+                Serial.println("). Attempting bus recovery...");
 
                 // Try to recover by re-initializing the ADC
-                mcp3021.init(&Wire);
-                delay(100);
+                reinitializeI2CBus();
+                delay(30);
                 tcaselect(tcaChannels[i]);
                 delay(50);
                 adcValue = mcp3021.read();
 
                 // If still failing, skip this sensor
-                if (adcValue == 0xFFFF)
+                if (adcValue == 0xFFFF || adcValue > 1023)
                 {
                     Serial.println("   Recovery failed - skipping this sensor");
                     continue;
@@ -418,8 +445,6 @@ void readECSensorValue()
                 // Skip Firebase update for extreme sensor faults
                 continue;
             }
-
-            calibratedECs[i] = calibratedEC;
 
             Serial.print("✅ EC sensor ");
             Serial.print(i + 1);
@@ -898,6 +923,21 @@ void sendHeartbeat()
         if (count == 0)
             Serial.println("❌ No I2C devices found!");
     }
+
+    void scanECAdcAcrossMuxChannels()
+    {
+        Serial.println("🔍 Checking EC ADC presence (0x4D) across TCA channels...");
+        for (uint8_t ch = 0; ch < 8; ch++)
+        {
+            tcaselect(ch);
+            delay(10);
+            if (isI2CDevicePresentOnSelectedChannel(EC_ADC_I2C_ADDR))
+            {
+                Serial.print("✅ EC ADC found on TCA channel ");
+                Serial.println(ch);
+            }
+        }
+    }
     unsigned long lastRestartMillis = 0;                             // Track last restart time
     const unsigned long DAILY_RESTART_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours in milliseconds (daily restart)
 
@@ -1061,12 +1101,15 @@ void sendHeartbeat()
         updateSystemVersion();
         // === I2C Init (must come BEFORE any sensor init or scan) ===
         Wire.begin(SDA, SCL); // Initialize the I2C bus only ONCE
+        Wire.setClock(100000);
+        Wire.setTimeOut(50);
         mcp3021.init(&Wire);  // MCP3021 ADC init
         Serial.println("✅ Serial ready. Starting I2C init...");
         delay(200); // Give USB host time to open terminal
 
         // === Safe I2C Scan (optional but now safe) ===
         scanI2C(); // make sure it uses sensorMutex internally
+        scanECAdcAcrossMuxChannels();
         Serial.println("➡️ Setup done.");
         // === Sensor initialization AFTER I2C is ready ===
         // sensors::initSensors(); // Now it's safe to talk to sensors

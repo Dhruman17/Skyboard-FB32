@@ -5,7 +5,7 @@
 #include <time.h>
 
 // === Firmware Version ===
-const double firmware_version = 1.6; // Updated EC calibration to degree 3 polynomial
+const double firmware_version = 1.61; // Updated EC calibration to degree 3 polynomial
 
 // === Select Board Type via build_flags ===
 // Use -DESP32_THREE_PORT or -DESP32_S3 in platformio.ini
@@ -49,6 +49,7 @@ const int waterLevelPins[NUMBER_OF_UNITS] = {23, 25, 13};
 
 // === I2C Multiplexer ===
 #define TCAADDR 0x77
+#define EC_ADC_I2C_ADDR 0x4D
 
 // === Timing Configurations ===
 #ifdef ESP32_THREE_PORT
