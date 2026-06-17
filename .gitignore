@@ -3,3 +3,39 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+
+# Firebase Service Account Key (NEVER COMMIT TO GIT)
+firebase-service-account-key.json
+*-firebase-adminsdk-*.json
+
+# Environment files
+.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Compiled firmware
+firmware_compiled/
+*.bin
+*.elf
+
+# Test files
+test_*.csv
+version.txt
+
+# Temporary files
+*.tmp
+*.bak
+*.swp
+*~
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Credentials
+src/credentials.h

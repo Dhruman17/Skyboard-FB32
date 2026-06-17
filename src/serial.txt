@@ -1,0 +1,153 @@
+➡️ Next: Starting Firebase...
+Token info: type = id token (GITKit token), status = on request
+Token info: type = id token (GITKit token), status = ready
+Got payload
+The System name from Fetch System Name is: THQ
+The On Time is: 2025-07-18T16:00:00Z
+The Off Time is: 2025-07-18T19:30:00Z
+Master Switch is: false
+Time Cycle Switch is: true
+System-wide sensor mode: Float
+✅ Interval_On for unit 1: 200000 ms
+✅ Interval_Off for unit 1: 4000 ms
+➡️ unitState for 1: ENABLED
+✅ Interval_On for unit 2: 200000 ms
+✅ Interval_Off for unit 2: 4000 ms
+➡️ unitState for 2: ENABLED
+✅ Interval_On for unit 3: 200000 ms
+✅ Interval_Off for unit 3: 4000 ms
+➡️ unitState for 3: ENABLED
+System version and firmware URL updated successfully in Firestore.
+➡️ Setting up sensors...
+[  7835][E][esp32-hal-gpio.c:102] __pinMode(): Invalid pin selected
+Attached atomizer pin 4 to PWM channel 0
+[  8010][E][esp32-hal-gpio.c:102] __pinMode(): Invalid pin selected
+Attached atomizer pin 5 to PWM channel 1
+Attached atomizer pin 2 to PWM channel 2
+Sensor Mode Unit 0: Float
+Sensor Mode Unit 1: Float
+Sensor Mode Unit 2: Float
+System version and firmware URL updated successfully in Firestore.
+✅ Serial ready. Starting I2C init...
+🔍 Scanning I2C bus...
+✅ Found I2C device at 0x77
+➡️ Setup done.
+Got payload
+The System name from Fetch System Name is: THQ
+The On Time is: 2025-07-18T16:00:00Z
+The Off Time is: 2025-07-18T19:30:00Z
+Master Switch is: false
+Time Cycle Switch is: true
+System-wide sensor mode: Float
+✅ Interval_On for unit 1: 200000 ms
+✅ Interval_Off for unit 1: 4000 ms
+➡️ unitState for 1: ENABLED
+✅ Interval_On for unit 2: 200000 ms
+✅ Interval_Off for unit 2: 4000 ms
+➡️ unitState for 2: ENABLED
+✅ Interval_On for unit 3: 200000 ms
+✅ Interval_Off for unit 3: 4000 ms
+➡️ unitState for 3: ENABLED
+1
+Heartbeat sent.
+2025-09-16T21:46:50Z
+Unit 0 | Float Sensor: NOT CONNECTED - Skipping
+Unit 1 | Float Sensor: NOT CONNECTED - Skipping
+Unit 2 | Float Sensor: NOT CONNECTED - Skipping
+[ 31110][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+EC sensor 1 reading: 86.39 - DEFAULT/ERROR VALUE - Not sending to Firebase
+[ 31282][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+EC sensor 2 reading: 86.39 - DEFAULT/ERROR VALUE - Not sending to Firebase
+EC sensor 3 reading: 0.73 - Valid reading, sending to Firebase
+[Mutex] Taking firebaseMutex...
+EC value updated for 3
+[Mutex] Released firebaseMutex.
+[ 31611][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+[ 31731][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+Unit 0 | Temp: 125.00 °C, Humidity: 100.00 % - ERROR VALUES - Not updating global variables
+SGP30 init failed on channel 0
+Failed CO2 read on unit 0
+No valid CO2 readings.
+Sensor Mode Unit 0: Float
+Sensor Mode Unit 1: Float
+Sensor Mode Unit 2: Float
+Got payload
+The System name from Fetch System Name is: THQ
+The On Time is: 2025-07-18T16:00:00Z
+The Off Time is: 2025-07-18T19:30:00Z
+Master Switch is: false
+Time Cycle Switch is: true
+System-wide sensor mode: Float
+✅ Interval_On for unit 1: 200000 ms
+✅ Interval_Off for unit 1: 4000 ms
+➡️ unitState for 1: ENABLED
+✅ Interval_On for unit 2: 200000 ms
+✅ Interval_Off for unit 2: 4000 ms
+➡️ unitState for 2: ENABLED
+✅ Interval_On for unit 3: 200000 ms
+✅ Interval_Off for unit 3: 4000 ms
+➡️ unitState for 3: ENABLED
+1
+Heartbeat sent.
+2025-09-16T21:47:20Z
+Unit 0 | Float Sensor: NOT CONNECTED - Skipping
+Unit 1 | Float Sensor: NOT CONNECTED - Skipping
+Unit 2 | Float Sensor: NOT CONNECTED - Skipping
+[ 61106][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+EC sensor 1 reading: 86.39 - DEFAULT/ERROR VALUE - Not sending to Firebase
+[ 62278][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+EC sensor 2 reading: 86.39 - DEFAULT/ERROR VALUE - Not sending to Firebase
+[ 62450][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+EC sensor 3 reading: 86.39 - DEFAULT/ERROR VALUE - Not sending to Firebase
+[ 62541][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+[ 62680][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+Unit 0 | Temp: 125.00 °C, Humidity: 100.00 % - ERROR VALUES - Not updating global variables
+SGP30 init failed on channel 0
+Failed CO2 read on unit 0
+No valid CO2 readings.
+Sensor Mode Unit 0: Float
+Sensor Mode Unit 1: Float
+Sensor Mode Unit 2: Float
+Checking for firmware updates...
+Cloud Firmware Version: 1.57
+Storage Firmware Version: 1.57
+Firmware is up to date. No update needed.
+Got payload
+The System name from Fetch System Name is: THQ
+The On Time is: 2025-07-18T16:00:00Z
+The Off Time is: 2025-07-18T19:30:00Z
+Master Switch is: false
+Time Cycle Switch is: true
+System-wide sensor mode: Float
+✅ Interval_On for unit 1: 200000 ms
+✅ Interval_Off for unit 1: 4000 ms
+➡️ unitState for 1: ENABLED
+✅ Interval_On for unit 2: 200000 ms
+✅ Interval_Off for unit 2: 4000 ms
+➡️ unitState for 2: ENABLED
+✅ Interval_On for unit 3: 200000 ms
+✅ Interval_Off for unit 3: 4000 ms
+➡️ unitState for 3: ENABLED
+1
+Heartbeat sent.
+2025-09-16T21:47:50Z
+Unit 0 | Float Sensor: NOT CONNECTED - Skipping
+Unit 1 | Float Sensor: NOT CONNECTED - Skipping
+Unit 2 | Float Sensor: NOT CONNECTED - Skipping
+[ 91211][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+EC sensor 1 reading: 86.39 - DEFAULT/ERROR VALUE - Not sending to Firebase
+EC sensor 2 reading: 0.73 - Valid reading, sending to Firebase
+[Mutex] Taking firebaseMutex...
+EC value updated for 2
+[Mutex] Released firebaseMutex.
+[ 91630][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+EC sensor 3 reading: 86.39 - DEFAULT/ERROR VALUE - Not sending to Firebase
+[ 91721][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+[ 91860][E][Wire.cpp:513] requestFrom(): i2cRead returned Error -1
+Unit 0 | Temp: 125.00 °C, Humidity: 100.00 % - ERROR VALUES - Not updating global variables
+SGP30 init failed on channel 0
+Failed CO2 read on unit 0
+No valid CO2 readings.
+Sensor Mode Unit 0: Float
+Sensor Mode Unit 1: Float
+Sensor Mode Unit 2: Float
