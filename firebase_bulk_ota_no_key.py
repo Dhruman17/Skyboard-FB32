@@ -12,7 +12,6 @@ from pathlib import Path
 from datetime import datetime
 import firebase_admin
 from firebase_admin import credentials, storage, firestore
-from firebase_storage_uploader import SecureFirebaseClient
 
 
 def read_csv(csv_path, deployment_group=None):
@@ -73,6 +72,8 @@ def find_platformio_executable():
 
     # Try other common locations
     possible_commands = [
+        [str(Path.home() / '.platformio' / 'penv' / 'bin' / 'pio')],
+        [str(Path.home() / '.platformio' / 'penv' / 'bin' / 'platformio')],
         [str(Path.home() / '.platformio' / 'penv' / 'Scripts' / 'platformio.exe')],
         ['pio'],
         ['platformio'],

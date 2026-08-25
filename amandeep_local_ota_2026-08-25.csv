@@ -1,0 +1,8 @@
+serial_number,board_type,target_version,deployment_group,notes,system_name,ip_address
+SAC202604011,ESP32_S3,1.61,pilot,Amandeep MachE 4 1.2 IT25,A001,192.168.2.84
+SAC202604012,ESP32_S3,1.61,fleet,Amandeep MachE 4 1.2 IT25,A002,192.168.2.86
+SAC202604013,ESP32_S3,1.61,fleet,Amandeep MachE 4 1.2 IT25,A003,192.168.2.87
+SAC202604014,ESP32_S3,1.61,fleet,Amandeep MachE 4 1.2 IT25,A004,192.168.2.85
+SAC202604015,ESP32_S3,1.61,fleet,Amandeep MachE 4 1.2 IT25,A005,192.168.2.88
+SAC202604016,ESP32_S3,1.61,fleet,Amandeep MachE 4 1.2 IT25,A006,192.168.2.90
+SAC202604017,ESP32_S3,1.61,fleet,Amandeep MachE 4 1.2 IT25,A007,192.168.2.91

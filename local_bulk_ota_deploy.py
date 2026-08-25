@@ -27,6 +27,8 @@ import argparse
 import subprocess
 import threading
 import time
+import re
+import platform
 from datetime import datetime
 from pathlib import Path
 import socket
@@ -49,6 +51,28 @@ class LocalBulkOTADeployer:
         print(f"[NET] Network range: {network_range}")
         print(f"[PORT] OTA port: {ota_port}")
 
+    def ping_device(self, target, timeout=2):
+        """Ping once with the correct timeout units for the host OS."""
+        system = platform.system().lower()
+        if system == 'windows':
+            cmd = ['ping', '-n', '1', '-w', str(int(timeout * 1000)), target]
+        elif system == 'darwin':
+            # macOS -W is milliseconds; Linux -W is seconds.
+            cmd = ['ping', '-c', '1', '-W', str(int(timeout * 1000)), target]
+        else:
+            cmd = ['ping', '-c', '1', '-W', str(max(1, int(timeout))), target]
+
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout + 3,
+            )
+            return result.returncode == 0, result.stdout
+        except (OSError, subprocess.TimeoutExpired):
+            return False, ''
+
     def validate_csv_entry(self, row):
         """Validate CSV row data"""
         required_fields = ['serial_number', 'board_type', 'target_version']
@@ -60,6 +84,9 @@ class LocalBulkOTADeployer:
         valid_board_types = ['ESP32_THREE_PORT', 'ESP32_S3']
         if row['board_type'] not in valid_board_types:
             return False, f"Invalid board type: {row['board_type']}. Must be one of {valid_board_types}"
+
+        if not re.fullmatch(r'\d+(?:\.\d+)?', row['target_version'].strip()):
+            return False, f"Invalid target version: {row['target_version']}"
 
         return True, "Valid"
 
@@ -97,21 +124,15 @@ class LocalBulkOTADeployer:
 
     def scan_for_device_ip(self, hostname, timeout=2):
         """Try to find device IP by hostname using ping and nslookup"""
-        # Try Windows ping command
-        try:
-            result = subprocess.run(['ping', '-n', '1', '-w', str(timeout*1000), hostname],
-                                  capture_output=True, text=True, timeout=timeout+1)
-            if result.returncode == 0:
-                # Extract IPv4 from ping output
-                lines = result.stdout.split('\n')
-                for line in lines:
-                    if 'Pinging' in line and '[' in line and ']' in line:
-                        ip = line.split('[')[1].split(']')[0]
-                        # Only return IPv4 addresses
-                        if self.is_ipv4(ip):
-                            return ip
-        except:
-            pass
+        reachable, ping_output = self.ping_device(hostname, timeout)
+        if reachable:
+            match = re.search(r'\((\d+\.\d+\.\d+\.\d+)\)', ping_output)
+            if match and self.is_ipv4(match.group(1)):
+                return match.group(1)
+
+            match = re.search(r'\[(\d+\.\d+\.\d+\.\d+)\]', ping_output)
+            if match and self.is_ipv4(match.group(1)):
+                return match.group(1)
 
         # Try nslookup for mDNS resolution
         try:
@@ -179,21 +200,11 @@ class LocalBulkOTADeployer:
             print(f"[FIND] Testing direct IP {ip_hint} for {serial_number}...")
             # Skip OTA port check - PlatformIO handles OTA protocol internally
             # Just verify the IP is reachable via ping
-            try:
-                import platform
-                if platform.system().lower() == 'windows':
-                    result = subprocess.run(['ping', '-n', '1', '-w', '2000', ip_hint],
-                                          capture_output=True, text=True, timeout=5)
-                else:
-                    result = subprocess.run(['ping', '-c', '1', '-W', '2', ip_hint],
-                                          capture_output=True, text=True, timeout=5)
-                if result.returncode == 0:
-                    print(f"[OK] Device reachable at direct IP {ip_hint}")
-                    return ip_hint, f"direct-{serial_number}"
-                else:
-                    print(f"[WARN] Cannot ping direct IP {ip_hint}")
-            except Exception as e:
-                print(f"[WARN] Cannot test direct IP {ip_hint}: {e}")
+            reachable, _ = self.ping_device(ip_hint)
+            if reachable:
+                print(f"[OK] Device reachable at direct IP {ip_hint}")
+                return ip_hint, f"direct-{serial_number}"
+            print(f"[WARN] Cannot ping direct IP {ip_hint}")
 
         # Try different hostname possibilities
         hostnames = []
@@ -343,7 +354,7 @@ class LocalBulkOTADeployer:
             print(f"[VERIFY] Error verifying firmware: {e}")
             return False
 
-    def compile_device_firmware(self, serial_number, board_type):
+    def compile_device_firmware(self, serial_number, board_type, target_version):
         """Compile device-specific firmware with unique serial number
 
         CRITICAL: This function uses a lock to prevent race conditions when multiple
@@ -361,13 +372,18 @@ class LocalBulkOTADeployer:
             print(f"[COMPILE] Board type: {board_type}")
             print(f"{'='*60}")
 
-            return self._compile_device_firmware_locked(serial_number, board_type)
+            return self._compile_device_firmware_locked(serial_number, board_type, target_version)
 
-    def _compile_device_firmware_locked(self, serial_number, board_type):
+    def _compile_device_firmware_locked(self, serial_number, board_type, target_version):
         """Internal compilation function (must be called with lock held)"""
         import shutil
         import subprocess
         from pathlib import Path
+
+        original_config = Path("src/config.h")
+        backup_config = Path("src/config.h.backup")
+        original_version = Path("src/Version.txt")
+        backup_version = Path("src/Version.txt.backup")
 
         try:
             # Create temporary credentials file with device-specific serial number
@@ -399,6 +415,26 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
             original_creds = Path("src/credentials.h")
             backup_creds = Path("src/credentials.h.backup")
             shutil.copy2(original_creds, backup_creds)
+
+            if original_config.exists():
+                shutil.copy2(original_config, backup_config)
+                config_content = original_config.read_text()
+                updated_config, replacement_count = re.subn(
+                    r'const double firmware_version = [\d.]+;[^\n]*',
+                    f'const double firmware_version = {target_version}; // Set by local bulk OTA',
+                    config_content,
+                    count=1,
+                )
+                if replacement_count != 1:
+                    print("[ERROR] Could not locate firmware_version in src/config.h")
+                    return None
+                original_config.write_text(updated_config)
+
+            if original_version.exists():
+                shutil.copy2(original_version, backup_version)
+                original_version.write_text(target_version)
+
+            print(f"[COMPILE] Target firmware version: {target_version}")
 
             # Write device-specific credentials
             print(f"[COMPILE] Injecting serial number into credentials.h: {serial_number}")
@@ -479,6 +515,12 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
                 print(f"[COMPILE] Restoring original credentials.h")
                 shutil.copy2(backup_creds, original_creds)
                 backup_creds.unlink()  # Delete backup
+            if backup_config.exists():
+                shutil.copy2(backup_config, original_config)
+                backup_config.unlink()
+            if backup_version.exists():
+                shutil.copy2(backup_version, original_version)
+                backup_version.unlink()
 
     def get_device_info(self, ip):
         """Query device for its current board type and serial number"""
@@ -675,15 +717,8 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
 
             # Gate 1: Connectivity check
             print(f"[GATE] Step 1/3: Checking connectivity to {ip}...")
-            import platform
-            if platform.system().lower() == 'windows':
-                ping_result = subprocess.run(['ping', '-n', '1', '-w', '2000', ip],
-                                           capture_output=True, text=True, timeout=5)
-            else:
-                ping_result = subprocess.run(['ping', '-c', '1', '-W', '2', ip],
-                                           capture_output=True, text=True, timeout=5)
-
-            if ping_result.returncode != 0:
+            reachable, _ = self.ping_device(ip)
+            if not reachable:
                 print(f"[GATE] ❌ FAILED: Device not reachable at {ip}")
                 print(f"[ERROR] Cannot proceed with deployment - device offline")
                 return False
@@ -724,7 +759,11 @@ String setupWifiName = "SkyAcres Setup " + serialNumber;
 
             # Step 1: Compile device-specific firmware
             print(f"[DEVICE] Compiling firmware for {serial_number} ({expected_board_type})...")
-            firmware_path = self.compile_device_firmware(serial_number, expected_board_type)
+            firmware_path = self.compile_device_firmware(
+                serial_number,
+                expected_board_type,
+                device['target_version'],
+            )
 
             if not firmware_path:
                 print(f"[ERROR] Failed to compile firmware for {serial_number}")
@@ -841,10 +880,6 @@ def main():
     # Validate inputs
     if not os.path.exists(args.csv):
         print(f"[ERROR] CSV file not found: {args.csv}")
-        sys.exit(1)
-
-    if not args.discover_only and not os.path.exists(args.firmware_dir):
-        print(f"[ERROR] Firmware directory not found: {args.firmware_dir}")
         sys.exit(1)
 
     # Initialize deployer
