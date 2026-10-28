@@ -1,12 +1,19 @@
 #include <Arduino.h>
+#include <SD.h>  // C6-safe project stub; Firebase includes this unconditionally.
 #include <WiFi.h>
 #include <WiFiManager.h>
+#include <HTTPClient.h>
+#include <WiFiClientSecure.h>
+#include <Preferences.h>
+#include <ArduinoJson.h>
 #include <Firebase_ESP_Client.h>
 #include <addons/TokenHelper.h>
 #include <esp_now.h>
 #include <esp_mac.h>
 #include <time.h>
 #include <credentials.h>
+#include "gateway_sensors.h"
+#include "gateway_display.h"
 
 namespace Gateway {
 
@@ -19,7 +26,50 @@ constexpr uint8_t kPairConfirm = 0x12;
 constexpr unsigned long kControlSyncIntervalMs = 45000UL;
 constexpr unsigned long kAuthCooldownMs = 15UL * 60UL * 1000UL;
 constexpr unsigned long kNormalAuthRequestTimeoutMs = 2000UL;
+constexpr unsigned long kSensorReadIntervalMs = 5000UL;
+constexpr unsigned long kPilotPollIntervalMs = 35000UL;
+constexpr unsigned long kPilotHeartbeatIntervalMs = 10000UL;
+constexpr unsigned long kPilotRetryMinMs = 5000UL;
+constexpr unsigned long kPilotRetryMaxMs = 300000UL;
 constexpr size_t kMaxNodes = 16;
+constexpr char kPilotConfigUrl[] = "https://us-central1-skyacres-marketplace.cloudfunctions.net/hubPilotConfig";
+constexpr char kPilotHeartbeatUrl[] = "https://us-central1-skyacres-marketplace.cloudfunctions.net/hubPilotHeartbeat";
+
+// Google Trust Services root used by the Google-hosted Functions endpoint.
+// This is a trust anchor; TLS hostname and chain verification remain enabled.
+constexpr char kGoogleGtsRootR1[] = R"CERT(
+-----BEGIN CERTIFICATE-----
+MIIFWjCCA0KgAwIBAgIQbkepxUtHDA3sM9CJuRz04TANBgkqhkiG9w0BAQwFADBH
+MQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNlcnZpY2VzIExM
+QzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwHhcNMTYwNjIyMDAwMDAwWhcNMzYwNjIy
+MDAwMDAwWjBHMQswCQYDVQQGEwJVUzEiMCAGA1UEChMZR29vZ2xlIFRydXN0IFNl
+cnZpY2VzIExMQzEUMBIGA1UEAxMLR1RTIFJvb3QgUjEwggIiMA0GCSqGSIb3DQEB
+AQUAA4ICDwAwggIKAoICAQC2EQKLHuOhd5s73L+UPreVp0A8of2C+X0yBoJx9vaM
+f/vo27xqLpeXo4xL+Sv2sfnOhB2x+cWX3u+58qPpvBKJXqeqUqv4IyfLpLGcY9vX
+mX7wCl7raKb0xlpHDU0QM+NOsROjyBhsS+z8CZDfnWQpJSMHobTSPS5g4M/SCYe7
+zUjwTcLCeoiKu7rPWRnWr4+wB7CeMfGCwcDfLqZtbBkOtdh+JhpFAz2weaSUKK0P
+fyblqAj+lug8aJRT7oM6iCsVlgmy4HqMLnXWnOunVmSPlk9orj2XwoSPwLxAwAtc
+vfaHszVsrBhQf4TgTM2S0yDpM7xSma8ytSmzJSq0SPly4cpk9+aCEI3oncKKiPo4
+Zor8Y/kB+Xj9e1x3+naH+uzfsQ55lVe0vSbv1gHR6xYKu44LtcXFilWr06zqkUsp
+zBmkMiVOKvFlRNACzqrOSbTqn3yDsEB750Orp2yjj32JgfpMpf/VjsPOS+C12LOO
+Rc92wO1AK/1TD7Cn1TsNsYqiA94xrcx36m97PtbfkSIS5r762DL8EGMUUXLeXdYW
+k70paDPvOmbsB4om3xPXV2V4J95eSRQAogB/mqghtqmxlbCluQ0WEdrHbEg8QOB+
+DVrNVjzRlwW5y0vtOUucxD/SVRNuJLDWcfr0wbrM7Rv1/oFB2ACYPTrIrnqYNxgF
+lQIDAQABo0Iw
+QDAOBgNVHQ8BAf8EBAMCAQYwDwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQU5K8r
+JnEaK0gnhS9SZizv8IkTcT4wDQYJKoZIhvcNAQEMBQADggIBADiWCu49tJYeX++d
+nAsznyvgyv3SjgofQXSlfKqE1OXyHuY3UjKcC9FhHb8owbZEKTV1d5iyfNm9dKyK
+aOOpMQkpAWBz40d8U6iQSifvS9efk+eCNs6aaAyC58/UEBZvXw6ZXPYfcX3v73sv
+fuo21pdwCxXu11xWajOl40k4DLh9+42FpLFZXvRq4d2h9mREruZRgH8H7pwoHyXa
+/6xmld01D1zvICxi/ZG6qcz8WpyTgYMpl0p8WnK0OdC3d8t5/W6kjftbjhlRn7pY
+L15iJdfOBL07q9bgsiG1eGZbYwE8na6SfZu6W0eX6DvJ4J2QPim01hcDyxC2kLGe
+4g0x8HYRZvBPsVhHdljUEn2NIVq4BjFbkerQUIpm/ZgDdIx02OYI5NaAIFItO/Ni
+s3Jz5nu2Z6qNuFoS3FJFDYoOj0dzpqPJeaAcWErtXvM+SUWgeExhYf6GjfhaknBZ
+qlxi9dnKlC54dNuYvoS++cJEPqOba+MSSQGwlfnuzCdyyF62ARPBopY+Udf90Wuio
+AnwMCeKpSwughQtiue+hMZL77/ZRBIls6Kl0obsXs7X9SQ98POyDGCBDTtWTurQ
+vE3PYJ/HQcu51OyLemGhmW/HGY0dVHLqlCFF1pkgl
+-----END CERTIFICATE-----
+)CERT";
 
 struct __attribute__((packed)) PairRequest {
   uint8_t type;
@@ -48,16 +98,284 @@ struct Peer {
   bool used;
 };
 
+struct PilotAssignment {
+  bool valid;
+  uint8_t mac[6];
+  String systemId;
+  GatewayConfig control;
+  unsigned long lastHeartbeatMs;
+  unsigned long nextHeartbeatMs;
+  unsigned long heartbeatBackoffMs;
+};
+
 FirebaseData fbdo;
 FirebaseAuth auth;
 FirebaseConfig firebaseConfig;
 WiFiManager wifiManager;
+Preferences pilotPreferences;
 Peer peers[kMaxNodes] = {};
+PilotAssignment pilotAssignments[kMaxNodes] = {};
 GatewayConfig control = {kConfig, kProtocolVersion, false, {false, false, false}, {false, false, false}};
 unsigned long lastControlSyncMs = 0;
+unsigned long lastSensorReadMs = 0;
+unsigned long nextPilotPollMs = 0;
+unsigned long pilotRetryMs = kPilotRetryMinMs;
+String hubId;
+String pilotApiKey;
+bool pilotApiEnabled = false;
+bool pilotNtpValid = false;
+volatile int pendingPilotHeartbeatIndex = -1;
+char pilotEnabledBuffer[2] = "0";
+char pilotKeyBuffer[129] = {};
+WiFiManagerParameter pilotEnabledParameter("hub_pilot_enabled", "Hub Pilot API (0/1)", pilotEnabledBuffer, sizeof(pilotEnabledBuffer));
+WiFiManagerParameter pilotKeyParameter("hub_pilot_key", "Hub Pilot API key", pilotKeyBuffer, sizeof(pilotKeyBuffer), "type='password'");
 
 String systemPath() {
   return "Systems/" + serialNumber;
+}
+
+String normalizeMac(const uint8_t *mac) {
+  char value[13] = {};
+  snprintf(value, sizeof(value), "%02x%02x%02x%02x%02x%02x",
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  return String(value);
+}
+
+bool normalizeMacText(const char *input, String &normalized) {
+  if (input == nullptr) return false;
+  char value[13] = {};
+  size_t count = 0;
+  for (const char *cursor = input; *cursor != '\0'; ++cursor) {
+    if (*cursor == ':' || *cursor == '-' || *cursor == ' ') continue;
+    if (!isxdigit(static_cast<unsigned char>(*cursor)) || count >= 12) return false;
+    value[count++] = static_cast<char>(tolower(static_cast<unsigned char>(*cursor)));
+  }
+  if (count != 12) return false;
+  value[count] = '\0';
+  normalized = String(value);
+  return true;
+}
+
+bool macTextMatches(const JsonVariantConst &value, const uint8_t *mac) {
+  if (value.isNull()) return false;
+  String normalized;
+  if (value.is<const char *>()) {
+    if (!normalizeMacText(value.as<const char *>(), normalized)) return false;
+  } else if (value.is<int>()) {
+    return false;
+  } else {
+    return false;
+  }
+  return normalized == normalizeMac(mac);
+}
+
+String unitIdText(const JsonVariantConst &value) {
+  if (value.is<const char *>()) return String(value.as<const char *>());
+  if (value.is<int>()) return String(value.as<int>());
+  return String();
+}
+
+bool currentTimeValid() {
+  return time(nullptr) >= 1700000000;
+}
+
+String iso8601Now() {
+  time_t now = time(nullptr);
+  struct tm utc = {};
+  gmtime_r(&now, &utc);
+  char value[25] = {};
+  strftime(value, sizeof(value), "%Y-%m-%dT%H:%M:%SZ", &utc);
+  return String(value);
+}
+
+int peerIndex(const uint8_t *mac) {
+  for (size_t index = 0; index < kMaxNodes; ++index) {
+    if (peers[index].used && memcmp(peers[index].mac, mac, 6) == 0) return static_cast<int>(index);
+  }
+  return -1;
+}
+
+void persistPilotConfig() {
+  pilotPreferences.begin("hub-pilot", false);
+  pilotPreferences.putBool("enabled", pilotApiEnabled);
+  pilotPreferences.putString("api-key", pilotApiKey);
+  pilotPreferences.end();
+}
+
+void loadPilotConfig() {
+  pilotPreferences.begin("hub-pilot", true);
+  pilotApiEnabled = pilotPreferences.getBool("enabled", false);
+  pilotApiKey = pilotPreferences.getString("api-key", "");
+  pilotPreferences.end();
+  pilotApiKey.trim();
+  snprintf(pilotEnabledBuffer, sizeof(pilotEnabledBuffer), "%c", pilotApiEnabled ? '1' : '0');
+  pilotApiKey.toCharArray(pilotKeyBuffer, sizeof(pilotKeyBuffer));
+}
+
+void savePilotConfigFromPortal() {
+  pilotApiEnabled = pilotEnabledBuffer[0] == '1' || pilotEnabledBuffer[0] == 'y' || pilotEnabledBuffer[0] == 'Y';
+  pilotApiKey = String(pilotKeyBuffer);
+  pilotApiKey.trim();
+  persistPilotConfig();
+}
+
+void clearPilotAssignments() {
+  for (PilotAssignment &assignment : pilotAssignments) {
+    assignment.valid = false;
+    assignment.systemId = String();
+    assignment.lastHeartbeatMs = 0;
+    assignment.nextHeartbeatMs = 0;
+    assignment.heartbeatBackoffMs = kPilotRetryMinMs;
+  }
+}
+
+void sendControlToPeer(const Peer &peer, const GatewayConfig &configuration) {
+  esp_now_send(peer.mac, reinterpret_cast<const uint8_t *>(&configuration), sizeof(configuration));
+}
+
+bool parsePilotNode(JsonObjectConst node) {
+  const JsonVariantConst nodeMac = node["nodeMac"];
+  int matched = -1;
+  for (size_t index = 0; index < kMaxNodes; ++index) {
+    if (peers[index].used && macTextMatches(nodeMac, peers[index].mac)) {
+      matched = static_cast<int>(index);
+      break;
+    }
+  }
+  if (matched < 0) return false;
+
+  const char *systemIdValue = node["systemId"] | "";
+  JsonObjectConst controls = node["controls"].as<JsonObjectConst>();
+  if (systemIdValue[0] == '\0' || controls.isNull()) return false;
+
+  PilotAssignment &assignment = pilotAssignments[matched];
+  assignment.valid = false;
+  memcpy(assignment.mac, peers[matched].mac, sizeof(assignment.mac));
+  assignment.systemId = String(systemIdValue);
+  assignment.control = {kConfig, kProtocolVersion, false, {false, false, false}, {false, false, false}};
+
+  JsonObjectConst systemControls = controls["system"].as<JsonObjectConst>();
+  if (!systemControls.isNull() && !systemControls["Light_Master_Switch"].isNull()) {
+    assignment.control.light = systemControls["Light_Master_Switch"].as<bool>();
+  }
+
+  JsonArrayConst units = controls["units"].as<JsonArrayConst>();
+  if (!units.isNull()) {
+    for (JsonObjectConst unit : units) {
+      String unitId = unitIdText(unit["unitId"]);
+      if (unitId == "1" || unitId == "2" || unitId == "3") {
+        const int slot = unitId.toInt() - 1;
+        assignment.control.misting[slot] = unit["unitState"] | false;
+      }
+    }
+  }
+
+  assignment.valid = true;
+  return true;
+}
+
+void applyPilotAssignments(JsonDocument &document) {
+  clearPilotAssignments();
+  JsonArrayConst nodes = document["nodes"].as<JsonArrayConst>();
+  if (nodes.isNull()) {
+    Serial.println("[Gateway] Hub Pilot config response missing nodes; no controls applied.");
+    return;
+  }
+
+  int applied = 0;
+  for (JsonObjectConst node : nodes) {
+    if (parsePilotNode(node)) ++applied;
+  }
+
+  for (size_t index = 0; index < kMaxNodes; ++index) {
+    if (pilotAssignments[index].valid) {
+      sendControlToPeer(peers[index], pilotAssignments[index].control);
+    }
+  }
+  Serial.printf("[Gateway] Hub Pilot config applied to %d paired node(s); manual light/unit controls active, schedules/timers unsupported.\n", applied);
+}
+
+void pilotHttpHeaders(HTTPClient &http) {
+  http.addHeader("X-Hub-Id", hubId);
+  http.addHeader("X-Hub-Key", pilotApiKey);
+  http.addHeader("Accept", "application/json");
+}
+
+void schedulePilotRetry() {
+  nextPilotPollMs = millis() + pilotRetryMs;
+  pilotRetryMs = min(kPilotRetryMaxMs, pilotRetryMs * 2UL);
+}
+
+bool fetchPilotConfig() {
+  if (!pilotApiEnabled || pilotApiKey.isEmpty() || !pilotNtpValid || WiFi.status() != WL_CONNECTED) return false;
+
+  WiFiClientSecure client;
+  client.setCACert(kGoogleGtsRootR1);
+  client.setTimeout(10);
+  HTTPClient http;
+  if (!http.begin(client, kPilotConfigUrl)) {
+    Serial.println("[Gateway] Hub Pilot config connection setup failed; retrying with backoff.");
+    schedulePilotRetry();
+    return false;
+  }
+  pilotHttpHeaders(http);
+  const int status = http.GET();
+  if (status != HTTP_CODE_OK) {
+    Serial.printf("[Gateway] Hub Pilot config HTTP %d; retrying with backoff.\n", status);
+    http.end();
+    schedulePilotRetry();
+    return false;
+  }
+
+  JsonDocument document;
+  const DeserializationError error = deserializeJson(document, http.getStream());
+  http.end();
+  if (error) {
+    Serial.println("[Gateway] Hub Pilot config JSON invalid; retrying with backoff.");
+    schedulePilotRetry();
+    return false;
+  }
+
+  applyPilotAssignments(document);
+  pilotRetryMs = kPilotRetryMinMs;
+  nextPilotPollMs = millis() + kPilotPollIntervalMs;
+  return true;
+}
+
+bool sendPilotHeartbeat(int index) {
+  if (index < 0 || index >= static_cast<int>(kMaxNodes) || !pilotAssignments[index].valid || !pilotNtpValid || !currentTimeValid()) return false;
+  const unsigned long nowMs = millis();
+  if (nowMs - pilotAssignments[index].lastHeartbeatMs < kPilotHeartbeatIntervalMs || nowMs < pilotAssignments[index].nextHeartbeatMs) return false;
+
+  WiFiClientSecure client;
+  client.setCACert(kGoogleGtsRootR1);
+  client.setTimeout(10);
+  HTTPClient http;
+  if (!http.begin(client, kPilotHeartbeatUrl)) return false;
+  pilotHttpHeaders(http);
+
+  JsonDocument document;
+  document["hubId"] = hubId;
+  document["nodeMac"] = normalizeMac(pilotAssignments[index].mac);
+  document["systemId"] = pilotAssignments[index].systemId;
+  document["reportedAt"] = iso8601Now();
+  document["connected"] = true;
+  document["status"] = "online";
+  String body;
+  serializeJson(document, body);
+  http.addHeader("Content-Type", "application/json");
+  const int status = http.POST(body);
+  http.end();
+  if (status < 200 || status >= 300) {
+    Serial.printf("[Gateway] Hub Pilot heartbeat HTTP %d; retry deferred.\n", status);
+    pilotAssignments[index].nextHeartbeatMs = nowMs + pilotAssignments[index].heartbeatBackoffMs;
+    pilotAssignments[index].heartbeatBackoffMs = min(kPilotRetryMaxMs, pilotAssignments[index].heartbeatBackoffMs * 2UL);
+    return false;
+  }
+  pilotAssignments[index].lastHeartbeatMs = nowMs;
+  pilotAssignments[index].nextHeartbeatMs = nowMs + kPilotHeartbeatIntervalMs;
+  pilotAssignments[index].heartbeatBackoffMs = kPilotRetryMinMs;
+  return true;
 }
 
 void tokenStatusCallback(TokenInfo info) {
@@ -110,9 +428,10 @@ void rememberPeer(const uint8_t *mac) {
 }
 
 void publishControl() {
+  if (pilotApiEnabled) return;
   for (const Peer &peer : peers) {
     if (peer.used) {
-      esp_now_send(peer.mac, reinterpret_cast<const uint8_t *>(&control), sizeof(control));
+      sendControlToPeer(peer, control);
     }
   }
 }
@@ -136,6 +455,9 @@ void receive(const esp_now_recv_info_t *info, const uint8_t *data, int length) {
     publishControl();
   } else if (data[0] == kHeartbeat) {
     rememberPeer(sender);
+    if (pilotApiEnabled) {
+      pendingPilotHeartbeatIndex = peerIndex(sender);
+    }
   } else if (data[0] == kPairConfirm) {
     rememberPeer(sender);
   }
@@ -181,6 +503,23 @@ void setup() {
   delay(200);
   Serial.println("[Gateway] Starting ESP32-C6 gateway.");
 
+  loadPilotConfig();
+  uint8_t localMac[6] = {};
+  esp_read_mac(localMac, ESP_MAC_WIFI_STA);
+  hubId = normalizeMac(localMac);
+  wifiManager.addParameter(&pilotEnabledParameter);
+  wifiManager.addParameter(&pilotKeyParameter);
+  wifiManager.setSaveParamsCallback(savePilotConfigFromPortal);
+  if (pilotApiEnabled) {
+    Serial.printf("[Gateway] Hub Pilot API mode enabled for hub %s.\n", hubId.c_str());
+    if (pilotApiKey.isEmpty()) {
+      Serial.println("[Gateway] Hub Pilot API key is not configured; direct Firebase reads remain disabled.");
+    }
+  }
+
+  GatewaySensors::begin();
+  GatewayDisplay::begin();
+
   wifiManager.setConnectTimeout(20);
   wifiManager.setConfigPortalTimeout(60);
   const String portalName = "SkyAcres Gateway " + serialNumber;
@@ -205,19 +544,55 @@ void setup() {
   while (time(nullptr) < 1700000000 && millis() - ntpStart < 10000UL) {
     delay(100);
   }
+  pilotNtpValid = currentTimeValid();
 
-  firebaseConfig.api_key = API_KEY;
-  firebaseConfig.token_status_callback = tokenStatusCallback;
-  firebaseConfig.signer.reqTO = kAuthCooldownMs;
-  auth.user.email = USER_EMAIL;
-  auth.user.password = USER_PASSWORD;
-  Firebase.begin(&firebaseConfig, &auth);
-  Firebase.reconnectWiFi(true);
+  if (!pilotApiEnabled) {
+    firebaseConfig.api_key = API_KEY;
+    firebaseConfig.token_status_callback = tokenStatusCallback;
+    firebaseConfig.signer.reqTO = kAuthCooldownMs;
+    auth.user.email = USER_EMAIL;
+    auth.user.password = USER_PASSWORD;
+    Firebase.begin(&firebaseConfig, &auth);
+    Firebase.reconnectWiFi(true);
+  } else if (!pilotNtpValid) {
+    Serial.println("[Gateway] Hub Pilot API waiting for valid NTP; no API requests will be sent.");
+  }
 }
 
 void loop() {
-  if (Firebase.ready()) {
-    const unsigned long now = millis();
+  const unsigned long now = millis();
+  if (now - lastSensorReadMs >= kSensorReadIntervalMs) {
+    lastSensorReadMs = now;
+    GatewaySensors::read();
+    int pairedCount = 0;
+    for (const Peer &peer : peers) {
+      if (peer.used) ++pairedCount;
+    }
+    GatewayDisplay::update(GatewaySensors::temperatureC,
+                           GatewaySensors::humidityPct,
+                           GatewaySensors::co2Ppm,
+                           pairedCount,
+                           false);
+  }
+
+  if (pilotApiEnabled) {
+    if (pilotApiKey.isEmpty()) {
+      delay(50);
+      return;
+    }
+    if (!pilotNtpValid && currentTimeValid()) {
+      pilotNtpValid = true;
+      nextPilotPollMs = 0;
+    }
+    if (pilotNtpValid && now >= nextPilotPollMs) {
+      fetchPilotConfig();
+    }
+    const int heartbeatIndex = pendingPilotHeartbeatIndex;
+    if (heartbeatIndex >= 0) {
+      pendingPilotHeartbeatIndex = -1;
+      sendPilotHeartbeat(heartbeatIndex);
+    }
+  } else if (Firebase.ready()) {
     if (now - lastControlSyncMs >= kControlSyncIntervalMs) {
       lastControlSyncMs = now;
       syncControlFromFirebase();
