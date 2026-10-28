@@ -110,7 +110,7 @@ void registerWiFiEventHandler()
 {
     WiFi.onEvent([](WiFiEvent_t event) {
 #if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
-        if (event == WIFI_EVENT_STA_DISCONNECTED) {
+        if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
 #else
         if (event == SYSTEM_EVENT_STA_DISCONNECTED) {
 #endif
