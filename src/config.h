@@ -4,6 +4,12 @@
 #include <addons/TokenHelper.h>
 #include <time.h>
 
+// Set only by the dedicated *_hub PlatformIO environments.  The customer
+// direct-Firebase environments intentionally remain unchanged.
+#ifndef SKYBOARD_HUB_MODE
+#define SKYBOARD_HUB_MODE 0
+#endif
+
 // === Firmware Version ===
 const double firmware_version = 1.61; // Updated EC calibration to degree 3 polynomial
 

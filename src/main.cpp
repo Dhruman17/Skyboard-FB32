@@ -1,3 +1,5 @@
+#include <config.h>
+#if !SKYBOARD_HUB_MODE
 #include <WiFi.h>
 #include <Firebase_ESP_Client.h>
 #include <addons/TokenHelper.h>
@@ -5,7 +7,6 @@
 #include <time.h>
 #include <credentials.h>
 #include <wifi_handler.h>
-#include <config.h>
 #include <sensor_coms.h>
 #include <firebase_coms.h>
 #include <WiFiManager.h> // WiFiManager by Tzapu
@@ -20,6 +21,7 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include "esp_task_wdt.h" // Watchdog timer
+#include <esp_idf_version.h>
 #include "mutex_handler.h" // if you created this
 #include "memory_manager.h" // Memory management utilities
 #include "utils.h" // Utility functions for safe time handling
@@ -101,7 +103,6 @@ void systemLights()
         }
         return;
     }
-
     time_t now;
     struct tm *currentTime;
     time(&now);
@@ -953,8 +954,20 @@ void sendHeartbeat()
         MemoryManager::init();
         MemoryManager::logMemoryStatus();
         
-        // Initialize watchdog timer (180 seconds timeout for firmware uploads)
+        // Initialize watchdog timer (180 seconds timeout for firmware uploads).
+        // ESP-IDF 5 changed the API from (seconds, panic) to a config struct.
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+        esp_task_wdt_config_t wdtConfig = {
+            .timeout_ms = 180000,
+            .idle_core_mask = 0,
+            .trigger_panic = true,
+        };
+        if (esp_task_wdt_init(&wdtConfig) == ESP_ERR_INVALID_STATE) {
+            esp_task_wdt_reconfigure(&wdtConfig);
+        }
+#else
         esp_task_wdt_init(180, true);
+#endif
         esp_task_wdt_add(NULL); // Add current task to watchdog
         Serial.println("✅ Watchdog timer initialized (180s timeout)");
         
@@ -1050,8 +1063,13 @@ void sendHeartbeat()
         for (int i = 0; i < NUMBER_OF_UNITS; i++)
         {
             pinMode(waterLevelPins[i], INPUT_PULLUP);
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+            ledcAttachChannel(atomizerPins[i], PWM_FREQUENCY_ATOMIZER,
+                              PWM_RESOLUTION_ATOMIZER, i);
+#else
             ledcSetup(i, PWM_FREQUENCY_ATOMIZER, PWM_RESOLUTION_ATOMIZER);
             ledcAttachPin(atomizerPins[i], i);
+#endif
             Serial.printf("Attached atomizer pin %d to PWM channel %d\n", atomizerPins[i], i);
         }
 
@@ -1259,4 +1277,5 @@ void sendHeartbeat()
             delay(50);
         }
     }
-         
+
+#endif // !SKYBOARD_HUB_MODE
