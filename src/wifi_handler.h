@@ -4,6 +4,7 @@
 #include <WiFi.h>
 #include <WiFiManager.h>
 #include <Firebase_ESP_Client.h>
+#include <esp_idf_version.h>
 
 // ===== CONFIGURABLE PARAMETERS =====
 const unsigned long WIFI_RECONNECT_INTERVAL = 30000;     // Try to reconnect every 30 seconds
@@ -108,7 +109,11 @@ void checkFirebaseReconnect(FirebaseConfig* config, FirebaseAuth* auth)
 void registerWiFiEventHandler()
 {
     WiFi.onEvent([](WiFiEvent_t event) {
+#if ESP_IDF_VERSION >= ESP_IDF_VERSION_VAL(5, 0, 0)
+        if (event == WIFI_EVENT_STA_DISCONNECTED) {
+#else
         if (event == SYSTEM_EVENT_STA_DISCONNECTED) {
+#endif
 Serial.println("[WiFi] Disconnected (event handler).");
 
         }
