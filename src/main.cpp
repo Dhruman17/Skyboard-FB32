@@ -50,6 +50,12 @@ bool offlineModeActive = false;
 unsigned long offlineModeStartMillis = 0;
 unsigned long lastOfflineReconnectAttemptMillis = 0;
 
+// Firebase's email/password endpoint rate-limits repeated failures.  Keep the
+// client from turning one invalid or throttled sign-in into a continuous storm.
+constexpr unsigned long FIREBASE_INITIAL_AUTH_TIMEOUT_MS = 30000UL;
+constexpr unsigned long FIREBASE_AUTH_RETRY_COOLDOWN_MS = 15UL * 60UL * 1000UL;
+constexpr unsigned long FIREBASE_NORMAL_REQUEST_TIMEOUT_MS = 2000UL;
+
 const unsigned long OFFLINE_LIGHT_ON_DURATION_MS = 4UL * 60UL * 60UL * 1000UL; // 4 hours
 const long OFFLINE_ATOMIZER_ON_INTERVAL_MS = 200000;  // 200 seconds
 const long OFFLINE_ATOMIZER_OFF_INTERVAL_MS = 5000;   // 5 seconds
@@ -67,6 +73,31 @@ double temp;
 // mod-mutex inititalization
 SemaphoreHandle_t sensorMutex = xSemaphoreCreateMutex();
 SemaphoreHandle_t firebaseMutex = xSemaphoreCreateMutex();
+
+void firebaseTokenStatusCallback(TokenInfo info)
+{
+    tokenStatusCallback(info);
+
+    if (info.status == token_status_ready)
+    {
+        // Authentication recovered; retain the library's normal token-refresh behavior.
+        config.signer.reqTO = FIREBASE_NORMAL_REQUEST_TIMEOUT_MS;
+        return;
+    }
+
+    if (info.status == token_status_error)
+    {
+        String message = info.error.message.c_str();
+        if (message == "TOO_MANY_ATTEMPTS_TRY_LATER" || message == "bad request")
+        {
+            // The Firebase client consults reqTO before it issues the next ID-token
+            // request.  This turns the previous sub-second retry loop into a
+            // maximum of one attempt per controller every 15 minutes.
+            config.signer.reqTO = FIREBASE_AUTH_RETRY_COOLDOWN_MS;
+            Serial.println("[Firebase] Authentication throttled; pausing retries for 15 minutes.");
+        }
+    }
+}
 
 bool isI2CDevicePresentOnSelectedChannel(uint8_t address)
 {
@@ -972,7 +1003,7 @@ void sendHeartbeat()
         Serial.println("✅ Watchdog timer initialized (180s timeout)");
         
         randomSeed(analogRead(0));
-        config.token_status_callback = tokenStatusCallback;
+        config.token_status_callback = firebaseTokenStatusCallback;
         // === Derive Static IP from serial number ===
         IPAddress staticIP = deriveStaticIP(serialNumber); // last 3 digits used
         IPAddress gateway(192, 168, 1, 1);                 // your router's IP
@@ -1032,6 +1063,9 @@ void sendHeartbeat()
     config.api_key = API_KEY;
     auth.user.email = USER_EMAIL;
     auth.user.password = USER_PASSWORD;
+    // The first request is allowed immediately; later failures are rate-limited
+    // by firebaseTokenStatusCallback before they can repeatedly hit GITKit.
+    config.signer.reqTO = FIREBASE_AUTH_RETRY_COOLDOWN_MS;
 
     if (wifiConnected)
     {
@@ -1040,19 +1074,29 @@ void sendHeartbeat()
         Firebase.begin(&config, &auth);
         Firebase.reconnectWiFi(true);
 
-        // Wait for Firebase to be ready (with watchdog resets)
+        // Give initial authentication a bounded window.  Previously this loop
+        // never ended on an auth error and kept the device in a retry storm.
         esp_task_wdt_reset();
-        while (!Firebase.ready())
+        unsigned long firebaseAuthStart = millis();
+        while (!Firebase.ready() &&
+               millis() - firebaseAuthStart < FIREBASE_INITIAL_AUTH_TIMEOUT_MS)
         {
-            delay(100);
+            delay(250);
             esp_task_wdt_reset(); // Reset watchdog during Firebase initialization
         }
 
-        // === Sync data and setup system ===
-        fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
-        fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
-        updateSystemVersion();
-        updateSystemIPAddress(); // Store IP address in Firebase for easy tracking
+        if (Firebase.ready())
+        {
+            // === Sync data and setup system ===
+            fetchFirebaseSystemData(&fbdo, &systemName, &lightOnTime, &lightOffTime, &lightMasterSwitch, &timeCycleEnabled, unitNames);
+            fetchFirebaseUnitData(&fbdo, unitsEnabled, atomizerOnIntervals, atomizerOffIntervals, unitNames);
+            updateSystemVersion();
+            updateSystemIPAddress(); // Store IP address in Firebase for easy tracking
+        }
+        else
+        {
+            Serial.println("[Firebase] Initial authentication timed out; continuing offline and retrying no more than once every 15 minutes.");
+        }
     }
     else
     {
