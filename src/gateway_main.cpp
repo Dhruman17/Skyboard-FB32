@@ -32,22 +32,10 @@ constexpr unsigned long kPilotHeartbeatIntervalMs = 10000UL;
 constexpr unsigned long kPilotTelemetryIntervalMs = 30000UL;
 constexpr unsigned long kPilotRetryMinMs = 5000UL;
 constexpr unsigned long kPilotRetryMaxMs = 300000UL;
-constexpr size_t kMaxNodes = 16;
+constexpr size_t kMaxNodes = 100;
 constexpr char kPilotConfigUrl[] = "https://us-central1-skyacres-marketplace.cloudfunctions.net/hubPilotConfig";
 constexpr char kPilotHeartbeatUrl[] = "https://us-central1-skyacres-marketplace.cloudfunctions.net/hubPilotHeartbeat";
 constexpr char kPilotTelemetryUrl[] = "https://us-central1-skyacres-marketplace.cloudfunctions.net/hubPilotTelemetry";
-constexpr char kHubBootstrapUrl[] = "https://us-central1-skyacres-marketplace.cloudfunctions.net/hubBootstrap";
-// Manufacturing may supply this untracked local header. It must never be
-// committed or emitted in build logs; the empty fallback leaves an
-// unprovisioned image unable to bootstrap.
-#ifdef __has_include
-#if __has_include("hub_bootstrap_secret.h")
-#include "hub_bootstrap_secret.h"
-#endif
-#endif
-#ifndef HUB_BOOTSTRAP_SECRET
-#define HUB_BOOTSTRAP_SECRET ""
-#endif
 
 // Google Trust Services root used by the Google-hosted Functions endpoint.
 // This is a trust anchor; TLS hostname and chain verification remain enabled.
@@ -162,13 +150,12 @@ unsigned long pilotRetryMs = kPilotRetryMinMs;
 unsigned long nextPilotTelemetryMs = 0;
 unsigned long pilotTelemetryRetryMs = kPilotTelemetryIntervalMs;
 String hubId;
-String pilotApiKey;
 bool pilotApiEnabled = true;
 bool pilotNtpValid = false;
-String onboardingState = "unclaimed";
-unsigned long nextBootstrapMs = 0;
-unsigned long nextCredentialRefreshMs = 0;
+String onboardingState = "ready";
 volatile int pendingPilotHeartbeatIndex = -1;
+uint8_t activeEspNowPeer[6] = {};
+bool hasActiveEspNowPeer = false;
 
 String systemPath() {
   return "Systems/" + serialNumber;
@@ -237,7 +224,6 @@ int peerIndex(const uint8_t *mac) {
 
 void persistPilotConfig() {
   pilotPreferences.begin("hub-pilot", false);
-  pilotPreferences.putString("credential", pilotApiKey);
   pilotPreferences.putString("onboarding", onboardingState);
   pilotPreferences.end();
 }
@@ -245,59 +231,14 @@ void persistPilotConfig() {
 void loadPilotConfig() {
   pilotPreferences.begin("hub-pilot", true);
   pilotApiEnabled = true;
-  pilotApiKey = pilotPreferences.getString("credential", "");
-  onboardingState = pilotPreferences.getString("onboarding", "unclaimed");
+  onboardingState = pilotPreferences.getString("onboarding", "ready");
   pilotPreferences.end();
-  pilotApiKey.trim();
 }
 
 void setOnboardingState(const char *next) {
   onboardingState = next;
   persistPilotConfig();
   Serial.printf("[Gateway] Hub onboarding state: %s\n", onboardingState.c_str());
-}
-
-void bootstrapHeaders(HTTPClient &http) {
-  http.addHeader("X-Hub-Id", hubId);
-  http.addHeader("X-Hub-Bootstrap-Key", HUB_BOOTSTRAP_SECRET);
-  http.addHeader("Accept", "application/json");
-}
-
-void fetchOperationalCredential(bool refresh = false) {
-  if ((!refresh && pilotApiKey.length() > 0) || (refresh && pilotApiKey.isEmpty()) ||
-      !pilotNtpValid || WiFi.status() != WL_CONNECTED || millis() < nextBootstrapMs) return;
-  if (strlen(HUB_BOOTSTRAP_SECRET) < 32) {
-    setOnboardingState("waitingForDashboardClaim");
-    Serial.println("[Gateway] No manufacturing bootstrap credential; flash a provisioned build.");
-    nextBootstrapMs = millis() + kPilotRetryMaxMs;
-    return;
-  }
-  WiFiClientSecure client; client.setCACert(kGoogleGtsRootR1); client.setTimeout(10);
-  HTTPClient http;
-  if (!http.begin(client, kHubBootstrapUrl)) { nextBootstrapMs = millis() + kPilotRetryMinMs; return; }
-  if (refresh) {
-    http.addHeader("X-Hub-Id", hubId);
-    http.addHeader("X-Hub-Key", pilotApiKey);
-    http.addHeader("Accept", "application/json");
-  } else {
-    bootstrapHeaders(http);
-  }
-  JsonDocument request; request["action"] = refresh ? "refresh" : "exchange"; request["hubId"] = hubId;
-  String body; serializeJson(request, body); http.addHeader("Content-Type", "application/json");
-  const int status = http.POST(body);
-  if (status != HTTP_CODE_OK) {
-    http.end();
-    if (!refresh) setOnboardingState("waitingForDashboardClaim");
-    nextBootstrapMs = millis() + (refresh ? kPilotPollIntervalMs : kPilotRetryMinMs);
-    return;
-  }
-  JsonDocument response; const DeserializationError error = deserializeJson(response, http.getStream()); http.end();
-  const char *credential = response["credential"] | "";
-  if (error || credential[0] == '\0') { nextBootstrapMs = millis() + kPilotRetryMinMs; return; }
-  pilotApiKey = String(credential); pilotApiKey.trim(); setOnboardingState("active");
-  nextCredentialRefreshMs = millis() + 15UL * 60UL * 1000UL;
-  nextPilotPollMs = 0;
-  Serial.println("[Gateway] Dashboard claim complete; operational credential installed.");
 }
 
 void clearPilotAssignments() {
@@ -310,7 +251,13 @@ void clearPilotAssignments() {
   }
 }
 
+bool addPeer(const uint8_t *mac);
+
 void sendControlToPeer(const Peer &peer, const GatewayConfig &configuration) {
+  if (!addPeer(peer.mac)) {
+    Serial.println("[Gateway] Unable to select ESP-NOW peer for control.");
+    return;
+  }
   Serial.printf("[Gateway] Sending config to %02X:%02X:%02X:%02X:%02X:%02X channel=%d light=%d unit1=%d unit2=%d unit3=%d\n",
                 peer.mac[0], peer.mac[1], peer.mac[2], peer.mac[3], peer.mac[4], peer.mac[5],
                 WiFi.channel(), configuration.light, configuration.misting[0], configuration.misting[1], configuration.misting[2]);
@@ -383,7 +330,7 @@ void applyPilotAssignments(JsonDocument &document) {
 
 void pilotHttpHeaders(HTTPClient &http) {
   http.addHeader("X-Hub-Id", hubId);
-  http.addHeader("X-Hub-Key", pilotApiKey);
+  http.addHeader("X-Hub-Mode", "manual");
   http.addHeader("Accept", "application/json");
 }
 
@@ -393,7 +340,7 @@ void schedulePilotRetry() {
 }
 
 bool fetchPilotConfig() {
-  if (!pilotApiEnabled || pilotApiKey.isEmpty() || !pilotNtpValid || WiFi.status() != WL_CONNECTED) return false;
+  if (!pilotApiEnabled || !pilotNtpValid || WiFi.status() != WL_CONNECTED) return false;
 
   WiFiClientSecure client;
   client.setCACert(kGoogleGtsRootR1);
@@ -497,7 +444,7 @@ void scheduleNextPilotTelemetry(unsigned long nowMs) {
 
 void sendPilotTelemetry() {
   const unsigned long nowMs = millis();
-  if (nowMs < nextPilotTelemetryMs || !pilotApiEnabled || pilotApiKey.isEmpty() ||
+  if (nowMs < nextPilotTelemetryMs || !pilotApiEnabled ||
       WiFi.status() != WL_CONNECTED || !pilotNtpValid || !currentTimeValid()) {
     return;
   }
@@ -579,15 +526,22 @@ void tokenStatusCallback(TokenInfo info) {
 }
 
 bool addPeer(const uint8_t *mac) {
+  if (hasActiveEspNowPeer && memcmp(activeEspNowPeer, mac, sizeof(activeEspNowPeer)) == 0) return true;
+  if (hasActiveEspNowPeer) {
+    esp_now_del_peer(activeEspNowPeer);
+    hasActiveEspNowPeer = false;
+  }
   esp_now_peer_info_t peerInfo = {};
   memcpy(peerInfo.peer_addr, mac, sizeof(peerInfo.peer_addr));
   peerInfo.channel = 0;  // Use the C6 station's current Wi-Fi channel.
   peerInfo.encrypt = false;
 
-  if (esp_now_is_peer_exist(mac)) {
-    return esp_now_mod_peer(&peerInfo) == ESP_OK;
+  const bool added = esp_now_is_peer_exist(mac) ? esp_now_mod_peer(&peerInfo) == ESP_OK : esp_now_add_peer(&peerInfo) == ESP_OK;
+  if (added) {
+    memcpy(activeEspNowPeer, mac, sizeof(activeEspNowPeer));
+    hasActiveEspNowPeer = true;
   }
-  return esp_now_add_peer(&peerInfo) == ESP_OK;
+  return added;
 }
 
 void rememberPeer(const uint8_t *mac) {
@@ -693,6 +647,7 @@ void setup() {
   uint8_t localMac[6] = {};
   esp_read_mac(localMac, ESP_MAC_WIFI_STA);
   hubId = normalizeMac(localMac);
+  setOnboardingState("ready");
   Serial.printf("[Gateway] Hub %s onboarding=%s. Captive portal configures Wi-Fi only.\n", hubId.c_str(), onboardingState.c_str());
 
   GatewaySensors::begin();
@@ -748,22 +703,12 @@ void loop() {
   }
 
   if (pilotApiEnabled) {
-    if (pilotApiKey.isEmpty()) {
-      fetchOperationalCredential();
-      delay(50);
-      return;
-    }
     if (!pilotNtpValid && currentTimeValid()) {
       pilotNtpValid = true;
       nextPilotPollMs = 0;
     }
     if (pilotNtpValid && now >= nextPilotPollMs) {
       fetchPilotConfig();
-    }
-    // The refresh endpoint returns a replacement only after a dashboard
-    // rotation request; it never exposes the existing credential.
-    if (pilotNtpValid && now >= nextCredentialRefreshMs) {
-      fetchOperationalCredential(true);
     }
     sendPilotTelemetry();
     const int heartbeatIndex = pendingPilotHeartbeatIndex;
